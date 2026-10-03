@@ -224,3 +224,61 @@ def test_daily_audit_pushes_yarn_action(env):
     cfg, con = env
     found = audit.run(con, cfg, END).findings
     assert any(f.severity == "ACTION" and f.section == "Yarn" and "CON-41" in f.title for f in found)
+
+
+# ---- owner dashboard ----------------------------------------------------------------------------------
+
+import base64  # noqa: E402
+import threading  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
+from http.server import ThreadingHTTPServer  # noqa: E402
+
+from smart_layer.web import data as web_data  # noqa: E402
+from smart_layer.web import server as web_server  # noqa: E402
+from smart_layer.web import static_page  # noqa: E402
+
+
+def test_dashboard_data(env):
+    cfg, con = env
+    d = web_data.build(con, cfg, END)
+    assert d["as_of"] == "2026-10-02" and len(d["production"]) == 30
+    assert d["kpis"]["action"] >= 9 and d["kpis"]["yarn_flags"] >= 1 and d["kpis"]["meters"] > 0
+    assert {r["contract"] for r in d["closing"]} >= {"CON-40", "CON-41", "CON-42"}
+    assert d["finance"][0]["sales"] > 0                       # leading empty months trimmed
+    json.dumps(d)                                              # serialisable
+
+
+def test_static_page_embeds_data_safely(env):
+    cfg, con = env
+    html = static_page(con, cfg, END)
+    assert "/*__DATA__*/null" not in html and '"as_of": "2026-10-02"' in html
+    assert "</script>" not in html.split("const STATIC_DATA = ", 1)[1].split(";\nconst $", 1)[0]
+
+
+def test_server_requires_password(env):
+    cfg, _ = env
+    cfg.data["serve"] = {"password": "s3cret-pass"}
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), web_server.handler(web_server.App(cfg)))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    try:
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(url + "/api/data")
+        assert e.value.code == 401
+        req = urllib.request.Request(url + "/api/data?date=2026-10-02",
+                                     headers={"Authorization": "Basic " + base64.b64encode(b"owner:s3cret-pass").decode()})
+        assert json.loads(urllib.request.urlopen(req).read())["as_of"] == "2026-10-02"
+    finally:
+        httpd.shutdown()
+        cfg.data["serve"] = {}
+
+
+def test_server_will_not_open_to_network_without_password(env):
+    cfg, _ = env
+    cfg.data["serve"] = {"host": "0.0.0.0", "port": 0}
+    try:
+        with pytest.raises(SystemExit):
+            web_server.serve(cfg)
+    finally:
+        cfg.data["serve"] = {}

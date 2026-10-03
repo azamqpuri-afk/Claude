@@ -1,0 +1,407 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<link rel="icon" href="data:,">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mill Dashboard</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f4f4f1; --surface-1: #fcfcfb; --surface-2: #f0efec; --line: #e2e1dc;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
+  --series-1: #2a78d6; --series-2: #eb6834;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --accent: #2a78d6; --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg: #111110; --surface-1: #1a1a19; --surface-2: #242422; --line: #33332f;
+    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --series-1: #3987e5; --series-2: #d95926; --accent: #3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111110; --surface-1: #1a1a19; --surface-2: #242422; --line: #33332f;
+  --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --series-1: #3987e5; --series-2: #d95926; --accent: #3987e5;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body { background: var(--bg); color: var(--text-primary);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif; }
+header { position: sticky; top: 0; z-index: 5; background: var(--surface-1); border-bottom: 1px solid var(--line);
+  padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+header h1 { font-size: 17px; margin: 0; flex: 1 1 auto; }
+header .sub { color: var(--text-secondary); font-size: 12.5px; font-weight: 400; display: block; }
+header input, header button, .btn { font: inherit; font-size: 14px; color: var(--text-primary); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
+button { cursor: pointer; }
+main { max-width: 1240px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 10px; }
+.kpi { background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
+.kpi .label { color: var(--text-secondary); font-size: 12.5px; }
+.kpi .value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.kpi .note { color: var(--text-muted); font-size: 12px; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
+.card { background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
+.card h2 { font-size: 15px; margin: 0 0 2px; }
+.card .hint { color: var(--text-muted); font-size: 12.5px; margin: 0 0 10px; }
+.chart { position: relative; width: 100%; }
+.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+.axis text { fill: var(--text-muted); font-size: 11px; }
+.grid line { stroke: var(--line); }
+.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-secondary); margin: 0 0 6px; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 9px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.14); white-space: nowrap; display: none; z-index: 3; }
+.tip b { font-variant-numeric: tabular-nums; }
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { color: var(--text-secondary); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chip { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px;
+  border: 1px solid var(--line); white-space: nowrap; color: var(--text-primary); }
+.chip .dot { width: 8px; height: 8px; border-radius: 50%; }
+.detail { color: var(--text-secondary); font-size: 12.5px; }
+.pos { color: var(--text-primary); } .neg { color: var(--critical); }
+details.data summary { cursor: pointer; color: var(--text-secondary); font-size: 12.5px; margin-top: 8px; }
+.empty { color: var(--text-muted); font-size: 13.5px; padding: 8px 0; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.tabs button { background: var(--surface-2); border: 1px solid var(--line); border-radius: 99px; padding: 4px 12px; font: inherit;
+  font-size: 13px; color: var(--text-secondary); }
+.tabs button[aria-selected="true"] { background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary); }
+#askBtn { position: fixed; right: 16px; bottom: 16px; z-index: 9; background: var(--accent); color: #fff; border: 0; border-radius: 99px;
+  padding: 12px 18px; font: inherit; font-weight: 600; box-shadow: 0 6px 18px rgba(0,0,0,.25); }
+#chat { position: fixed; right: 16px; bottom: 76px; z-index: 10; width: min(420px, calc(100vw - 32px)); height: min(560px, calc(100vh - 110px));
+  background: var(--surface-1); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25);
+  display: none; flex-direction: column; overflow: hidden; }
+#chat.open { display: flex; }
+#chat .head { padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600; display: flex; justify-content: space-between; }
+#msgs { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
+.msg { max-width: 92%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; font-size: 14px; }
+.msg.me { align-self: flex-end; background: var(--accent); color: #fff; }
+.msg.bot { align-self: flex-start; background: var(--surface-2); }
+.msg details { margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
+.msg code { font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
+#chat form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
+#chat input { flex: 1; font: inherit; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line);
+  background: var(--surface-2); color: var(--text-primary); }
+footer { text-align: center; color: var(--text-muted); font-size: 12px; padding: 10px 16px 90px; }
+td.nowrap { white-space: nowrap; }
+.items { display: flex; flex-direction: column; }
+.item { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.item .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--text-secondary); font-size: 12.5px; margin-bottom: 3px; }
+.item .what { font-size: 14px; }
+@media (max-width: 520px) { .kpis { grid-template-columns: 1fr 1fr; } .kpi .value { font-size: 18px; } .grid2 { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="title">Mill Dashboard<span class="sub" id="subtitle">Loading…</span></h1>
+  <label class="sub" for="day" style="display:inline">Day</label>
+  <input type="date" id="day" aria-label="Day to show">
+  <button id="theme" type="button" aria-label="Switch light or dark">◐</button>
+</header>
+
+<main>
+  <section class="kpis" id="kpis" aria-label="Key figures"></section>
+
+  <section class="card" aria-labelledby="att-h">
+    <h2 id="att-h">Needs attention</h2>
+    <p class="hint">The day's audit across finance, store, weaving and yarn. ACTION = do something today, CONFIRMED = a definite error in the data.</p>
+    <div class="tabs" id="attTabs" role="tablist"></div>
+    <div class="table-wrap" id="findings"></div>
+  </section>
+
+  <section class="grid2">
+    <div class="card"><h2>Meters woven per day</h2><p class="hint">Last 30 days, all looms</p>
+      <div class="chart" id="cMeters"></div></div>
+    <div class="card"><h2>Weaving efficiency %</h2><p class="hint">Meter-weighted, last 30 days</p>
+      <div class="chart" id="cEff"></div></div>
+  </section>
+
+  <section class="card"><h2>Sales and expenses by month</h2><p class="hint">Last 12 months, from the ledger</p>
+    <div class="chart" id="cFin"></div></section>
+
+  <section class="grid2">
+    <div class="card"><h2>Contract closing: party yarn</h2>
+      <p class="hint">+ = mill holds the party's yarn · − = party is short. Method set by the mill.</p>
+      <div class="table-wrap" id="closing"></div></div>
+    <div class="card"><h2>Yarn: pilferage check</h2>
+      <p class="hint">Weft issued vs needed, suspicious entries, sizing loss</p>
+      <div class="table-wrap" id="pilferage"></div></div>
+  </section>
+
+  <section class="grid2">
+    <div class="card"><h2>Store: out of stock and low</h2><p class="hint">Items used in the last 60 days</p>
+      <div class="table-wrap" id="stock"></div></div>
+    <div class="card"><h2>Looms on the day</h2><p class="hint">Meters, efficiency and rejection per loom</p>
+      <div class="table-wrap" id="looms"></div></div>
+  </section>
+</main>
+<footer id="foot"></footer>
+
+<button id="askBtn" type="button" aria-controls="chat" aria-expanded="false">Ask the ERP</button>
+<section id="chat" aria-label="Ask the ERP">
+  <div class="head"><span>Ask the ERP</span><button class="btn" id="chatClose" type="button" aria-label="Close">✕</button></div>
+  <div id="msgs" aria-live="polite"></div>
+  <form id="askForm"><input id="q" autocomplete="off" placeholder="e.g. kal sab se kam efficiency kis loom ki thi?" aria-label="Question">
+    <button class="btn" type="submit">Send</button></form>
+</section>
+
+<script>
+const STATIC_DATA = /*__DATA__*/null;
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+let D = null;
+
+function num(v, d = 0) { return v == null ? "–" : Number(v).toLocaleString("en-US", {maximumFractionDigits: d, minimumFractionDigits: d}); }
+function money(v) {
+  if (v == null) return "–";
+  const a = Math.abs(v), s = v < 0 ? "−" : "";
+  if (a >= 1e7) return `${s}${(a / 1e7).toFixed(2)} cr`;
+  if (a >= 1e5) return `${s}${(a / 1e5).toFixed(1)} lakh`;
+  return s + num(a);
+}
+function shortDate(iso) { const d = new Date(iso + "T00:00:00"); return d.toLocaleDateString("en-GB", {day: "2-digit", month: "short"}); }
+
+// ---------- theme ----------
+(function () {
+  let t = null; try { t = localStorage.getItem("sl-theme"); } catch (e) {}
+  if (t) document.documentElement.dataset.theme = t;
+  $("#theme").onclick = () => {
+    const dark = document.documentElement.dataset.theme
+      ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+    document.documentElement.dataset.theme = dark ? "light" : "dark";
+    try { localStorage.setItem("sl-theme", document.documentElement.dataset.theme); } catch (e) {}
+    if (D) renderCharts();
+  };
+})();
+
+// ---------- charts (inline SVG; one axis each; hover tooltips) ----------
+function frame(el, w, h) {
+  el.innerHTML = "";
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", `0 0 ${w} ${h}`); svg.setAttribute("role", "img");
+  el.appendChild(svg);
+  const tip = document.createElement("div"); tip.className = "tip"; el.appendChild(tip);
+  return {svg, tip};
+}
+function niceMax(v) { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const n = v / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p; }
+function axes(svg, x0, x1, y0, y1, max, fmt, min = 0) {
+  let g = `<g class="grid">`, a = `<g class="axis">`;
+  for (let i = 0; i <= 4; i++) {
+    const v = min + (max - min) * i / 4, y = y1 - (y1 - y0) * i / 4;
+    g += `<line x1="${x0}" x2="${x1}" y1="${y}" y2="${y}" stroke-width="1"/>`;
+    a += `<text x="${x0 - 6}" y="${y + 4}" text-anchor="end">${esc(fmt(v))}</text>`;
+  }
+  svg.insertAdjacentHTML("beforeend", g + "</g>" + a + "</g>");
+}
+function showTip(el, tip, html, px, py) {
+  tip.innerHTML = html; tip.style.display = "block";
+  const r = el.getBoundingClientRect(), tw = tip.offsetWidth;
+  tip.style.left = Math.min(Math.max(px - tw / 2, 0), r.width - tw) + "px";
+  tip.style.top = Math.max(py - tip.offsetHeight - 10, 0) + "px";
+}
+function barPath(x, y, w, h, r) {           // rounded data end, square at the baseline
+  r = Math.min(r, w / 2, h); return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
+}
+function bars(el, rows, series, labelOf, tipOf, fmtAxis) {
+  const W = Math.max(el.clientWidth, 300), H = 230, L = 52, R = 8, T = 10, B = 26;
+  const {svg, tip} = frame(el, W, H);
+  const max = niceMax(Math.max(1, ...rows.flatMap((r) => series.map((s) => r[s.key] || 0))));
+  axes(svg, L, W - R, T, H - B, max, fmtAxis);
+  const band = (W - L - R) / rows.length, gap = 2, inner = Math.max(band - Math.max(band * 0.28, 4), 2);
+  const bw = Math.max((inner - gap * (series.length - 1)) / series.length, 1);
+  let html = "", labels = `<g class="axis">`;
+  const every = Math.ceil(rows.length / Math.max(Math.floor((W - L) / 70), 1));
+  rows.forEach((r, i) => {
+    const x0 = L + i * band + (band - inner) / 2;
+    series.forEach((s, j) => {
+      const v = r[s.key] || 0, h = (H - B - T) * v / max;
+      if (h > 0) html += `<path d="${barPath(x0 + j * (bw + gap), H - B - h, bw, h, 4)}" fill="${css(s.color)}"/>`;
+    });
+    if (i % every === 0 || i === rows.length - 1)
+      labels += `<text x="${L + i * band + band / 2}" y="${H - 8}" text-anchor="middle">${esc(labelOf(r))}</text>`;
+  });
+  svg.insertAdjacentHTML("beforeend", html + labels + `</g><line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="${css("--text-muted")}"/>`);
+  const hit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  Object.entries({x: L, y: T, width: W - L - R, height: H - B - T, fill: "transparent"}).forEach(([k, v]) => hit.setAttribute(k, v));
+  svg.appendChild(hit);
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width;
+    const i = Math.min(rows.length - 1, Math.max(0, Math.floor((sx - L) / band)));
+    showTip(el, tip, tipOf(rows[i]), (L + i * band + band / 2) * r.width / W, (T + 20) * r.height / H);
+  };
+  hit.addEventListener("pointermove", move); hit.addEventListener("pointerdown", move);
+  hit.addEventListener("pointerleave", () => (tip.style.display = "none"));
+}
+function line(el, rows, key, labelOf, tipOf, fmtAxis) {
+  const W = Math.max(el.clientWidth, 300), H = 230, L = 52, R = 10, T = 10, B = 26;
+  const {svg, tip} = frame(el, W, H);
+  const vals = rows.map((r) => r[key]).filter((v) => v != null);
+  if (!vals.length) { el.innerHTML = `<p class="empty">No data for this period.</p>`; return; }
+  const lo = Math.max(0, Math.floor((Math.min(...vals) - 5) / 5) * 5), hi = Math.min(Math.ceil((Math.max(...vals) + 3) / 5) * 5, 120);
+  axes(svg, L, W - R, T, H - B, hi, fmtAxis, lo);
+  const X = (i) => L + (W - L - R) * (rows.length === 1 ? 0.5 : i / (rows.length - 1));
+  const Y = (v) => H - B - (H - B - T) * (v - lo) / (hi - lo);
+  let d = "", pen = false, labels = `<g class="axis">`;
+  const every = Math.ceil(rows.length / Math.max(Math.floor((W - L) / 70), 1));
+  rows.forEach((r, i) => {
+    if (r[key] == null) { pen = false; } else { d += `${pen ? "L" : "M"}${X(i)},${Y(r[key])}`; pen = true; }
+    if (i % every === 0 || i === rows.length - 1) labels += `<text x="${X(i)}" y="${H - 8}" text-anchor="middle">${esc(labelOf(r))}</text>`;
+  });
+  svg.insertAdjacentHTML("beforeend", `<path d="${d}" fill="none" stroke="${css("--series-1")}" stroke-width="2" stroke-linejoin="round"/>` + labels + "</g>");
+  const g = document.createElementNS("http://www.w3.org/2000/svg", "g"); g.style.display = "none";
+  g.innerHTML = `<line y1="${T}" y2="${H - B}" stroke="${css("--text-muted")}" stroke-dasharray="3 3"/>` +
+    `<circle r="5" fill="${css("--series-1")}" stroke="${css("--surface-1")}" stroke-width="2"/>`;
+  svg.appendChild(g);
+  const hit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+  Object.entries({x: L, y: T, width: W - L - R, height: H - B - T, fill: "transparent"}).forEach(([k, v]) => hit.setAttribute(k, v));
+  svg.appendChild(hit);
+  const move = (ev) => {
+    const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width;
+    const i = Math.min(rows.length - 1, Math.max(0, Math.round((sx - L) / (W - L - R) * (rows.length - 1))));
+    if (rows[i][key] == null) { g.style.display = "none"; tip.style.display = "none"; return; }
+    g.style.display = ""; g.firstChild.setAttribute("x1", X(i)); g.firstChild.setAttribute("x2", X(i));
+    g.lastChild.setAttribute("cx", X(i)); g.lastChild.setAttribute("cy", Y(rows[i][key]));
+    showTip(el, tip, tipOf(rows[i]), X(i) * r.width / W, Y(rows[i][key]) * r.height / H);
+  };
+  hit.addEventListener("pointermove", move); hit.addEventListener("pointerdown", move);
+  hit.addEventListener("pointerleave", () => { g.style.display = "none"; tip.style.display = "none"; });
+}
+function dataTable(el, head, rows) {
+  const d = document.createElement("details"); d.className = "data";
+  d.innerHTML = `<summary>Show as table</summary>` + table(head, rows); el.appendChild(d);
+}
+function table(head, rows, numCols = []) {
+  if (!rows.length) return `<p class="empty">Nothing to show.</p>`;
+  return `<table><thead><tr>${head.map((h, i) => `<th class="${numCols.includes(i) ? "num" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map((r) => `<tr>${r.map((c, i) => `<td class="${numCols.includes(i) ? "num" : ""}">${c}</td>`).join("")}</tr>`).join("") + `</tbody></table>`;
+}
+
+function renderCharts() {
+  const P = D.production, F = D.finance, cur = D.currency;
+  bars($("#cMeters"), P, [{key: "meters", color: "--series-1"}], (r) => shortDate(r.date),
+       (r) => `${shortDate(r.date)}<br><b>${num(r.meters)} m</b>${r.eff != null ? ` · ${num(r.eff, 1)}%` : ""}`, (v) => num(v));
+  dataTable($("#cMeters"), ["Date", "Meters", "Efficiency %"], P.map((r) => [esc(r.date), num(r.meters), num(r.eff, 1)]));
+  line($("#cEff"), P, "eff", (r) => shortDate(r.date), (r) => `${shortDate(r.date)}<br><b>${num(r.eff, 1)}%</b>`, (v) => num(v) + "%");
+  const fe = $("#cFin");
+  fe.innerHTML = "";
+  const lg = document.createElement("div"); lg.className = "legend";
+  lg.innerHTML = `<span><i style="background:${css("--series-1")}"></i>Sales</span><span><i style="background:${css("--series-2")}"></i>Expenses</span>`;
+  fe.appendChild(lg);
+  const box = document.createElement("div"); box.className = "chart"; fe.appendChild(box);
+  const mlabel = (m) => new Date(m + "-01T00:00:00").toLocaleDateString("en-GB", {month: "short", year: "2-digit"});
+  bars(box, F, [{key: "sales", color: "--series-1"}, {key: "expenses", color: "--series-2"}], (r) => mlabel(r.month),
+       (r) => `${mlabel(r.month)}<br>Sales <b>${cur} ${money(r.sales)}</b><br>Expenses <b>${cur} ${money(r.expenses)}</b>`, (v) => money(v));
+  dataTable(fe, ["Month", "Sales", "Expenses"], F.map((r) => [esc(r.month), num(r.sales), num(r.expenses)]));
+}
+
+// ---------- page ----------
+const SEV = {ACTION: ["--critical", "▲ ACTION"], CONFIRMED: ["--serious", "● CONFIRMED"], WATCH: ["--warning", "◆ WATCH"], INFO: ["--text-muted", "INFO"]};
+function chip(sev) { const [c, t] = SEV[sev] || SEV.INFO; return `<span class="chip"><span class="dot" style="background:var(${c})"></span>${esc(t)}</span>`; }
+let attFilter = "important";
+
+function render() {
+  const k = D.kpis, cur = D.currency;
+  document.title = `${D.company} – Dashboard`;
+  $("#title").firstChild.nodeValue = D.company;
+  $("#subtitle").textContent = `${D.product} · ${new Date(D.as_of + "T00:00:00").toDateString()} · data synced ${D.synced_at || "never"}`;
+  $("#day").value = D.as_of;
+  const tiles = [
+    ["Meters woven", num(k.meters), `${k.looms} looms`],
+    ["Efficiency", k.eff == null ? "–" : num(k.eff, 1) + "%", "meter-weighted"],
+    ["Rejection", k.rej == null ? "–" : num(k.rej, 1) + "%", "of meters woven"],
+    ["Needs action", num(k.action), `${num(k.confirmed)} confirmed errors`],
+    ["Yarn flags", num(k.yarn_flags), "issue days to check"],
+    ["Cash in hand", `${cur} ${money(k.cash)}`, `bank ${money(k.bank)}`],
+    ["Receivable", `${cur} ${money(k.receivable)}`, "from customers"],
+    ["Payable", `${cur} ${money(k.payable)}`, "to suppliers"],
+    ["Sales this month", `${cur} ${money(k.sales_month)}`, `expenses ${money(k.expenses_month)}`],
+    ["Store", `${num(k.out_of_stock)} out`, `${num(k.low_stock)} low`],
+  ];
+  $("#kpis").innerHTML = tiles.map(([l, v, n]) => `<div class="kpi"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="note">${esc(n)}</div></div>`).join("");
+
+  const counts = (s) => D.findings.filter((f) => f.severity === s).length;
+  const tabs = [["important", `Action & confirmed (${counts("ACTION") + counts("CONFIRMED")})`], ["WATCH", `Watch (${counts("WATCH")})`], ["all", `All (${D.findings.length})`]];
+  $("#attTabs").innerHTML = tabs.map(([v, t]) => `<button role="tab" aria-selected="${v === attFilter}" data-v="${v}">${esc(t)}</button>`).join("");
+  $("#attTabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { attFilter = b.dataset.v; render(); }));
+  const fs = D.findings.filter((f) => attFilter === "all" || (attFilter === "important" ? ["ACTION", "CONFIRMED"].includes(f.severity) : f.severity === attFilter));
+  $("#findings").innerHTML = fs.length ? `<div class="items">` + fs.map((f) => `<div class="item"><div class="meta">${chip(f.severity)}<span>${esc(f.section)}</span></div>` +
+    `<div class="what">${esc(f.title)}</div>${f.detail ? `<div class="detail">${esc(f.detail)}</div>` : ""}</div>`).join("") + `</div>`
+    : `<p class="empty">Nothing found for this day.</p>`;
+
+  const byParty = {};
+  D.closing.forEach((r) => { const p = (byParty[r.party] ||= [0, 0]); p[0] += r.balance_bags; p[1] += r.value || 0; });
+  $("#closing").innerHTML = table(["Party", "Balance bags", `Value ${cur}`],
+      Object.entries(byParty).map(([p, [b, v]]) => [esc(p), `<span class="${b < 0 ? "neg" : "pos"}">${b > 0 ? "+" : ""}${num(b, 1)}</span>`, v ? money(v) : "–"]), [1, 2]) +
+    `<details class="data"><summary>Per contract and yarn</summary>` +
+    table(["Contract", "Party", "Status", "Yarn", "Received", "Used", "Balance"], D.closing.map((r) =>
+      [esc(r.contract), esc(r.party), esc(r.status), esc(r.yarn_name), num(r.received_bags, 1), num(r.used_bags, 1),
+       `<span class="${r.balance_bags < 0 ? "neg" : "pos"}">${num(r.balance_bags, 1)}</span>${r.note ? `<div class="detail">${esc(r.note)}</div>` : ""}`]), [4, 5, 6]) + `</details>`;
+
+  const sz = D.sizing.filter((s) => s.loss_pct > D.sizing_limit);
+  $("#pilferage").innerHTML = (D.pilferage.length ? `<div class="items">` + D.pilferage.map((f) => `<div class="item"><div class="meta">` +
+      `${chip(f.reasons.length >= 2 ? "ACTION" : "WATCH")}<span>${esc(f.date)} · contract ${esc(f.contract)} · ${esc(f.party || "")} · ${num(f.kg)} kg</span></div>` +
+      f.reasons.map((r) => `<div class="detail">• ${esc(r)}</div>`).join("") + `</div>`).join("") + `</div>` : `<p class="empty">No suspicious yarn issues.</p>`) +
+    (D.sizing.length ? `<h2 style="margin-top:14px">Sizing loss</h2>` + table(["Sizer", "Contract", "Sent kg", "Back kg", "Loss"],
+      D.sizing.map((s) => [esc(s.sizer), esc(s.contract), num(s.sent), num(s.back),
+        `${s.loss_pct > D.sizing_limit ? chip("WATCH") + " " : ""}${num(s.loss_pct, 1)}%`]), [2, 3, 4]) : "");
+
+  $("#stock").innerHTML = table(["Status", "Item", "Stock", "Use / month"], D.stock.map((r) =>
+    [chip(r.status === "OUT OF STOCK" ? "ACTION" : "WATCH").replace(/ACTION|WATCH/, r.status === "OUT OF STOCK" ? "OUT" : "LOW"),
+     `${esc(r.item)}<div class="detail">${esc(r.code)} · ${esc(r.unit)}</div>`, num(r.stock, 1), num(r.avg_month, 1)]), [2, 3]);
+  $("#looms").innerHTML = table(["Loom", "Meters", "Eff %", "Rej %"], D.looms.map((r) =>
+    [esc(r.loom), num(r.meters), num(r.eff, 1), num(r.rej, 1)]), [1, 2, 3]);
+  $("#foot").textContent = `${D.product} · figures from the mill's ERP, read-only`;
+  renderCharts();
+}
+
+async function load(day) {
+  if (STATIC_DATA) { D = STATIC_DATA; render(); return; }
+  $("#subtitle").textContent = "Loading…";
+  const r = await fetch("api/data" + (day ? `?date=${day}` : ""));
+  if (!r.ok) { $("#subtitle").textContent = "Could not load data"; return; }
+  D = await r.json(); render();
+}
+$("#day").onchange = (e) => load(e.target.value);
+let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => D && renderCharts(), 150); });
+
+// ---------- chat ----------
+let session = null; try { session = sessionStorage.getItem("sl-session"); } catch (e) {}
+if (!session) { session = Math.random().toString(36).slice(2) + Date.now().toString(36); try { sessionStorage.setItem("sl-session", session); } catch (e) {} }
+function say(text, who, queries) {
+  const m = document.createElement("div"); m.className = "msg " + who; m.textContent = text;
+  if (queries && queries.length) {
+    const d = document.createElement("details"); d.innerHTML = `<summary>${queries.length} quer${queries.length > 1 ? "ies" : "y"} used</summary>`;
+    queries.forEach((q) => { const c = document.createElement("code"); c.textContent = q + "\n\n"; d.appendChild(c); });
+    m.appendChild(d);
+  }
+  $("#msgs").appendChild(m); $("#msgs").scrollTop = 1e9; return m;
+}
+function toggleChat(open) { $("#chat").classList.toggle("open", open); $("#askBtn").setAttribute("aria-expanded", open); if (open) $("#q").focus(); }
+$("#askBtn").onclick = () => toggleChat(!$("#chat").classList.contains("open"));
+$("#chatClose").onclick = () => toggleChat(false);
+say(STATIC_DATA ? "Chat works when the dashboard is opened from the mill's server (python -m smart_layer serve)."
+               : "Ask anything about the mill – production, stock, yarn, parties, cash. English, Urdu or Roman Urdu.", "bot");
+$("#askForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const q = $("#q").value.trim(); if (!q || STATIC_DATA) return;
+  $("#q").value = ""; say(q, "me"); const wait = say("…", "bot");
+  try {
+    const r = await fetch("api/ask", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({question: q, session})});
+    const j = await r.json(); wait.remove();
+    say(j.answer || j.error || "No answer.", "bot", j.queries);
+  } catch (err) { wait.remove(); say("Could not reach the server.", "bot"); }
+};
+load();
+</script>
+</body>
+</html>

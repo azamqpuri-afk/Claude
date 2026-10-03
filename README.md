@@ -34,6 +34,10 @@ ERP, can be connected with one mapping file.
 | `report zero` | Items that ran out since the last check: for a daily phone push. |
 | `report reorder` | Draft order list with last supplier, last rate and estimated value. Nothing is sent to suppliers. |
 | `report production` | Meters, efficiency and rejection per loom for a day, and looms with nothing entered. |
+| `report closing` | **Contract closing**: each party's yarn account per contract (received − returned − consumed = balance in bags and money). The whole method is the mill's own: divisor, bag size, closing counts, basis (dispatched or woven), who bears rejection, allowances, per-party and per-contract overrides, even the yarn-weight formula. |
+| `report pilferage` | **Yarn pilferage check**: weft issued vs weft needed for the fabric woven, suspicious entries (no production nearby, very large, keyed late or after hours), sizing loss per sizer. Yarn findings also join the daily audit. |
+| `serve` | **Owner dashboard** on the mill network (phone and PC): key figures, what needs attention, production and finance charts, contract closing, yarn flags, stock, looms, and an "Ask the ERP" chat. Password-protected. |
+| `dashboard` | The same dashboard saved as one HTML file (for sharing or demos; chat needs `serve`). |
 | `ask` | Questions in plain language, answered from the data, with the queries shown on request. |
 
 Audit checks include: unbalanced vouchers, trial balance, negative cash, backdated and
@@ -58,6 +62,9 @@ python -m smart_layer -c config.demo.toml check
 python -m smart_layer -c config.demo.toml sync
 python -m smart_layer -c config.demo.toml audit
 python -m smart_layer -c config.demo.toml report production
+python -m smart_layer -c config.demo.toml report closing
+python -m smart_layer -c config.demo.toml report pilferage
+python -m smart_layer -c config.demo.toml serve          # then open http://localhost:8080
 python -m smart_layer -c config.demo.toml ask "which loom had the highest rejection last week?"   # needs ANTHROPIC_API_KEY
 ```
 
@@ -82,6 +89,8 @@ smart_layer/        the product
   store.py          local store and sync
   reports/          stock, reorder, production
   audit/            finance, store, weaving checks
+  textile/          contract closing (method.py = the mill's own rules) and pilferage
+  web/              owner dashboard page, data builder and web server
   ask.py            "ask the ERP" with Claude
 mappings/           one file per ERP
   dost_textiles_oracle.toml

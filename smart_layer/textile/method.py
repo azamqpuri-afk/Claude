@@ -72,7 +72,7 @@ def compile_formula(text):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in _FUNCS
                 and not node.keywords):
             return _FUNCS[node.func.id](*(ev(a, names) for a in node.args))
-        raise FormulaError(f"weight_formula may only use numbers, names, + - * / ** ( ) and min/max/round")
+        raise FormulaError("weight_formula may only use numbers, names, + - * / ** ( ) and min/max/round")
 
     return lambda **names: float(ev(tree, names))
 

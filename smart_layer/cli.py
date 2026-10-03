@@ -6,6 +6,8 @@ Command line for Project Smart Layer by Azam Puri.
   python -m smart_layer report stock|zero|reorder|production|closing|pilferage [--date D] [--csv] [--push]
   python -m smart_layer audit [--date D | --month YYYY-MM] [--csv] [--push]
   python -m smart_layer ask ["question"]         ask the ERP (interactive without a question)
+  python -m smart_layer serve                    owner dashboard + chat on http://<server>:8080
+  python -m smart_layer dashboard [--date D]     save the dashboard as one HTML file (no chat)
   python -m smart_layer schema                   print the standard data model
 
 Use -c to point at a config file (default config.toml).
@@ -111,6 +113,22 @@ def cmd_ask(cfg, args):
             return 0
 
 
+def cmd_serve(cfg, args):
+    from .web.server import serve
+    serve(cfg)
+    return 0
+
+
+def cmd_dashboard(cfg, args):
+    from .web import static_page
+    day = date.fromisoformat(args.date) if args.date else None
+    out = cfg.path(args.out or (cfg.path(cfg["reports"]["output_dir"]) / "dashboard.html"))
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(static_page(_store(cfg), cfg, day), encoding="utf-8")
+    print("Saved", out)
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="smart_layer", description=PRODUCT)
     p.add_argument("-c", "--config", default="config.toml")
@@ -131,13 +149,18 @@ def main(argv=None):
     q = sub.add_parser("ask")
     q.add_argument("question", nargs="*")
     q.add_argument("--show-sql", action="store_true")
+    sub.add_parser("serve")
+    d = sub.add_parser("dashboard")
+    d.add_argument("--date")
+    d.add_argument("--out")
     sub.add_parser("schema")
     args = p.parse_args(argv)
     if args.cmd == "schema":
         print(schema.describe())
         return 0
     cfg = config.load(args.config)
-    return {"check": cmd_check, "sync": cmd_sync, "report": cmd_report, "audit": cmd_audit, "ask": cmd_ask}[args.cmd](cfg, args)
+    return {"check": cmd_check, "sync": cmd_sync, "report": cmd_report, "audit": cmd_audit, "ask": cmd_ask, "serve": cmd_serve,
+            "dashboard": cmd_dashboard}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

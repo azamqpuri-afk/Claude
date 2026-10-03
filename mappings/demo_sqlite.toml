@@ -66,7 +66,7 @@ sql = """
 SELECT CAST(h.vch_id AS TEXT) AS voucher_id, h.vch_no AS voucher_no, h.vch_type AS voucher_type,
        CASE WHEN h.vch_type IN ('CPV', 'BPV') THEN 'payment' WHEN h.vch_type IN ('CRV', 'BRV') THEN 'receipt'
             WHEN h.vch_type = 'JV' THEN 'journal' WHEN h.vch_type = 'SV' THEN 'sale'
-            WHEN h.vch_type = 'OPN' THEN 'opening' ELSE 'other' END AS voucher_kind,
+            WHEN h.vch_type = 'OPN' THEN 'opening' WHEN h.vch_type = 'PV' THEN 'purchase' ELSE 'other' END AS voucher_kind,
        h.vch_dt AS voucher_date, h.posted_on AS entered_at, d.acct_no AS account_code,
        COALESCE(d.dr_amt, 0) - COALESCE(d.cr_amt, 0) AS amount, h.remarks AS narration, h.posted_by AS entered_by
 FROM gl_vch_hdr h JOIN gl_vch_dtl d ON d.vch_id = h.vch_id

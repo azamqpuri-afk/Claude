@@ -203,11 +203,14 @@ def build(out, end):
             c = rnd.choice(CUSTOMERS)[0]
             amt = round(rnd.uniform(0.8, 2.4) * 1_000_000, -3)
             voucher("SV", d, [(f"13{c[1:]}", amt), ("4101", -amt)])
-            if rnd.random() < 0.6:
+            if rnd.random() < 0.9:
                 c = rnd.choice(CUSTOMERS)[0]
                 amt = round(rnd.uniform(0.5, 2.0) * 1_000_000, -3)
                 voucher("BRV", d, [("1201", amt), (f"13{c[1:]}", -amt)])
             for v, _ in SUPPLIERS:
+                if rnd.random() < 0.18:                       # supplier bill (purchase on credit)
+                    amt = round(rnd.uniform(40_000, 160_000), -2)
+                    voucher("PV", d, [("1501", amt), (f"2{v[1:]}", -amt)])
                 if rnd.random() < 0.15:
                     amt = round(rnd.uniform(20_000, 180_000), -2)
                     voucher(rnd.choice(["CPV", "BPV"]), d, [(f"2{v[1:]}", amt), ("1101" if amt < 60_000 else "1202", -amt)])
