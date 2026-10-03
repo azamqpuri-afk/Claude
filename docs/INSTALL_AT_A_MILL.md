@@ -40,12 +40,12 @@ wizard; it is stored only in `.env` on their server.
 1. Copy the **Smart Layer** folder to the server, e.g. `C:\SmartLayer` (from the release ZIP).
 2. Double-click **`Install Smart Layer.bat`** and allow Administrator access.
 3. Answer the questions:
-   - mill name, currency
-   - database type, address, read-only user and password
-   - mapping file for their ERP
-   - dashboard on the mill network: **yes**, and a dashboard password (write it down for the owner)
-   - phone alerts: **yes** - note the ntfy topic it prints
-   - Claude API key: Enter to skip if chat is not part of the package yet
+    - mill name, currency
+    - database type, address, read-only user and password
+    - mapping file for their ERP
+    - dashboard on the mill network: **yes**, and a dashboard password (write it down for the owner)
+    - phone alerts: **yes** - note the ntfy topic it prints
+    - Claude API key: Enter to skip if chat is not part of the package yet
 4. The installer tests every table, does the first sync, schedules the daily run (07:30) and starts the
    dashboard. All 13 lines of the test should say **ok**.
 5. Open the dashboard on the owner's phone: `http://<server address>:8080` (the installer prints it),
