@@ -1,0 +1,30 @@
+# Demo installation: the fictional Sitara Weaving mill on the demo "MillPro" ERP.
+#   python demo/build_demo_erp.py
+#   python -m smart_layer -c config.demo.toml sync
+
+[company]
+name = "Sitara Weaving (demo)"
+currency = "Rs"
+
+[erp]
+driver = "sqlite"
+path = "demo/demo_erp.db"
+mapping = "mappings/demo_sqlite.toml"
+
+[store]
+path = "data/demo_store.db"
+
+[sync]
+history_days = 400
+
+[notify]
+channels = ["console"]
+
+[reports]
+output_dir = "output/demo"
+
+[ask]
+notes = """
+Voucher types: CPV cash payment, BPV bank payment, CRV cash receipt, BRV bank receipt, JV journal, SV sales, OPN opening.
+Issues go to looms (LOOM-01 .. LOOM-24) or departments (SIZING, FOLDING, GENERAL).
+"""

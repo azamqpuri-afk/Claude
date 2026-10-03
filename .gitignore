@@ -1,0 +1,26 @@
+# secrets and installation settings
+config.toml
+.env
+*.ini
+service_account*.json
+
+# local data, reports and caches - never commit business data
+data/
+output/
+demo/demo_erp.db
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# outputs and state written by the legacy Dost Textiles scripts
+*_output.txt
+*_log.txt
+*_heartbeat.txt
+business_dashboard_data.json
+business_dashboard_ledgers.json
+yarn_fabric_data.json
+verify_report.json
+erp_audit_*.json
+beam_alert_state.json
+photo_agent*/

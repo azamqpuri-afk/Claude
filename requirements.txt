@@ -1,0 +1,9 @@
+# Core (reports, audits, sync from SQLite) needs only Python 3.11+.
+anthropic>=1.11        # "ask the ERP"
+pytest>=8              # tests
+
+# Install the driver for your ERP's database:
+# oracledb>=2          # Oracle
+# psycopg[binary]>=3   # PostgreSQL
+# pyodbc>=5            # SQL Server
+# pymysql>=1.1         # MySQL / MariaDB

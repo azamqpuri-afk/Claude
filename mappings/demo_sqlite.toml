@@ -1,0 +1,95 @@
+# Mapping: fictional "MillPro" ERP (demo/demo_erp.db) -> Project Smart Layer standard model.
+#
+# One SELECT per standard entity, in the ERP's own SQL dialect. Each column is
+# aliased to a standard column name (python -m smart_layer schema lists them).
+# :since is the start of the sync window (a date) - use it on dated entities.
+# Columns the ERP doesn't have can simply be left out (they become empty).
+
+[mapping]
+name = "MillPro ERP (demo) - Sitara Weaving"
+
+[entities.items]
+sql = """
+SELECT itm_id AS item_code, itm_desc AS item_name, uom_cd AS unit, grp_cd AS category
+FROM inv_item_master
+"""
+
+# MillPro has no stock table: stock = opening + receipts - issues
+[entities.stock_balances]
+sql = """
+SELECT m.itm_id AS item_code,
+       COALESCE((SELECT SUM(qty) FROM inv_opening o WHERE o.itm_id = m.itm_id), 0)
+     + COALESCE((SELECT SUM(CASE h.txn_type WHEN 'GRN' THEN d.qty WHEN 'ISS' THEN -d.qty END)
+                 FROM inv_txn_dtl d JOIN inv_txn_hdr h ON h.txn_id = d.txn_id
+                 WHERE d.itm_id = m.itm_id), 0) AS qty
+FROM inv_item_master m
+"""
+
+[entities.store_receipts]
+sql = """
+SELECT h.txn_no AS doc_no, h.txn_dt AS doc_date, h.created_on AS entered_at, d.itm_id AS item_code,
+       d.qty AS qty, d.unit_price AS rate, d.qty * d.unit_price AS amount,
+       h.vendor_id AS supplier_code, p.bp_name AS supplier_name, h.vendor_bill AS supplier_bill_no,
+       h.created_by AS entered_by
+FROM inv_txn_hdr h JOIN inv_txn_dtl d ON d.txn_id = h.txn_id
+LEFT JOIN bp_partner p ON p.bp_id = h.vendor_id
+WHERE h.txn_type = 'GRN' AND h.txn_dt >= :since
+"""
+
+[entities.store_issues]
+sql = """
+SELECT h.txn_no AS doc_no, h.txn_dt AS doc_date, h.created_on AS entered_at, d.itm_id AS item_code,
+       d.qty AS qty, d.qty * d.unit_price AS amount, h.dept_cd AS issued_to, h.created_by AS entered_by
+FROM inv_txn_hdr h JOIN inv_txn_dtl d ON d.txn_id = h.txn_id
+WHERE h.txn_type = 'ISS' AND h.txn_dt >= :since
+"""
+
+[entities.parties]
+sql = """
+SELECT bp_id AS party_code, bp_name AS party_name,
+       CASE bp_role WHEN 'C' THEN 'customer' WHEN 'V' THEN 'supplier' WHEN 'S' THEN 'sizer' ELSE 'other' END AS party_type
+FROM bp_partner
+"""
+
+[entities.accounts]
+sql = """
+SELECT acct_no AS account_code, acct_title AS account_name,
+       CASE acct_class WHEN 'CASH' THEN 'cash' WHEN 'BANK' THEN 'bank' WHEN 'AR' THEN 'customer'
+                       WHEN 'AP' THEN 'supplier' WHEN 'INC' THEN 'revenue' WHEN 'EXP' THEN 'expense'
+                       WHEN 'STOCK' THEN 'asset' WHEN 'FA' THEN 'asset' WHEN 'CAP' THEN 'equity' ELSE 'other' END AS account_group,
+       bp_id AS party_code
+FROM gl_coa
+"""
+
+[entities.ledger_entries]
+sql = """
+SELECT CAST(h.vch_id AS TEXT) AS voucher_id, h.vch_no AS voucher_no, h.vch_type AS voucher_type,
+       CASE WHEN h.vch_type IN ('CPV', 'BPV') THEN 'payment' WHEN h.vch_type IN ('CRV', 'BRV') THEN 'receipt'
+            WHEN h.vch_type = 'JV' THEN 'journal' WHEN h.vch_type = 'SV' THEN 'sale'
+            WHEN h.vch_type = 'OPN' THEN 'opening' ELSE 'other' END AS voucher_kind,
+       h.vch_dt AS voucher_date, h.posted_on AS entered_at, d.acct_no AS account_code,
+       COALESCE(d.dr_amt, 0) - COALESCE(d.cr_amt, 0) AS amount, h.remarks AS narration, h.posted_by AS entered_by
+FROM gl_vch_hdr h JOIN gl_vch_dtl d ON d.vch_id = h.vch_id
+WHERE h.vch_dt >= :since
+"""
+
+[entities.account_balances]
+sql = """
+SELECT acct_no AS account_code, SUM(COALESCE(dr_amt, 0) - COALESCE(cr_amt, 0)) AS balance
+FROM gl_vch_dtl GROUP BY acct_no
+"""
+
+[entities.looms]
+sql = "SELECT loom_id AS loom_code, loom_no AS loom_name, hall AS shed FROM prd_loom"
+
+# MillPro stores picks, RPM, PPI and shift minutes; meters at 100% = RPM x minutes / (PPI x 39.37)
+[entities.loom_production]
+sql = """
+SELECT log_dt AS prod_date, keyed_on AS entered_at, loom_id AS loom_code, shift_cd AS shift,
+       order_ref AS contract_no, sort_no AS quality, beam_ref AS beam_no,
+       grade_a_mtr + grade_b_mtr + reject_mtr AS meters,
+       grade_a_mtr AS first_quality_m, grade_b_mtr AS second_quality_m, reject_mtr AS rejected_m,
+       rpm * shift_mins / (ppi * 39.37) AS meters_at_100
+FROM prd_shift_log
+WHERE log_dt >= :since
+"""

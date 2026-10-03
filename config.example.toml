@@ -1,0 +1,51 @@
+# Project Smart Layer by Azam Puri - installation settings.
+# Copy to config.toml (never committed) and fill in. Secrets go in environment
+# variables or a .env file next to this one (also never committed):
+#     ERP_PASSWORD=...
+#     NTFY_TOPIC=...            long random name, e.g. from: python -c "import secrets; print(secrets.token_hex(16))"
+#     ANTHROPIC_API_KEY=...     for "ask the ERP" (Claude Console -> API keys)
+
+[company]
+name = "Dost Textiles"
+currency = "Rs"
+
+[erp]
+mapping = "mappings/dost_textiles_oracle.toml"
+driver = "oracle"                  # oracle | sqlite | postgres | mssql | mysql
+dsn = "localhost:1521/ORCL"        # host:port/service of the ERP database
+user = "dostex"                    # best: a read-only user with SELECT on the mapped tables/views
+password = "${ERP_PASSWORD}"
+thick = true                       # Oracle 11g needs Oracle Client (thick) mode
+# client_lib_dir = "C:\\oracle\\instantclient_19_x"   # if Oracle Client is not on PATH
+
+[store]
+path = "data/smart_layer.db"       # local copy that reports, audits and Claude read
+
+[sync]
+history_days = 400                 # dated records re-pulled each sync (catches backdated edits)
+
+[notify]
+channels = ["console"]             # add "ntfy" for phone pushes
+ntfy_topic = "${NTFY_TOPIC}"
+# ntfy_token = "${NTFY_TOKEN}"     # recommended: an access token so nobody else can read the topic
+# ntfy_server = "https://ntfy.sh"
+
+[reports]
+tracked_issue_days = 60            # items issued in this many days are "tracked"
+reorder_cover_months = 2           # order enough for this many months of use
+output_dir = "output"
+
+[audit]
+large_payment = 500000
+duplicate_payment_min = 5000
+# Owner-confirmed normal practices: matching findings are kept as INFO and never pushed.
+# dismiss = [{ match = "^big-", why = "advance payments to sizers are normal" }]
+
+[ask]
+model = "claude-opus-5-5"
+effort = "high"
+notes = """
+Voucher types: CP cash payment, BP bank payment, CR cash receipt, BR bank receipt, JV journal,
+SRN store receipt, OGP_* outward gate passes (sales), IGP_* inward gate passes, OPN opening balances.
+Store issues go to looms ("LOOM # 1" ...) and departments.
+"""

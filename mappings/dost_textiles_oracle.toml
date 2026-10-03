@@ -1,0 +1,111 @@
+# Mapping: Dost Textiles' ERP (Oracle 11.2, schema DOSTEX) -> Project Smart Layer standard model.
+#
+# Built from the tables and views the existing scripts in legacy/dost_textiles/
+# already read and verified (STORE_ISSUE_V, STORE_RECEIPT_V, DMN, ACL, ACH,
+# LOOMS, WV_PROD_V, WV_EFF_V, GET_ITEM_STOCK).
+# NOT YET RUN against the live database: run `python -m smart_layer check` on
+# the server first; it tests each entity separately and names any failing one.
+#
+# Covers the new ERP only (DOSTEX, from 1-Oct-2023). The old ERP (DOSTT) can
+# be added later as a second mapping for history.
+
+[mapping]
+name = "Dost Textiles ERP (Oracle, DOSTEX)"
+
+# DOSTEX.I is keyed on (ic, uc); like the existing stock scripts, items are taken per item code (ic)
+[entities.items]
+sql = """
+SELECT ic AS item_code, MAX(idesc) AS item_name, MAX(uom) AS unit
+FROM dostex.i GROUP BY ic
+"""
+
+# Stock from the ERP's own function (verified against SUM(qty) in 32_get_item_stock_verify.sql),
+# for every item that moved in the last 13 months
+[entities.stock_balances]
+sql = """
+SELECT x.ic AS item_code, SUM(dostex.get_item_stock(x.ic, TRUNC(SYSDATE) + 1, x.uc)) AS qty
+FROM (SELECT DISTINCT d.ic, d.uc FROM dostex.ddt d
+      JOIN dostex.dmn m ON m.trans_no = d.trans_no AND m.uc = d.uc
+      WHERE m.dd >= ADD_MONTHS(TRUNC(SYSDATE), -13)) x
+GROUP BY x.ic
+"""
+
+[entities.store_receipts]
+sql = """
+SELECT r.dno AS doc_no, TRUNC(r.dd) AS doc_date, m.feedd AS entered_at, r.ic AS item_code, r.qty AS qty,
+       r.rate AS rate, r.total_amt AS amount, m.ac AS supplier_code, r.an AS supplier_name, m.bno AS supplier_bill_no
+FROM dostex.store_receipt_v r JOIN dostex.dmn m ON m.trans_no = r.trans_no
+WHERE r.dd >= :since
+"""
+
+[entities.store_issues]
+sql = """
+SELECT v.dno AS doc_no, TRUNC(v.dd) AS doc_date, m.feedd AS entered_at, v.ic AS item_code, v.qty AS qty,
+       v.amount AS amount, v.cn AS issued_to
+FROM dostex.store_issue_v v JOIN dostex.dmn m ON m.trans_no = v.trans_no
+WHERE v.dd >= :since
+"""
+
+[entities.parties]
+sql = """
+SELECT ac AS party_code, an AS party_name,
+       CASE WHEN ac LIKE '3003%' THEN 'customer' ELSE 'supplier' END AS party_type
+FROM dostex.ach WHERE ac LIKE '3003%' OR ac LIKE '2001%'
+"""
+
+# Account groups from the chart's code structure (as used by the dashboard, 40_business_dashboard.py)
+[entities.accounts]
+sql = """
+SELECT ac AS account_code, an AS account_name,
+       CASE WHEN ac LIKE '300801%' THEN 'cash'
+            WHEN ac LIKE '3008%'   THEN 'bank'
+            WHEN ac LIKE '3003%'   THEN 'customer'
+            WHEN ac LIKE '2001%'   THEN 'supplier'
+            WHEN ac LIKE '35%'     THEN 'revenue'
+            WHEN ac LIKE '40%' OR ac LIKE '45%' OR ac LIKE '55%' THEN 'expense'
+            ELSE 'other' END AS account_group,
+       CASE WHEN ac LIKE '3003%' OR ac LIKE '2001%' THEN ac END AS party_code
+FROM dostex.ach
+"""
+
+# A voucher is (tbl, vt, vno, date), the grouping 70_erp_audit.py uses for its balance checks.
+# FEEDD is selected as-is (one branch of ACL is not a date); non-dates become empty.
+[entities.ledger_entries]
+sql = """
+SELECT l.tbl || '/' || l.vt || '/' || l.vno || '/' || TO_CHAR(l.vd, 'YYYYMMDD') AS voucher_id,
+       TO_CHAR(l.vno) AS voucher_no, l.vt AS voucher_type,
+       CASE WHEN l.vt IN ('CP', 'BP') THEN 'payment' WHEN l.vt IN ('CR', 'BR') THEN 'receipt'
+            WHEN l.vt = 'JV' THEN 'journal' WHEN l.vt = 'OPN' THEN 'opening'
+            WHEN l.vt LIKE 'OGP%' THEN 'sale' WHEN l.vt IN ('SRN', 'IGP_YARN') THEN 'purchase' ELSE 'other' END AS voucher_kind,
+       TRUNC(l.vd) AS voucher_date, l.feedd AS entered_at, l.ac AS account_code, l.amt AS amount, l.usern AS entered_by
+FROM dostex.acl l
+WHERE l.vd >= :since AND l.ac IS NOT NULL
+"""
+
+[entities.account_balances]
+sql = """
+SELECT ac AS account_code, SUM(amt) AS balance FROM dostex.acl WHERE ac IS NOT NULL GROUP BY ac
+"""
+
+[entities.looms]
+sql = "SELECT lcode AS loom_code, lname AS loom_name FROM dostex.looms"
+
+# Grades and meters from WV_PROD_V; efficiency from WV_EFF_V as the dashboard computes it
+# (SUM(total_mtr) / SUM(eff_100)), matched on date, loom, shift and quality.
+# Grades: first = A + A2, second = B, rejected = C + CP (as in the audit's rejection check).
+[entities.loom_production]
+sql = """
+SELECT p.td AS prod_date, p.lcode AS loom_code, p.shift AS shift, p.cont_no AS contract_no, p.quality AS quality,
+       p.beam AS beam_no, p.meters AS meters, p.first_q AS first_quality_m, p.second_q AS second_quality_m,
+       p.rej AS rejected_m, e.eff AS efficiency_pct
+FROM (SELECT TRUNC(v.td) td, v.lcode, NVL(TO_CHAR(v.shift), '-') shift, v.quality, MAX(v.cont_no) cont_no,
+             MAX(TO_CHAR(v.ref_tno)) beam, SUM(NVL(v.total_mtr, 0)) meters, SUM(NVL(v.a, 0) + NVL(v.a2, 0)) first_q,
+             SUM(NVL(v.b, 0)) second_q, SUM(NVL(v.c, 0) + NVL(v.cp, 0)) rej
+      FROM dostex.wv_prod_v v WHERE v.tt = 'PRODUCTION' AND v.td >= :since
+      GROUP BY TRUNC(v.td), v.lcode, NVL(TO_CHAR(v.shift), '-'), v.quality) p
+LEFT JOIN (SELECT TRUNC(td) td, lcode, NVL(TO_CHAR(shift), '-') shift, quality,
+                  100 * SUM(total_mtr) / NULLIF(SUM(eff_100), 0) eff
+           FROM dostex.wv_eff_v WHERE tt = 'PRODUCTION' AND td >= :since
+           GROUP BY TRUNC(td), lcode, NVL(TO_CHAR(shift), '-'), quality) e
+  ON e.td = p.td AND e.lcode = p.lcode AND e.shift = p.shift AND e.quality = p.quality
+"""
