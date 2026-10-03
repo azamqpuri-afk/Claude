@@ -274,7 +274,7 @@ difference_limit = 50000
 # A loom monitoring system (scoreboard / sensors), if the mill has one - see docs/CONNECTING_AN_ERP.md
 # [sources.scoreboard]
 # driver = "access"
-# path = 'E:\scoreboard\OLMSDB.mdb'
+# path = 'E:\\scoreboard\\OLMSDB.mdb'
 # copy_first = true
 
 [ask]
