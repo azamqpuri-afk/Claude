@@ -1,0 +1,4 @@
+[2026-09-18 12:15:11] OK - 151 items need reorder, 12 vendor group(s), 55 item(s) with no usable vendor, wrote weekly_vendor_order_list_2026-09-18.pdf
+[2026-09-18 12:16:11] OK - 151 items need reorder, 12 vendor group(s), 55 item(s) with no usable vendor, wrote weekly_vendor_order_list_2026-09-18.pdf
+[2026-09-25 10:05:02] OK - 128 items need reorder, 12 vendor group(s), 56 item(s) with no usable vendor, wrote weekly_vendor_order_list_2026-09-25.pdf
+[2026-10-02 10:05:02] OK - 132 items need reorder, 12 vendor group(s), 56 item(s) with no usable vendor, wrote weekly_vendor_order_list_2026-10-02.pdf

@@ -1,0 +1,20 @@
+[2026-09-18 11:58:30] BASELINE - 346 items snapshotted, no prior baseline to compare against - nothing pushed on first run.
+[2026-09-18 11:59:35] OK - 346 items checked, 1 NEW zero-stock item(s), push sent (HTTP 200): 200010082
+[2026-09-18 12:00:34] OK - 346 items checked, 0 new zero-stock items, no push sent.
+[2026-09-18 12:07:17] OK - 346 items checked, 1 NEW zero-stock item(s), push sent (HTTP 200): 200010082
+[2026-09-18 18:00:03] OK - 346 items checked, 0 new zero-stock items, no push sent.
+[2026-09-19 18:00:05] OK - 346 items checked, 2 NEW zero-stock item(s), push sent (HTTP 200): 150010157, 150011141
+[2026-09-20 18:00:05] OK - 346 items checked, 0 new zero-stock items, no push sent.
+[2026-09-21 18:00:22] OK - 346 items checked, 3 NEW zero-stock item(s), push sent (HTTP 200): 150010067, 150010156, 220040059
+[2026-09-22 18:00:05] OK - 346 items checked, 0 new zero-stock items, no push sent.
+[2026-09-23 18:00:21] OK - 346 items checked, 3 NEW zero-stock item(s), push sent (HTTP 200): 150010316, 150011147, 220040138
+[2026-09-24 18:00:05] OK - 346 items checked, 0 new zero-stock items, no push sent.
+[2026-09-25 18:00:06] OK - 346 items checked, 2 NEW zero-stock item(s), push sent (HTTP 200): 120020011, 150010910
+[2026-09-26 18:00:18] OK - 346 items checked, 2 NEW zero-stock item(s), push sent (HTTP 200): 150010140, 150011572
+[2026-09-27 18:00:04] OK - 346 items checked, 0 new zero-stock items, no push sent.
+[2026-09-28 18:00:06] OK - 346 items checked, 5 NEW zero-stock item(s), push sent (HTTP 200): 150010679, 150010883, 150010990, 150011078, 220040060
+[2026-09-29 18:00:03] OK - 346 items checked, 4 NEW zero-stock item(s), push sent (HTTP 200): 150010563, 150010738, 150010747, 150010884
+[2026-09-30 18:00:02] OK - 346 items checked, 0 new zero-stock items, no push sent.
+[2026-10-01 18:00:03] OK - 346 items checked, 5 NEW zero-stock item(s), push sent (HTTP 200): 150010133, 150010139, 150010544, 150010878, 150011051
+[2026-10-02 18:00:15] OK - 346 items checked, 2 NEW zero-stock item(s), push sent (HTTP 200): 150010763, 150010952
+[2026-10-03 18:00:02] OK - 346 items checked, 0 new zero-stock items, no push sent.
