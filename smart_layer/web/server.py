@@ -43,8 +43,11 @@ class App:
 
     def ask(self, session, question):
         import os
-
-        from ..ask import Assistant
+        try:
+            from ..ask import Assistant
+        except ImportError:
+            return {"answer": "Chat is not set up yet: on the server run  python -m pip install anthropic  and restart.",
+                    "queries": []}
         if not (os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN")):
             return {"answer": "Chat is not set up yet: add ANTHROPIC_API_KEY to the .env file on the server and restart.",
                     "queries": []}
