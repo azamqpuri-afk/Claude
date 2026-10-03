@@ -304,7 +304,7 @@ def test_pilferage_compares_per_party_and_yarn(env):
     """Weft booked to one contract but woven on another contract of the same party and yarn is not excess."""
     cfg, con = env
     con.execute("""INSERT INTO contracts SELECT 'CON-41B', party_code, party_name, contract_date, quality, ends_per_inch,
-                   picks_per_inch, width_in, warp_yarn, warp_count, weft_yarn, weft_count, 0, rate_per_meter, yarn_owner
+                   picks_per_inch, width_in, warp_yarn, warp_count, weft_yarn, weft_count, 0, rate_per_meter, rate_per_pick, yarn_owner
                    FROM contracts WHERE contract_no = 'CON-41'""")
     con.execute("UPDATE yarn_movements SET contract_no = 'CON-41B' WHERE contract_no = 'CON-41' AND move_type = 'to_looms'")
     try:
@@ -372,3 +372,33 @@ mapping = "{(ROOT / 'mappings' / 'dost_textiles_oracle.toml').as_posix()}"
     for obj in ("dostex.wv_prod_v", "dostex.wytm", "dostex.fab_gp_v", "dostex.acl"):
         assert f"GRANT SELECT ON {obj} TO smartlayer_ro;" in sql
     assert "GRANT EXECUTE ON dostex.get_item_stock" in sql and "INSERT" not in sql.upper().replace("INSERT INTO", "")
+
+
+# ---- beams ----------------------------------------------------------------------------------------------
+
+from smart_layer.textile import beams as beams_mod  # noqa: E402
+
+
+def test_beam_days_left_backups_and_shrinkage(env):
+    cfg, con = env
+    by_c, _, mill, _ = beams_mod.learned_shrinkage(con, 7)
+    assert by_c == pytest.approx({"CON-40": 0.07, "CON-41": 0.08, "CON-42": 0.09}, abs=0.002)
+    rows = {r["loom_name"]: r for r in beams_mod.beams_on_looms(con, cfg, END)}
+    assert len(rows) == 24
+    assert rows["LOOM-05"]["days"] == pytest.approx(3, abs=0.6) and rows["LOOM-05"]["backup"] is None
+    assert rows["LOOM-12"]["days"] == pytest.approx(4, abs=0.6) and rows["LOOM-12"]["backup"]["contract"] == "CON-42"
+    assert rows["LOOM-20"]["over"]
+
+
+def test_beam_audit_and_sizer_ledger(env):
+    cfg, con = env
+    cfg.data["beams"] = {"warn_days": 5, "urgent_days": 3}
+    try:
+        found = [f for f in audit.run(con, cfg, END).findings if f.section == "Beams"]
+    finally:
+        cfg.data["beams"] = {}
+    titles = " | ".join(f"{f.severity} {f.title}" for f in found)
+    assert "ACTION LOOM-05: beam BM-05A finishes" in titles and "LOOM-12" not in titles
+    assert "CONFIRMED Beam BM-20A on LOOM-20" in titles and "WATCH Empty beam BM-X9" in titles
+    led = {r[0]: r for r in beams_mod.sizer_ledger(con, cfg, END).rows}
+    assert led["Rehman Sizing"][4] == 1 and led["Ali Sizing"][4] == 0

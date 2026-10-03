@@ -6,7 +6,7 @@ Command line for Project Smart Layer by Azam Puri.
   python -m smart_layer grants [--user NAME]     SQL to create the read-only database user the mapping needs
   python -m smart_layer check                    test the ERP connection and mapping
   python -m smart_layer sync                     refresh the local store from the ERP
-  python -m smart_layer report stock|zero|reorder|production|closing|pilferage [--date D] [--csv] [--push]
+  python -m smart_layer report <name> [--date D]  (stock, zero, reorder, production, closing, pilferage, beams, sizers, ...) [--csv] [--push]
   python -m smart_layer audit [--date D | --month YYYY-MM] [--csv] [--push]
   python -m smart_layer ask ["question"]         ask the ERP (interactive without a question)
   python -m smart_layer serve                    owner dashboard + chat on http://<server>:8080
@@ -23,7 +23,7 @@ from datetime import date, timedelta
 
 from . import PRODUCT, config, erp, notify, schema, store
 from .reports import production, stock
-from .textile import closing, pilferage
+from .textile import beams, closing, pilferage
 
 
 def _open_erp(cfg):
@@ -67,7 +67,7 @@ def cmd_report(cfg, args):
     day = date.fromisoformat(args.date) if args.date else None
     builders = {"stock": stock.stock_status, "zero": stock.new_zero, "reorder": stock.reorder_list,
                 "production": production.daily_production, "closing": closing.contract_closing,
-                "pilferage": pilferage.pilferage}
+                "pilferage": pilferage.pilferage, "beams": beams.beam_report, "sizers": beams.sizer_ledger}
     rep = builders[args.name](con, cfg, day)
     print(rep.text())
     if args.csv:
@@ -206,7 +206,7 @@ def main(argv=None):
     s = sub.add_parser("sync")
     s.add_argument("--entities", nargs="*")
     r = sub.add_parser("report")
-    r.add_argument("name", choices=["stock", "zero", "reorder", "production", "closing", "pilferage"])
+    r.add_argument("name", choices=["stock", "zero", "reorder", "production", "closing", "pilferage", "beams", "sizers"])
     r.add_argument("--date")
     r.add_argument("--csv", action="store_true")
     r.add_argument("--push", action="store_true")

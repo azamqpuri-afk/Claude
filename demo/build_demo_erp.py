@@ -115,6 +115,7 @@ def build(out, end):
                    [(f"L{n:02d}", f"LOOM-{n:02d}", "Hall A" if n <= 12 else "Hall B") for n in range(1, LOOMS + 1)])
 
     cprod, cfresh = defaultdict(float), defaultdict(float)
+    lsegs, lday = defaultdict(list), defaultdict(float)          # per loom: beam segments [ref, first, last, meters]
     stock = {}
     for code, *_rest in ITEMS:
         monthly = _rest[4]
@@ -194,9 +195,16 @@ def build(out, end):
                 b = meters * rnd.uniform(0.01, 0.04)
                 ids["log"] += 1
                 cprod[(f"CON-{40 + (n - 1) % 3}", d)] += meters
+                beam_ref = f"BM-{n:02d}{'AB'[((d.toordinal() + 3 * n) // 25) % 2]}"   # two beams per loom take turns (~25 days each)
+                seg = lsegs[n][-1] if lsegs[n] and lsegs[n][-1][0] == beam_ref else None
+                if seg is None:
+                    seg = [beam_ref, d, d, 0.0]
+                    lsegs[n].append(seg)
+                seg[2], seg[3] = d, seg[3] + meters
+                lday[(n, d)] += meters
                 cfresh[(f"CON-{40 + (n - 1) % 3}", d)] += meters - b - rej
                 db.execute("INSERT INTO prd_shift_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                           (ids["log"], d.isoformat(), f"L{n:02d}", shift, q[0], f"CON-{40 + (n - 1) % 3}", f"BM-{n:02d}{(d.toordinal() // 25) % 10}",
+                           (ids["log"], d.isoformat(), f"L{n:02d}", shift, q[0], f"CON-{40 + (n - 1) % 3}", beam_ref,
                             rpm, q[2], mins, round(picks), round(meters - b - rej, 1), round(b, 1), round(rej, 1), keyed(d, 1)))
         # accounts: sales, receipts, wages, power, supplier payments
         if d.weekday() != 6:
@@ -240,6 +248,7 @@ def build(out, end):
     txn("GRN", y, [("PK-003", 50, 330)], vendor="V05", bill="V05-777")
     txn("ISS", y, [("EL-002", 6, 2900)], dept="LOOM-18")
     build_yarn(db, cprod, cfresh, start, end)
+    build_beams(db, lsegs, lday, end)
     db.commit()
     db.close()
     return out
@@ -335,6 +344,80 @@ def build_yarn(db, cprod, cfresh, start, end):
                 db.execute("INSERT INTO fab_gatepass VALUES (?,?,?,?,?,?,?)",
                            (f"FG-{ids['gp']}", d.isoformat(), o, "I", round(rnd.uniform(150, 400), 1), 0, rate))
     mv("WFI", end - timedelta(days=12), "CON-39", None, "Y20", 8 * BAG_KG, hour=23)
+
+
+SHRINK = {"CON-40": 0.07, "CON-41": 0.08, "CON-42": 0.09}
+ENDS = {c[0]: c[3] * c[5] for c in CONTRACTS}                          # ends per inch x width
+SIZER = {c[0]: c[9] for c in CONTRACTS}
+PLANTED += """
+  beams    - LOOM-05: beam finishes in ~3 days, no sized beam waiting for its contract
+           - LOOM-12: beam finishes in ~4 days, a sized beam is waiting (no alert)
+           - LOOM-20: more fabric woven than its beam holds
+           - Rehman Sizing: empty beam BM-X9 sent 60 days ago, never returned"""
+
+
+def build_beams(db, lsegs, lday, end, warn=6):
+    """Beam register and movements in MillPro's own tables, consistent with the production log."""
+    db.executescript("""
+        CREATE TABLE bm_beam (beam_no TEXT, bstat TEXT, set_no TEXT, order_ref TEXT, loom_id TEXT, sizer_id TEXT, ends REAL,
+                              set_mtr REAL, woven_mtr REAL, mount_dt TEXT, recv_dt TEXT);
+        CREATE TABLE bm_move (mv_dt TEXT, gp_no TEXT, beam_no TEXT, mv_type TEXT, bp_id TEXT, set_no TEXT, order_ref TEXT,
+                              loom_id TEXT, set_mtr REAL, woven_mtr REAL);
+    """)
+    gp = [9000]
+
+    def move(d, beam, kind, sizer=None, set_no=None, order=None, loom=None, length=None, woven=None):
+        gp[0] += 1
+        db.execute("INSERT INTO bm_move VALUES (?,?,?,?,?,?,?,?,?,?)", (d.isoformat(), f"BG-{gp[0]}", beam, kind, sizer, set_no,
+                                                                      order, loom, length, woven))
+    set_seq = [500]
+    for n, segs in sorted(lsegs.items()):
+        order = f"CON-{40 + (n - 1) % 3}"
+        s, loom = SHRINK[order], f"L{n:02d}"
+        rate = sum(lday[(n, end - timedelta(days=k))] for k in range(30)) / 30
+        for i, (ref, first, last, meters) in enumerate(segs):
+            set_seq[0] += 1
+            set_no = f"S{set_seq[0]}"
+            current = i == len(segs) - 1
+            if not current:
+                length = meters / (1 - s)
+            else:
+                elapsed = (end - first).days + 1
+                length = meters / elapsed * 25 / (1 - s)
+                left_days = (length * (1 - s) - meters) / rate if rate else 99
+                if n == 5:
+                    length = (meters + 3 * rate) / (1 - s)
+                elif n == 12:
+                    length = (meters + 4 * rate) / (1 - s)
+                elif n == 20:
+                    length = meters * 0.95
+                elif order == "CON-41" and left_days <= warn:
+                    length = (meters + 10 * rate) / (1 - s)        # keep loom 5 the only CON-41 loom without a backup
+            move(first - timedelta(days=3), ref, "SRC", SIZER[order], set_no, order, None, round(length))
+            move(first, ref, "TLM", None, set_no, order, loom, round(length))
+            if not current:
+                move(last + timedelta(days=1), ref, "FLC", None, set_no, order, loom, round(length), round(meters, 1))
+                if last + timedelta(days=2) <= end:
+                    move(last + timedelta(days=2), ref, "ESO", SIZER[order], None, None, None)
+                    if i == len(segs) - 2:                       # the loom's other beam: at the sizer being filled
+                        db.execute("INSERT INTO bm_beam VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                                   (ref, "S", None, None, None, SIZER[order], None, None, None, None, None))
+                continue
+            db.execute("INSERT INTO bm_beam VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                       (ref, "L", set_no, order, loom, SIZER[order], ENDS[order], round(length), round(meters, 1),
+                        first.isoformat(), (first - timedelta(days=3)).isoformat()))
+            needs_backup = n == 12 or (n != 5 and order != "CON-41" and rate and
+                                        (length * (1 - s) - meters) / rate <= warn)
+            if needs_backup:
+                set_seq[0] += 1
+                db.execute("INSERT INTO bm_beam VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                           (f"BM-W{n:02d}", "W", f"S{set_seq[0]}", order, None, SIZER[order], ENDS[order], round(length), None,
+                            None, (end - timedelta(days=2)).isoformat()))
+                move(end - timedelta(days=2), f"BM-W{n:02d}", "SRC", SIZER[order], f"S{set_seq[0]}", order, None, round(length))
+    for b in ("BM-E1", "BM-E2", "BM-E3"):
+        db.execute("INSERT INTO bm_beam VALUES (?,?,?,?,?,?,?,?,?,?,?)", (b, "E", None, None, None, None, None, None, None, None, None))
+    move(end - timedelta(days=60), "BM-X9", "ESO", "S02")
+    db.execute("INSERT INTO bm_beam VALUES (?,?,?,?,?,?,?,?,?,?,?)", ("BM-X9", "S", None, None, None, "S02", None, None, None, None, None))
 
 
 if __name__ == "__main__":

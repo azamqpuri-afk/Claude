@@ -44,19 +44,28 @@ def create(con):
     for e in schema.ENTITIES:
         cols = ", ".join(f"{c.name} {SQL_TYPES[c.type]}" for c in e.columns)
         con.execute(f"CREATE TABLE IF NOT EXISTS {e.name} ({cols})")
+        have = [r[1] for r in con.execute(f"PRAGMA table_info({e.name})")]
+        if have != e.column_names:                   # a newer version added columns: rebuild the table in schema order
+            keep = [c for c in e.column_names if c in have]
+            con.execute(f"ALTER TABLE {e.name} RENAME TO _old_{e.name}")
+            con.execute(f"CREATE TABLE {e.name} ({cols})")
+            if keep:
+                con.execute(f"INSERT INTO {e.name} ({', '.join(keep)}) SELECT {', '.join(keep)} FROM _old_{e.name}")
+            con.execute(f"DROP TABLE _old_{e.name}")
         if e.date_column:
             con.execute(f"CREATE INDEX IF NOT EXISTS ix_{e.name}_date ON {e.name} ({e.date_column})")
     for t, c in (("store_receipts", "item_code"), ("store_issues", "item_code"),
                  ("ledger_entries", "voucher_id"), ("ledger_entries", "account_code"),
                  ("loom_production", "loom_code"), ("loom_production", "contract_no"),
-                 ("yarn_movements", "contract_no"), ("fabric_dispatches", "contract_no")):
+                 ("yarn_movements", "contract_no"), ("fabric_dispatches", "contract_no"),
+                 ("beam_movements", "beam_no"), ("loom_monitor", "loom_code")):
         con.execute(f"CREATE INDEX IF NOT EXISTS ix_{t}_{c} ON {t} ({c})")
     con.execute("CREATE TABLE IF NOT EXISTS sync_log (entity TEXT, synced_at TEXT, since TEXT, rows INTEGER)")
     con.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
     con.commit()
 
 
-FULL_HISTORY = ("yarn_movements", "fabric_dispatches")     # contract closing needs each contract's whole life
+FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements")     # contract closing needs each contract's whole life
 
 
 def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HISTORY):

@@ -8,6 +8,7 @@ from datetime import date, timedelta
 from .. import PRODUCT, audit
 from ..reports.production import EFF_AGG
 from ..reports.stock import _status_rows
+from ..textile import beams as beams_mod
 from ..textile import closing, pilferage
 from ..textile.method import Method
 
@@ -78,6 +79,14 @@ def build(con, cfg, as_of=None):
     crows = closing.contract_rows(con, Method(cfg["closing"]), as_of)
     flags, weekly, sizing, t = pilferage.analyse(con, cfg, as_of - timedelta(days=int(t_look(cfg))), as_of)
 
+    bt = beams_mod.settings(cfg)
+    beam_rows = [{"loom": r["loom_name"], "beam": r["beam"], "contract": r["contract"],
+                  "days": round(r["days"], 1) if r["days"] is not None else None,
+                  "to_come": round(r["to_come"]) if r["to_come"] is not None else None, "rate": round(r["rate"]),
+                  "backup": (r["backup"] or {}).get("beam"), "over": r["over"],
+                  "alert": bool(r["days"] is not None and r["days"] <= float(bt["warn_days"]) and not r["backup"])}
+                 for r in beams_mod.beams_on_looms(con, cfg, as_of)]
+
     return {
         "product": PRODUCT, "company": cfg["company"]["name"], "currency": cur, "as_of": d,
         "synced_at": _one(con, "SELECT MAX(synced_at) FROM sync_log") or None,
@@ -94,6 +103,7 @@ def build(con, cfg, as_of=None):
             "action": sum(1 for f in findings if f["severity"] == "ACTION"),
             "confirmed": sum(1 for f in findings if f["severity"] == "CONFIRMED"),
             "yarn_flags": len(flags),
+            "beam_alerts": sum(1 for b in beam_rows if b["alert"]),
         },
         "production": production, "looms": looms, "finance": finance, "findings": findings, "stock": stock,
         "closing": [{k: (round(v, 1) if isinstance(v, float) else v) for k, v in r.items() if k != "balance_lb"} for r in crows],
@@ -102,6 +112,7 @@ def build(con, cfg, as_of=None):
         "sizing": [{k: (round(v, 1) if isinstance(v, float) else v) for k, v in s.items()}
                    for s in sorted(sizing, key=lambda s: -s["loss_pct"])],
         "sizing_limit": float(t["sizing_loss_pct"]),
+        "beams": beam_rows, "beam_warn_days": float(bt["warn_days"]),
     }
 
 

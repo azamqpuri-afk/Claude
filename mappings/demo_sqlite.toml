@@ -126,3 +126,25 @@ SELECT g.gp_no AS doc_no, g.gp_dt AS dispatch_date, g.order_ref AS contract_no, 
 FROM fab_gatepass g LEFT JOIN so_order o ON o.order_ref = g.order_ref
 WHERE g.gp_dt >= :since
 """
+
+[entities.beams]
+sql = """
+SELECT b.beam_no AS beam_no,
+       CASE b.bstat WHEN 'L' THEN 'on_loom' WHEN 'W' THEN 'sized_waiting' WHEN 'E' THEN 'empty_in_mill'
+                    WHEN 'S' THEN 'at_sizer' ELSE 'other' END AS status,
+       b.set_no AS set_no, b.order_ref AS contract_no, b.loom_id AS loom_code, p.bp_name AS sizer_name, b.ends AS ends,
+       b.set_mtr AS set_length_m, b.woven_mtr AS woven_m, b.mount_dt AS mounted_date, b.recv_dt AS received_date
+FROM bm_beam b LEFT JOIN bp_partner p ON p.bp_id = b.sizer_id
+"""
+
+[entities.beam_movements]
+sql = """
+SELECT m.mv_dt AS move_date, m.gp_no AS doc_no, m.beam_no AS beam_no,
+       CASE m.mv_type WHEN 'ESO' THEN 'empty_to_sizer' WHEN 'ESI' THEN 'empty_from_sizer' WHEN 'SRC' THEN 'sized_received'
+                      WHEN 'SSO' THEN 'sized_sent_out' WHEN 'TLM' THEN 'to_loom' WHEN 'FLC' THEN 'from_loom_finished'
+                      WHEN 'FLX' THEN 'from_loom_cut' ELSE 'other' END AS move_type,
+       p.bp_name AS party_name, m.set_no AS set_no, m.order_ref AS contract_no, m.loom_id AS loom_code,
+       m.set_mtr AS length_m, m.woven_mtr AS woven_m
+FROM bm_move m LEFT JOIN bp_partner p ON p.bp_id = m.bp_id
+WHERE m.mv_dt >= :since
+"""

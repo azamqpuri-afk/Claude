@@ -136,6 +136,10 @@ td.nowrap { white-space: nowrap; }
       <div class="table-wrap" id="pilferage"></div></div>
   </section>
 
+  <section class="card"><h2>Beams on looms</h2>
+    <p class="hint" id="beamHint">Days left = fabric still to come on the beam ÷ the loom's meters a day</p>
+    <div class="table-wrap" id="beams"></div></section>
+
   <section class="grid2">
     <div class="card"><h2>Store: out of stock and low</h2><p class="hint">Items used in the last 60 days</p>
       <div class="table-wrap" id="stock"></div></div>
@@ -321,6 +325,7 @@ function render() {
     ["Rejection", k.rej == null ? "–" : num(k.rej, 1) + "%", "of meters woven"],
     ["Needs action", num(k.action), `${num(k.confirmed)} confirmed errors`],
     ["Yarn flags", num(k.yarn_flags), "issue days to check"],
+    ["Beams running out", num(k.beam_alerts || 0), `within ${num(D.beam_warn_days)} days, no backup`],
     ["Cash in hand", `${cur} ${money(k.cash)}`, `bank ${money(k.bank)}`],
     ["Receivable", `${cur} ${money(k.receivable)}`, "from customers"],
     ["Payable", `${cur} ${money(k.payable)}`, "to suppliers"],
@@ -358,6 +363,11 @@ function render() {
   $("#stock").innerHTML = table(["Status", "Item", "Stock", "Use / month"], D.stock.map((r) =>
     [chip(r.status === "OUT OF STOCK" ? "ACTION" : "WATCH").replace(/ACTION|WATCH/, r.status === "OUT OF STOCK" ? "OUT" : "LOW"),
      `${esc(r.item)}<div class="detail">${esc(r.code)} · ${esc(r.unit)}</div>`, num(r.stock, 1), num(r.avg_month, 1)]), [2, 3]);
+  $("#beamHint").textContent = `Days left = fabric still to come on the beam ÷ the loom's meters a day. Red: finishes within ${num(D.beam_warn_days)} days with no sized beam waiting.`;
+  $("#beams").innerHTML = table(["", "Loom", "Beam", "Contract", "Days left", "Fabric to come m", "m / day", "Backup beam"],
+    (D.beams || []).map((b) => [b.alert ? chip("ACTION").replace("ACTION", "NO BACKUP") : (b.over ? chip("CONFIRMED").replace("CONFIRMED", "CHECK") : ""),
+      esc(b.loom), esc(b.beam), esc(b.contract || ""), num(b.days, 1), num(b.to_come), num(b.rate),
+      b.backup ? esc(b.backup) : (b.over ? "woven more than the beam holds" : "–")]), [4, 5, 6]);
   $("#looms").innerHTML = table(["Loom", "Meters", "Eff %", "Rej %"], D.looms.map((r) =>
     [esc(r.loom), num(r.meters), num(r.eff, 1), num(r.rej, 1)]), [1, 2, 3]);
   $("#foot").textContent = `${D.product} · figures from the mill's ERP, read-only`;

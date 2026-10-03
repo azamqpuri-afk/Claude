@@ -160,3 +160,57 @@ FROM dostex.fab_gp_v v JOIN dostex.wc_cont_sub_v s ON s.cont_sub_id = v.cont_sub
 WHERE v.trans_type IN ('GPOUT', 'GPIN') AND v.trans_date >= :since
 GROUP BY NVL(v.gp_no, v.trans_no), TRUNC(v.trans_date), c.cont_no, v.trans_type
 """
+
+# Beams (as 52_yarn_fabric_data.py / 60_beam_register.py read them).
+# On looms: WV_BEAM_ATLOOM_V (ACTUAL_LENGTH = set length, BEAM_PROD = woven from it, BLENGTH = left).
+# Sized and waiting: BEAMS_STOCK_V. Ends of each set from the sized-beam gate pass (WYTD.ENDS).
+[entities.beams]
+sql = """
+SELECT v.beam_code AS beam_no, 'on_loom' AS status, TO_CHAR(v.set_no) AS set_no, TO_CHAR(v.cont_no) AS contract_no,
+       TO_CHAR(v.lcode) AS loom_code, e.ends AS ends, v.actual_length AS set_length_m, v.beam_prod AS woven_m,
+       v.blength AS length_left_m, TRUNC(v.td) AS mounted_date
+FROM dostex.wv_beam_atloom_v v
+LEFT JOIN (SELECT b.setno, MAX(d.ends) ends FROM dostex.wybeams b JOIN dostex.wytd d ON d.trans_no = b.trans_no AND d.sr_no = b.ref_sr
+           GROUP BY b.setno) e ON e.setno = v.set_no
+UNION ALL
+SELECT s.beam_code, 'sized_waiting', TO_CHAR(s.setno), TO_CHAR(s.cont_no), NULL, e.ends, s.blength, NULL, s.blength, NULL
+FROM (SELECT DISTINCT beam_code, cont_no, blength, setno FROM dostex.beams_stock_v) s
+LEFT JOIN (SELECT b.setno, MAX(d.ends) ends FROM dostex.wybeams b JOIN dostex.wytd d ON d.trans_no = b.trans_no AND d.sr_no = b.ref_sr
+           GROUP BY b.setno) e ON e.setno = s.setno
+"""
+
+# Beam movements: sized beams (WYBEAMS + WYTM), empty beams to / from sizers (WV_GP_BEAMSM/D), beams on / off looms (WPRDTD).
+# Fabric woven per beam = production booked against it (WPRDTD PRODUCTION rows reference the beam's REF_TNO / REF_SR).
+[entities.beam_movements]
+sql = """
+SELECT TRUNC(m.td) AS move_date, TO_CHAR(NVL(m.gp_no, m.tno)) AS doc_no, bm.bcode AS beam_no,
+       CASE m.tt WHEN 'IGP_SIZED_BEAMS' THEN 'sized_received' WHEN 'OPN_SIZED_BEAMS' THEN 'sized_received'
+                 WHEN 'OGP_SIZED_BEAMS' THEN 'sized_sent_out' ELSE 'other' END AS move_type,
+       a.an AS party_name, TO_CHAR(b.setno) AS set_no, TO_CHAR(c.cont_no) AS contract_no, NULL AS loom_code,
+       b.blength AS length_m, NULL AS woven_m
+FROM dostex.wybeams b JOIN dostex.wytm m ON m.trans_no = b.trans_no
+JOIN dostex.wytd d ON d.trans_no = b.trans_no AND d.sr_no = b.ref_sr
+LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id LEFT JOIN dostex.beams bm ON bm.beam_id = b.beam_id
+LEFT JOIN dostex.ach a ON a.ac = NVL(m.ac1, m.ac2)
+WHERE m.td >= :since AND b.beam_id IS NOT NULL
+UNION ALL
+SELECT TRUNC(m.td), TO_CHAR(m.tno), bm.bcode,
+       CASE m.tt WHEN 'OGP_EMPTY_BEAMS' THEN 'empty_to_sizer' WHEN 'IGP_EMPTY_BEAMS' THEN 'empty_from_sizer' ELSE 'other' END,
+       a.an, NULL, TO_CHAR(c.cont_no), NULL, NULL, NULL
+FROM dostex.wv_gp_beamsd d JOIN dostex.wv_gp_beamsm m ON m.trans_no = d.trans_no
+LEFT JOIN dostex.beams bm ON bm.beam_id = d.beam_id LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id
+LEFT JOIN dostex.ach a ON a.ac = m.ac1
+WHERE m.td >= :since
+UNION ALL
+SELECT TRUNC(m.td), TO_CHAR(m.tno), bm.bcode,
+       CASE WHEN m.tt = 'BEAMS_TO_LOOM' THEN 'to_loom' WHEN d.bstatus = 'COMPLETE' THEN 'from_loom_finished' ELSE 'from_loom_cut' END,
+       NULL, TO_CHAR(sb.setno), TO_CHAR(c.cont_no), TO_CHAR(d.lcode), sb.blength,
+       CASE WHEN m.tt = 'BEAMS_FROM_LOOM' THEN pr.m END
+FROM dostex.wprdtd d JOIN dostex.wprdtm m ON m.trans_no = d.trans_no
+LEFT JOIN dostex.beams bm ON bm.beam_id = d.beam_id LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id
+LEFT JOIN dostex.wybeams sb ON sb.trans_no = d.ref_tno AND sb.sr_no = d.ref_sr
+LEFT JOIN (SELECT d4.ref_tno, d4.ref_sr, SUM(NVL(d4.a,0)+NVL(d4.a2,0)+NVL(d4.b,0)+NVL(d4.c,0)+NVL(d4.cp,0)) m
+           FROM dostex.wprdtm m4 JOIN dostex.wprdtd d4 ON d4.trans_no = m4.trans_no WHERE m4.tt = 'PRODUCTION'
+           GROUP BY d4.ref_tno, d4.ref_sr) pr ON pr.ref_tno = d.ref_tno AND pr.ref_sr = d.ref_sr
+WHERE m.tt IN ('BEAMS_TO_LOOM', 'BEAMS_FROM_LOOM') AND m.td >= :since
+"""
