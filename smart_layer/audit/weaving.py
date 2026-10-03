@@ -2,7 +2,7 @@
 
 from datetime import date
 
-from ..reports.production import EFF_SQL
+from ..reports.production import EFF_AGG, EFF_SQL
 
 
 def run(a):
@@ -46,7 +46,7 @@ def run(a):
 
     looms, m, rej = a.q("""SELECT COUNT(DISTINCT loom_code), SUM(meters), SUM(COALESCE(rejected_m, 0))
                            FROM loom_production WHERE prod_date BETWEEN ? AND ?""", d0, d1)[0]
-    eff = a.q(f"""SELECT SUM({EFF_SQL} * meters) / NULLIF(SUM(CASE WHEN {EFF_SQL} IS NOT NULL THEN meters END), 0)
+    eff = a.q(f"""SELECT {EFF_AGG}
                   FROM loom_production WHERE prod_date BETWEEN ? AND ?""", d0, d1)[0][0]
     a.summary.append(f"Weaving: {looms} looms, {m or 0:,.0f} m" + (f", efficiency {eff:.1f}%" if eff else "")
                      + (f", rejection {100 * rej / m:.1f}%" if m else "") + ".")

@@ -6,7 +6,7 @@ Works for any mill: it reads only the standard entities.
 from datetime import date, timedelta
 
 from .. import PRODUCT, audit
-from ..reports.production import EFF_SQL
+from ..reports.production import EFF_AGG
 from ..reports.stock import _status_rows
 from ..textile import closing, pilferage
 from ..textile.method import Method
@@ -25,7 +25,7 @@ def build(con, cfg, as_of=None):
     # production: last 30 days, and per loom on the day
     start = (as_of - timedelta(days=29)).isoformat()
     prod = {r[0]: r for r in con.execute(f"""
-        SELECT prod_date, SUM(meters), SUM({EFF_SQL} * meters) / NULLIF(SUM(CASE WHEN {EFF_SQL} IS NOT NULL THEN meters END), 0),
+        SELECT prod_date, SUM(meters), {EFF_AGG},
                SUM(COALESCE(rejected_m, 0)), COUNT(DISTINCT loom_code)
         FROM loom_production WHERE prod_date BETWEEN ? AND ? GROUP BY prod_date""", (start, d))}
     days = [(as_of - timedelta(days=29 - i)).isoformat() for i in range(30)]
@@ -35,7 +35,7 @@ def build(con, cfg, as_of=None):
               "rej": round(100 * rj / m, 1) if m else None, "quality": q}
              for n, m, e, rj, q in con.execute(f"""
         SELECT COALESCE(l.loom_name, p.loom_code), SUM(p.meters),
-               SUM({EFF_SQL} * p.meters) / NULLIF(SUM(CASE WHEN {EFF_SQL} IS NOT NULL THEN p.meters END), 0),
+               {EFF_AGG},
                SUM(COALESCE(p.rejected_m, 0)), GROUP_CONCAT(DISTINCT p.quality)
         FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
         WHERE p.prod_date = ? GROUP BY p.loom_code ORDER BY 1""", (d,))]

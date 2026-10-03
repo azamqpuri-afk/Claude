@@ -90,22 +90,23 @@ SELECT ac AS account_code, SUM(amt) AS balance FROM dostex.acl WHERE ac IS NOT N
 [entities.looms]
 sql = "SELECT lcode AS loom_code, lname AS loom_name FROM dostex.looms"
 
-# Grades and meters from WV_PROD_V; efficiency from WV_EFF_V as the dashboard computes it
-# (SUM(total_mtr) / SUM(eff_100)), matched on date, loom, shift and quality.
+# Grades and meters from WV_PROD_V; efficiency from WV_EFF_V as the ERP's Loom Wise Efficiency report computes
+# it (SUM(total_mtr) / SUM(eff_100)), matched on date, loom, shift and quality. Combined efficiency is weighted by
+# eff_100 (meters at 100%), e.g. 1-Oct-2026: 2,223 / 2,805 = 79.25%.
 # Grades as the ERP's own Daily Production report counts them: first = A + A2; rejection = everything else
 # (B + C + CP, i.e. 100 - "Grade %"); second = B is kept separately for reference.
 [entities.loom_production]
 sql = """
 SELECT p.td AS prod_date, p.lcode AS loom_code, p.shift AS shift, p.cont_no AS contract_no, p.quality AS quality,
        p.beam AS beam_no, p.meters AS meters, p.first_q AS first_quality_m, p.second_q AS second_quality_m,
-       p.rej AS rejected_m, e.eff AS efficiency_pct
+       p.rej AS rejected_m, e.eff AS efficiency_pct, e.m100 AS meters_at_100
 FROM (SELECT TRUNC(v.td) td, v.lcode, NVL(TO_CHAR(v.shift), '-') shift, v.quality, MAX(v.cont_no) cont_no,
              MAX(TO_CHAR(v.ref_tno)) beam, SUM(NVL(v.total_mtr, 0)) meters, SUM(NVL(v.a, 0) + NVL(v.a2, 0)) first_q,
              SUM(NVL(v.b, 0)) second_q, SUM(NVL(v.b, 0) + NVL(v.c, 0) + NVL(v.cp, 0)) rej
       FROM dostex.wv_prod_v v WHERE v.tt = 'PRODUCTION' AND v.td >= :since
       GROUP BY TRUNC(v.td), v.lcode, NVL(TO_CHAR(v.shift), '-'), v.quality) p
 LEFT JOIN (SELECT TRUNC(td) td, lcode, NVL(TO_CHAR(shift), '-') shift, quality,
-                  100 * SUM(total_mtr) / NULLIF(SUM(eff_100), 0) eff
+                  100 * SUM(total_mtr) / NULLIF(SUM(eff_100), 0) eff, SUM(eff_100) m100
            FROM dostex.wv_eff_v WHERE tt = 'PRODUCTION' AND td >= :since
            GROUP BY TRUNC(td), lcode, NVL(TO_CHAR(shift), '-'), quality) e
   ON e.td = p.td AND e.lcode = p.lcode AND e.shift = p.shift AND e.quality = p.quality

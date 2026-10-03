@@ -2,8 +2,9 @@
 Daily weaving report: meters, efficiency and rejection per loom for one day,
 plus looms that wove nothing (generalised from Dost Textiles' 12_/13_/23_).
 
-Efficiency is meter-weighted: the ERP's own efficiency_pct where the mapping
-provides it, otherwise meters / meters_at_100.
+Efficiency: the ERP's own efficiency_pct where the mapping provides it, otherwise
+meters / meters_at_100; combined over looms and shifts as total meters / total
+meters at 100%.
 """
 
 from datetime import date, timedelta
@@ -11,6 +12,10 @@ from datetime import date, timedelta
 from . import Report
 
 EFF_SQL = "COALESCE(efficiency_pct, CASE WHEN meters_at_100 > 0 THEN 100.0 * meters / meters_at_100 END)"
+# Combined efficiency = total meters / total meters at 100% (as ERP loom-efficiency reports do): each row's
+# efficiency weighted by its meters at 100%; rows without that are weighted by meters.
+_W = "COALESCE(meters_at_100, meters)"
+EFF_AGG = f"SUM({EFF_SQL} * {_W}) / NULLIF(SUM(CASE WHEN {EFF_SQL} IS NOT NULL THEN {_W} END), 0)"
 
 
 def idle_looms(con, day, min_days=5):
@@ -39,7 +44,7 @@ def daily_production(con, cfg, day=None):
     d = day.isoformat()
     rows = con.execute(f"""
         SELECT COALESCE(l.loom_name, p.loom_code), SUM(p.meters),
-               SUM({EFF_SQL} * p.meters) / NULLIF(SUM(CASE WHEN {EFF_SQL} IS NOT NULL THEN p.meters END), 0),
+               {EFF_AGG},
                SUM(COALESCE(p.rejected_m, 0)), GROUP_CONCAT(DISTINCT p.quality)
         FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
         WHERE p.prod_date = ? GROUP BY p.loom_code ORDER BY 1""", (d,)).fetchall()

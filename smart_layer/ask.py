@@ -45,7 +45,8 @@ How to work:
 - The data is a SQLite database with exactly the tables below. Dates are ISO text ('YYYY-MM-DD'); use date(),
   strftime() and julianday() for date maths. Money is in {company['currency']}.
 - If a question leaves the period open, pick the obvious one (e.g. "this month") and say which period you used.
-- Efficiency is meter-weighted: COALESCE(efficiency_pct, 100.0 * meters / meters_at_100), weighted by meters.
+- Efficiency of a row is COALESCE(efficiency_pct, 100.0 * meters / meters_at_100). Combined efficiency (several looms,
+  shifts or days) is weighted by meters_at_100: SUM(eff * meters_at_100) / SUM(meters_at_100).
 - Reply in the language and script the user wrote in (English, Urdu, or Roman Urdu). Keep answers short and
   practical: the answer first, then a small table or a few lines of detail if useful.
 
