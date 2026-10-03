@@ -115,20 +115,27 @@ class Wizard:
         return key, lines
 
     def mapping(self):
-        maps = sorted((self.base / "mappings").glob("*.toml"))
+        from .secret import read_mapping_text
+        md = self.base / "mappings"
+        stems = sorted({p.stem for p in md.glob("*.toml")} | {p.stem for p in md.glob("*.map")})  # plain (dev) or sealed
         names = []
-        for m in maps:
-            title = next((ln.split("=", 1)[1].strip().strip('"') for ln in m.read_text(encoding="utf-8").splitlines()
-                          if ln.strip().startswith("name =")), m.stem)
-            names.append(f"{m.name}  ({title})")
+        for s in stems:
+            try:
+                text = read_mapping_text(md / f"{s}.toml")
+                title = next((ln.split("=", 1)[1].strip().strip('"') for ln in text.splitlines()
+                              if ln.strip().startswith("name =")), s)
+            except Exception:
+                title = s
+            names.append(f"{s}  ({title})")
+        choices = names + (["New mapping for a new ERP (start from the template)"] if (md / "demo_sqlite.toml").exists() else [])
         i = self.choose("\nWhich mapping file connects this ERP? (a new ERP needs a new mapping - see docs)",
-                        names + ["New mapping for a new ERP (start from the template)"], default=1)
-        if i < len(maps):
-            return f"mappings/{maps[i].name}"
+                        choices, default=1)
+        if i < len(stems):
+            return f"mappings/{stems[i]}.toml"
         name = self.ask("Short name for the new mapping (letters, no spaces)", "my_mill").replace(" ", "_")
-        target = self.base / "mappings" / f"{name}.toml"
+        target = md / f"{name}.toml"
         if not target.exists():
-            shutil.copy(self.base / "mappings" / "demo_sqlite.toml", target)
+            shutil.copy(md / "demo_sqlite.toml", target)
             self.out(f"  Created {target.relative_to(self.base)} from the demo mapping - edit its SELECTs for this ERP "
                      f"(docs/CONNECTING_AN_ERP.md), then run  python -m smart_layer check")
         return f"mappings/{target.name}"

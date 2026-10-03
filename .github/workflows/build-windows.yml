@@ -9,13 +9,9 @@ name: Build Windows installer
 
 on:
   workflow_dispatch:
-    inputs:
-      version:
-        description: "Version number, e.g. 0.5.0"
-        required: true
-        default: "0.5.0"
   push:
     tags: ["v*"]
+    branches: ["ci-build"]      # push to this branch to build without cutting a release
 
 jobs:
   build:
@@ -31,7 +27,7 @@ jobs:
         id: ver
         shell: bash
         run: |
-          if [ "${{ github.event_name }}" = "push" ]; then V="${GITHUB_REF_NAME#v}"; else V="${{ inputs.version }}"; fi
+          V=$(python -c "import smart_layer; print(smart_layer.__version__)")
           echo "version=$V" >> "$GITHUB_OUTPUT"
 
       - name: Install build tools and runtime packages

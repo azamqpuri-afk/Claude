@@ -23,11 +23,12 @@ WizardStyle=modern
 UninstallDisplayName=Smart Layer
 
 [Files]
-; The whole compiled program (Nuitka --standalone output: SmartLayer.exe + its runtime + data files).
-Source: "..\build\SmartLayer.dist\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+; The whole compiled program (Nuitka --standalone output: build\app_main.dist, exe renamed to SmartLayer.exe).
+Source: "..\build\app_main.dist\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; Scripts that the scheduled tasks run (they call SmartLayer.exe, not python).
 Source: "..\installer\run_daily.cmd";     DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\run_dashboard.cmd"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\installer\install_tasks.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Dirs]
 Name: "{app}\data";   Permissions: users-modify
