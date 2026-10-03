@@ -48,11 +48,14 @@ wizard; it is stored only in `.env` on their server.
     - dashboard on the mill network: **yes**, and a dashboard password (write it down for the owner)
     - phone alerts: **yes** - note the ntfy topic it prints
     - Claude API key: Enter to skip if chat is not part of the package yet
-4. The installer tests every table, does the first sync, schedules the daily run (07:30) and starts the
+4. **Licence:** the installer shows *this server's ID*. Send it to Azam Puri, receive the licence code or
+   `.key` file and paste it (or press Enter and add it later in the dashboard → **Licence**).
+   Until a licence is installed nothing syncs.
+5. The installer tests every table, does the first sync, schedules the daily run (07:30) and starts the
    dashboard. All 13 lines of the test should say **ok**.
-5. Open the dashboard on the owner's phone: `http://<server address>:8080` (the installer prints it),
+6. Open the dashboard on the owner's phone: `http://<server address>:8080` (the installer prints it),
    any user name + the dashboard password. Add it to the phone's home screen.
-6. On the owner's phone: ntfy app → **+** → subscribe to the topic the wizard printed.
+7. On the owner's phone: ntfy app → **+** → subscribe to the topic the wizard printed.
 
 ---
 
@@ -92,6 +95,7 @@ Write down which figures were checked - it is the acceptance record for the pilo
 | Daily run problems | `output\daily_run_log.txt` |
 | Dashboard does not open | `output\dashboard_log.txt`; Task Scheduler → *Smart Layer Dashboard* → Run |
 | Change answers (password, alerts, database) | double-click the installer again, or `python -m smart_layer setup` |
+| Licence (show, renew, new server) | dashboard → **Licence**, or `python -m smart_layer licence show` / `licence install <file or code>` |
 | Remove | `uninstall_windows.ps1` as Administrator (keeps the folder and data) |
 
 Use the `python.exe` path in `python_path.txt` if `python` is not recognised in PowerShell.

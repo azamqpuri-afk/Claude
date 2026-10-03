@@ -105,7 +105,20 @@ td.nowrap { white-space: nowrap; }
   <label class="sub" for="day" style="display:inline">Day</label>
   <input type="date" id="day" aria-label="Day to show">
   <button id="theme" type="button" aria-label="Switch light or dark">◐</button>
+  <button id="licBtn" type="button">Licence</button>
 </header>
+<div id="licBanner" role="status" style="display:none;background:#fff4d6;color:#5a4300;border-bottom:1px solid #e8d38f;padding:8px 16px;font-size:14px"></div>
+<dialog id="licDlg" style="max-width:520px;width:calc(100vw - 32px);border:1px solid var(--line);border-radius:12px;background:var(--surface-1);color:var(--text-primary)">
+  <h2 style="margin:0 0 6px;font-size:16px">Licence</h2>
+  <p id="licState" class="detail" style="margin:0 0 6px"></p>
+  <p class="detail" style="margin:0 0 10px">This server's ID: <b id="licMachine"></b> - send it to get or renew a licence.</p>
+  <label class="detail" for="licText">Paste the licence code, or choose the licence file:</label>
+  <textarea id="licText" rows="4" style="width:100%;margin:6px 0;font:12px monospace;background:var(--surface-2);color:var(--text-primary);border:1px solid var(--line);border-radius:8px;padding:6px"></textarea>
+  <input type="file" id="licFile" accept=".key,.txt">
+  <p id="licMsg" class="detail"></p>
+  <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" id="licClose" type="button">Close</button>
+    <button class="btn" id="licSave" type="button">Install licence</button></div>
+</dialog>
 
 <main>
   <section class="kpis" id="kpis" aria-label="Key figures"></section>
@@ -374,10 +387,34 @@ function render() {
   renderCharts();
 }
 
+async function licenceInfo() {
+  if (STATIC_DATA) { $("#licBtn").style.display = "none"; return null; }
+  try {
+    const L = await (await fetch("api/licence")).json();
+    $("#licState").textContent = L.message; $("#licMachine").textContent = L.machine;
+    const b = $("#licBanner");
+    if (L.warning || !L.allowed) { b.textContent = "Licence: " + L.message; b.style.display = "block"; } else b.style.display = "none";
+    return L;
+  } catch (e) { return null; }
+}
+$("#licBtn").onclick = async () => { await licenceInfo(); $("#licMsg").textContent = ""; $("#licDlg").showModal(); };
+$("#licClose").onclick = () => $("#licDlg").close();
+$("#licFile").onchange = async (e) => { const f = e.target.files[0]; if (f) $("#licText").value = (await f.text()).trim(); };
+$("#licSave").onclick = async () => {
+  const r = await fetch("api/licence", {method: "POST", headers: {"Content-Type": "application/json"},
+                                        body: JSON.stringify({text: $("#licText").value})});
+  const j = await r.json(); $("#licMsg").textContent = j.message;
+  if (j.allowed) { await licenceInfo(); load(); }
+};
+
 async function load(day) {
   if (STATIC_DATA) { D = STATIC_DATA; render(); return; }
   $("#subtitle").textContent = "Loading…";
   const r = await fetch("api/data" + (day ? `?date=${day}` : ""));
+  if (r.status === 403) {
+    await licenceInfo();
+    $("#subtitle").textContent = "Licence needed"; $("#licMsg").textContent = ""; $("#licDlg").showModal(); return;
+  }
   if (!r.ok) { $("#subtitle").textContent = "Could not load data"; return; }
   D = await r.json(); render();
 }
@@ -411,6 +448,7 @@ $("#askForm").onsubmit = async (e) => {
     say(j.answer || j.error || "No answer.", "bot", j.queries);
   } catch (err) { wait.remove(); say("Could not reach the server.", "bot"); }
 };
+licenceInfo();
 load();
 </script>
 </body>

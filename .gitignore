@@ -28,3 +28,8 @@ photo_agent*/
 dist/
 python_path.txt
 *.bak
+
+# licence keys: the PRIVATE key never goes in the repository; issued licences stay with the issuer
+*.pem
+SmartLayerKeys/
+license*.key

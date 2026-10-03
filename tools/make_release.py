@@ -18,18 +18,21 @@ from smart_layer import __version__  # noqa: E402
 INCLUDE = ["smart_layer", "mappings", "docs", "demo/build_demo_erp.py", "config.example.toml", "config.demo.toml",
            "requirements.txt", "README.md", "LICENSE.txt", "Install Smart Layer.bat", "install_windows.ps1",
            "uninstall_windows.ps1", "run_daily.ps1", "run_dashboard.ps1"]
-EXCLUDE_NAMES = {"dost_textiles_oracle.toml", "FEATURE_COVERAGE.md", "__pycache__", ".env", "config.toml"}
+EXCLUDE_NAMES = {"dost_textiles_oracle.toml", "FEATURE_COVERAGE.md", "LICENSING.md", "__pycache__", ".env", "config.toml"}
 
 
 def files():
     for item in INCLUDE:
         p = ROOT / item
         for f in ([p] if p.is_file() else sorted(p.rglob("*"))):
-            if f.is_file() and not (set(f.relative_to(ROOT).parts) & EXCLUDE_NAMES) and f.suffix != ".pyc":
+            if f.is_file() and not (set(f.relative_to(ROOT).parts) & EXCLUDE_NAMES) and f.suffix not in (".pyc", ".pem", ".key", ".bak"):
                 yield f
 
 
 def main():
+    if not (ROOT / "smart_layer" / "licence_key.pub").exists():
+        raise SystemExit("smart_layer/licence_key.pub is missing - run  python tools/issue_license.py init  on your "
+                         "own computer first, so the package can check the licences you issue.")
     out = ROOT / "dist" / f"SmartLayer-{__version__}.zip"
     out.parent.mkdir(exist_ok=True)
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:

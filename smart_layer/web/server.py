@@ -102,7 +102,16 @@ def handler(app):
             path, _, query = self.path.partition("?")
             if path in ("/", "/index.html"):
                 return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+            if path == "/api/licence":
+                from .. import licence
+                st = licence.status(app.cfg)
+                return self._send(200, {"state": st.state, "message": st.message, "allowed": st.allowed,
+                                        "warning": st.warning, "machine": licence.machine_id()})
             if path == "/api/data":
+                from .. import licence
+                st = licence.status(app.cfg)
+                if not st.allowed:
+                    return self._send(403, {"licence": st.message, "machine": licence.machine_id()})
                 params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
                 try:
                     day = date.fromisoformat(params["date"]) if params.get("date") else None
@@ -114,8 +123,17 @@ def handler(app):
         def do_POST(self):
             if not self._authorised():
                 return self._deny()
+            if self.path == "/api/licence":                 # install a new licence (dashboard password required)
+                from .. import licence
+                n = min(int(self.headers.get("Content-Length", 0)), 20000)
+                text = str(json.loads(self.rfile.read(n) or b"{}").get("text", ""))
+                st = licence.install(app.cfg, text)
+                return self._send(200 if st.allowed else 400, {"state": st.state, "message": st.message, "allowed": st.allowed})
             if self.path != "/api/ask":
                 return self._send(404, {"error": "not found"})
+            from .. import licence
+            if not licence.status(app.cfg).allowed:
+                return self._send(403, {"error": "Licence: " + licence.status(app.cfg).message})
             try:
                 n = min(int(self.headers.get("Content-Length", 0)), 20000)
                 body = json.loads(self.rfile.read(n) or b"{}")

@@ -84,7 +84,9 @@ In short, on the mill's Windows server:
 2. Double-click **`Install Smart Layer.bat`** and answer the questions. The installer finds or installs Python,
    writes `config.toml` and `.env` (passwords only in `.env`), tests every table, does the first sync,
    schedules the daily run, starts the dashboard with Windows and opens its port for phones on the mill network.
-3. `python -m smart_layer status` shows the health of the installation at any time.
+3. Licence: the installer shows the server's ID; you issue a licence for it and the mill pastes it
+   (installer or dashboard → **Licence**). See [docs/LICENSING.md](docs/LICENSING.md) (not shipped).
+4. `python -m smart_layer status` shows the health of the installation at any time.
 
 A new ERP needs a mapping file first - see [docs/CONNECTING_AN_ERP.md](docs/CONNECTING_AN_ERP.md).
 `python -m smart_layer grants` prints the SQL for the mill's IT person to create the read-only database user.
@@ -102,11 +104,13 @@ smart_layer/            the product
   web/                  owner dashboard page, data builder and web server
   ask.py                "ask the ERP" with Claude
   setup_wizard.py       first-time setup questions
+  licence.py            licence check (signed, tied to one server, expiry)
 mappings/               one file per ERP
 docs/                   pilot playbook, connecting a new ERP
 demo/                   demo ERP generator (fictional mill)
 Install Smart Layer.bat, install_windows.ps1, run_daily.ps1, run_dashboard.ps1, uninstall_windows.ps1
 tools/make_release.py   builds the customer package (dist/)
+tools/issue_license.py  makes licences - run on your own computer only (private key never in the repo)
 tests/                  end-to-end tests
 examples/               Dost Textiles' settings (not shipped to customers)
 legacy/dost_textiles/   the original Dost Textiles scripts (not shipped to customers)

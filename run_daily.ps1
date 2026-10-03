@@ -16,6 +16,10 @@ function Run([string[]]$cmdArgs) {
 }
 "==== $(Get-Date -Format 'yyyy-MM-dd HH:mm') ====" | Out-File $log -Append -Encoding utf8
 
+if ((Run @("licence", "check", "--push")) -ne 0) {
+    "no valid licence - nothing run (see the message above)" | Out-File $log -Append -Encoding utf8
+    exit 1
+}
 if ((Run @("sync")) -ne 0) {
     "sync failed - reports skipped" | Out-File $log -Append -Encoding utf8
     exit 1

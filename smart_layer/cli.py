@@ -4,6 +4,8 @@ Command line for Project Smart Layer by Azam Puri.
   python -m smart_layer setup                    first-time setup: asks questions, writes config.toml and .env
   python -m smart_layer status                   health of this installation (last sync, dashboard, tasks)
   python -m smart_layer grants [--user NAME]     SQL to create the read-only database user the mapping needs
+  python -m smart_layer machine-id               this server's ID (send it to get a licence)
+  python -m smart_layer licence show|install|check [file or code] [--push]
   python -m smart_layer check                    test the ERP connection and mapping
   python -m smart_layer sync                     refresh the local store from the ERP
   python -m smart_layer report <name> [--date D]  (stock, zero, reorder, production, closing, pilferage, beams, sizers, ...) [--csv] [--push]
@@ -179,10 +181,31 @@ def cmd_grants(cfg, args):
     return 0
 
 
+def cmd_licence(cfg, args):
+    from . import licence
+    if args.action == "install":
+        if not args.value:
+            print("Paste the licence code (one line), then press Enter:")
+            args.value = input().strip()
+        st = licence.install(cfg, args.value)
+        print(("Installed. " if st.allowed else "Not installed: ") + st.message)
+        return 0 if st.allowed else 1
+    st = licence.status(cfg)
+    if args.action == "check" and args.push and (st.warning or not st.allowed):
+        notify.send(cfg, "Smart Layer licence", st.message, priority="high")
+    print(f"{st.state}: {st.message}")
+    print(f"This server's ID: {licence.machine_id()}")
+    return 0 if st.allowed else 1
+
+
 def cmd_status(cfg, args):
     import os
     import subprocess
+    from . import licence
     print(f"{PRODUCT} - {cfg['company']['name']}")
+    lic = licence.status(cfg)
+    print(f"  Licence     : {lic.state} - {lic.message}")
+    print(f"  Server ID   : {licence.machine_id()}")
     print(f"  ERP mapping : {cfg['erp'].get('mapping')}  ({cfg['erp'].get('driver')})")
     db = cfg.path(cfg["store"]["path"])
     if db.exists():
@@ -237,12 +260,21 @@ def main(argv=None):
     d.add_argument("--out")
     sub.add_parser("schema")
     sub.add_parser("setup")
+    sub.add_parser("machine-id")
+    lc = sub.add_parser("licence")
+    lc.add_argument("action", choices=["show", "install", "check"])
+    lc.add_argument("value", nargs="?", help="licence file or code (install)")
+    lc.add_argument("--push", action="store_true")
     sub.add_parser("status")
     g = sub.add_parser("grants")
     g.add_argument("--user", default="smartlayer_ro")
     args = p.parse_args(argv)
     if args.cmd == "schema":
         print(schema.describe())
+        return 0
+    if args.cmd == "machine-id":
+        from .licence import machine_id
+        print(machine_id())
         return 0
     if args.cmd == "setup":
         from pathlib import Path
@@ -252,9 +284,12 @@ def main(argv=None):
         print("\nTesting the connection to the ERP ...")
         return cmd_check(config.load(cfg_path), args)
     cfg = config.load(args.config)
+    if args.cmd in ("sync", "report", "audit", "ask", "dashboard", "serve"):
+        from .licence import require
+        require(cfg)
     return {"check": cmd_check, "sync": cmd_sync, "report": cmd_report, "audit": cmd_audit, "ask": cmd_ask, "serve": cmd_serve,
             "dashboard": cmd_dashboard,
-            "status": cmd_status, "grants": cmd_grants}[args.cmd](cfg, args)
+            "status": cmd_status, "grants": cmd_grants, "licence": cmd_licence}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

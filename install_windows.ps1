@@ -70,10 +70,28 @@ if (-not $SkipWizard -or -not (Test-Path "config.toml")) {
     }
 } else { Say "`n[3/6] Keeping the existing config.toml (run without -SkipWizard to change it)" }
 
+# ---- licence ---------------------------------------------------------------------------------
+& $python -m smart_layer licence show *> $null
+$licensed = ($LASTEXITCODE -eq 0)
+if (-not $licensed) {
+    $mid = (& $python -m smart_layer machine-id).Trim()
+    Say "`nLicence: this server's ID is  $mid" Cyan
+    Say "  Send this ID to Azam Puri to receive the licence (a code or a license.key file)."
+    $code = Read-Host "  Paste the licence code or the path of the .key file now (Enter = add it later from the dashboard)"
+    if ($code) {
+        & $python -m smart_layer licence install "$code"
+        $licensed = ($LASTEXITCODE -eq 0)
+    }
+}
+
 # ---- 4. first sync ---------------------------------------------------------------------------
-Say "`n[4/6] First sync from the ERP (can take a few minutes) ..."
-& $python -m smart_layer sync
-if ($LASTEXITCODE -ne 0) { Fail "Sync failed - see the message above." }
+if ($licensed) {
+    Say "`n[4/6] First sync from the ERP (can take a few minutes) ..."
+    & $python -m smart_layer sync
+    if ($LASTEXITCODE -ne 0) { Fail "Sync failed - see the message above." }
+} else {
+    Say "`n[4/6] No licence yet - the first sync runs once the licence is added (dashboard > Licence)." Yellow
+}
 
 if ($SkipTasks) { Say "`nSkipping scheduled tasks (-SkipTasks). Done." Green; exit 0 }
 
@@ -117,5 +135,6 @@ Say "  Dashboard on this server : http://localhost:$port"
 if ($hostSetting -eq "0.0.0.0") { Say "  From phones on the mill Wi-Fi : http://${ip}:$port   (any user name + the dashboard password)" }
 Say "  Daily run                : every day at $DailyAt (sync, audit, alerts, reports in the 'output' folder)"
 Say "  Health check             : `"$python`" -m smart_layer status"
+if (-not $licensed) { Say "  Licence                  : not added yet - server ID $mid (dashboard > Licence)" Yellow }
 Start-Process "http://localhost:$port"
 Read-Host "`nPress Enter to close"
