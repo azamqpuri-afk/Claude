@@ -1,7 +1,8 @@
 # Project Smart Layer by Azam Puri - daily run (scheduled by install_windows.ps1 as "Smart Layer Daily").
 # Refreshes the local copy from the ERP, pushes yesterday's audit and items that ran out of stock, and saves
-# reports as CSV in the output folder. Fridays: stock check, reorder list, contract closing, pilferage.
-# 10th of the month: full audit of last month. Log: output\daily_run_log.txt
+# reports (CSV + PDF) in the output folder. Fridays: stock, reorder, closing, pilferage, beams, sizers, yarn and
+# fabric stock. 1st of the month: P&L, balances, parties, store reconciliation.
+# 10th: full audit of last month. Log: output\daily_run_log.txt
 
 $ErrorActionPreference = "Continue"
 Set-Location $PSScriptRoot
@@ -19,14 +20,20 @@ if ((Run @("sync")) -ne 0) {
     "sync failed - reports skipped" | Out-File $log -Append -Encoding utf8
     exit 1
 }
-Run @("audit", "--csv", "--push") | Out-Null
+Run @("audit", "--csv", "--pdf", "--push") | Out-Null
 Run @("report", "zero", "--push") | Out-Null
-Run @("report", "production", "--csv") | Out-Null
+Run @("report", "production", "--csv", "--pdf") | Out-Null
+Run @("report", "beams", "--csv", "--pdf") | Out-Null
 if ((Get-Date).DayOfWeek -eq "Friday") {
-    foreach ($r in "stock", "reorder", "closing", "pilferage") { Run @("report", $r, "--csv") | Out-Null }
+    foreach ($r in "stock", "reorder", "closing", "pilferage", "sizers", "yarn-stock", "fabric-stock") {
+        Run @("report", $r, "--csv", "--pdf") | Out-Null
+    }
+}
+if ((Get-Date).Day -eq 1) {
+    foreach ($r in "pnl", "balances", "parties", "store-recon") { Run @("report", $r, "--csv", "--pdf") | Out-Null }
 }
 if ((Get-Date).Day -eq 10) {
-    Run @("audit", "--month", (Get-Date).AddMonths(-1).ToString("yyyy-MM"), "--csv", "--push") | Out-Null
+    Run @("audit", "--month", (Get-Date).AddMonths(-1).ToString("yyyy-MM"), "--csv", "--pdf", "--push") | Out-Null
 }
 # keep the log from growing for ever
 if ((Get-Item $log).Length -gt 5MB) { Get-Content $log -Tail 5000 | Set-Content $log -Encoding utf8 }

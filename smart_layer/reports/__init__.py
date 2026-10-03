@@ -36,6 +36,11 @@ class Report:
         return path
 
 
+    def write_pdf(self, folder, name, company="", product=""):
+        from .pdf import write_pdf
+        return write_pdf(self, Path(folder) / name, company, product)
+
+
 def fmt(v):
     if v is None:
         return ""

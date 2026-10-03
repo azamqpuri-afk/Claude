@@ -73,10 +73,13 @@ def cmd_report(cfg, args):
                 "fabric-stock": stock_position.fabric_stock, "value": production.production_value}
     rep = builders[args.name](con, cfg, day)
     print(rep.text())
+    default = date.today() - timedelta(days=1) if args.name in ("production", "pilferage", "value") else date.today()
+    tag = (day or default).isoformat()
+    out_dir = cfg.path(cfg["reports"]["output_dir"])
     if args.csv:
-        default = date.today() - timedelta(days=1) if args.name in ("production", "pilferage", "value") else date.today()
-        tag = (day or default).isoformat()
-        print("\nSaved", rep.write_csv(cfg.path(cfg["reports"]["output_dir"]), f"{args.name}_{tag}.csv"))
+        print("\nSaved", rep.write_csv(out_dir, f"{args.name}_{tag}.csv"))
+    if args.pdf:
+        print("Saved", rep.write_pdf(out_dir, f"{args.name}_{tag}.pdf", cfg["company"]["name"], PRODUCT))
     if args.push and (rep.rows or args.name != "zero"):
         notify.send(cfg, rep.title, "\n".join(rep.summary) + ("\n\n" + rep.text(limit=15) if args.name == "zero" else ""))
     return 0
@@ -94,6 +97,8 @@ def cmd_audit(cfg, args):
     print(rep.text())
     if args.csv:
         print("\nSaved", rep.write_csv(cfg.path(cfg["reports"]["output_dir"]), f"audit_{d0}_{d1}.csv"))
+    if args.pdf:
+        print("Saved", rep.write_pdf(cfg.path(cfg["reports"]["output_dir"]), f"audit_{d0}_{d1}.pdf", cfg["company"]["name"], PRODUCT))
     if args.push:
         fresh = a.new_alerts()
         if fresh:
@@ -213,11 +218,13 @@ def main(argv=None):
                                       "parties", "store-recon", "yarn-stock", "fabric-stock", "value"])
     r.add_argument("--date")
     r.add_argument("--csv", action="store_true")
+    r.add_argument("--pdf", action="store_true")
     r.add_argument("--push", action="store_true")
     a = sub.add_parser("audit")
     a.add_argument("--date")
     a.add_argument("--month")
     a.add_argument("--csv", action="store_true")
+    a.add_argument("--pdf", action="store_true")
     a.add_argument("--push", action="store_true")
     q = sub.add_parser("ask")
     q.add_argument("question", nargs="*")

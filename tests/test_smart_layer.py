@@ -437,3 +437,11 @@ def test_new_reports_run(env):
     v = production_value(con, cfg, END)
     assert v.rows and all(r[4] for r in v.rows) and "Rs" in v.summary[0]
     assert stock_position.fabric_stock(con, cfg, END).rows and stock_position.yarn_stock(con, cfg, END).rows
+
+
+def test_pdf_output(env, tmp_path):
+    cfg, con = env
+    from smart_layer.textile import beams as bm
+    for rep in (audit.run(con, cfg, END).report(), bm.beam_report(con, cfg, END), stock.stock_status(con, cfg, END)):
+        p = rep.write_pdf(tmp_path, "x.pdf", "Test Mill", "Smart Layer")
+        assert p.read_bytes()[:4] == b"%PDF" and p.stat().st_size > 2000
