@@ -249,6 +249,7 @@ def build(out, end):
     txn("ISS", y, [("EL-002", 6, 2900)], dept="LOOM-18")
     build_yarn(db, cprod, cfresh, start, end)
     build_beams(db, lsegs, lday, end)
+    build_scoreboard(out.with_name(out.stem.replace("_erp", "") + "_scoreboard.db"), lday, end)
     db.commit()
     db.close()
     return out
@@ -418,6 +419,32 @@ def build_beams(db, lsegs, lday, end, warn=6):
         db.execute("INSERT INTO bm_beam VALUES (?,?,?,?,?,?,?,?,?,?,?)", (b, "E", None, None, None, None, None, None, None, None, None))
     move(end - timedelta(days=60), "BM-X9", "ESO", "S02")
     db.execute("INSERT INTO bm_beam VALUES (?,?,?,?,?,?,?,?,?,?,?)", ("BM-X9", "S", None, None, None, "S02", None, None, None, None, None))
+
+
+PLANTED += """
+  scoreboard (separate database, a second source)
+           - LOOM-15: the scoreboard counted ~35% more than the ERP over 14 days (rolls not entered)
+           - LOOM-22: the ERP shows ~40% more than the scoreboard counted (over-entered)"""
+
+
+def build_scoreboard(path, lday, end):
+    """A loom monitoring system's own database (like an OLMS scoreboard), separate from the ERP."""
+    rnd = random.Random(5)
+    path = Path(path)
+    if path.exists():
+        path.unlink()
+    sb = sqlite3.connect(path)
+    sb.execute("CREATE TABLE olms_day (loom_no INTEGER, dt TEXT, mtrs REAL, eff REAL, rpm REAL, stops INTEGER)")
+    for (n, d), m in sorted(lday.items()):
+        if m <= 0:
+            continue
+        counted = m * rnd.uniform(0.97, 1.03)
+        if d > end - timedelta(days=14):
+            counted *= 1.35 if n == 15 else (1 / 1.4 if n == 22 else 1)
+        sb.execute("INSERT INTO olms_day VALUES (?,?,?,?,?,?)", (n, d.isoformat(), round(counted, 1), round(rnd.uniform(80, 92), 1),
+                                                                 rnd.choice([520, 600]), rnd.randint(20, 90)))
+    sb.commit()
+    sb.close()
 
 
 if __name__ == "__main__":

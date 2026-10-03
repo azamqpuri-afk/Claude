@@ -215,3 +215,16 @@ LEFT JOIN (SELECT d4.ref_tno, d4.ref_sr, SUM(NVL(d4.a,0)+NVL(d4.a2,0)+NVL(d4.b,0
            GROUP BY d4.ref_tno, d4.ref_sr) pr ON pr.ref_tno = d.ref_tno AND pr.ref_sr = d.ref_sr
 WHERE m.tt IN ('BEAMS_TO_LOOM', 'BEAMS_FROM_LOOM') AND m.td >= :since
 """
+
+# Loom scoreboard (OLMS, MS Access) as a second source - formulas from 74_scoreboard_data.py:
+#   meters = picks x panels / (picks per inch x 39.37); efficiency = picks / (RPM x shift minutes)
+# Needs [sources.scoreboard] in config.toml: driver = "access", path = 'E:\scoreboard_copy\OLMSDB_copy.mdb', copy_first = true
+[entities.loom_monitor]
+source = "scoreboard"
+sql = """
+SELECT PDATE AS read_date, PMACH AS loom_code,
+       SUM(IIF(PPINCH > 0, PPROD * PDELV / (PPINCH * 39.37), 0)) AS meters,
+       IIF(SUM(PRPM * PSHFTDUR) > 0, 100 * SUM(PPROD) / SUM(PRPM * PSHFTDUR / 60), NULL) AS efficiency_pct,
+       AVG(PRPM) AS rpm, SUM(PWRP + PUD) AS stops
+FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
+"""

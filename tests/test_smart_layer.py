@@ -34,9 +34,14 @@ path = "demo_erp.db"
 mapping = "{(ROOT / 'mappings' / 'demo_sqlite.toml').as_posix()}"
 [store]
 path = "store.db"
+[sources.scoreboard]
+driver = "sqlite"
+path = "demo_scoreboard.db"
+copy_first = true
 """)
     cfg = config.load(tmp / "config.toml")
-    e = erp.ERP(*erp.connect(cfg["erp"], cfg.base_dir), erp.Mapping(cfg.path(cfg["erp"]["mapping"])))
+    mapping = erp.Mapping(cfg.path(cfg["erp"]["mapping"]))
+    e = erp.ERP(*erp.connect(cfg["erp"], cfg.base_dir), mapping, cfg["sources"], cfg.base_dir)
     con = store.open_store(cfg.path(cfg["store"]["path"]))
     store.sync(con, e, 400, log=lambda *_: None)
     return cfg, con
@@ -44,8 +49,9 @@ path = "store.db"
 
 def test_sync_fills_every_entity(env):
     _, con = env
-    for table in ("items", "stock_balances", "store_receipts", "store_issues", "parties", "accounts",
-                  "ledger_entries", "account_balances", "looms", "loom_production"):
+    for table in ("items", "stock_balances", "store_receipts", "store_issues", "parties", "accounts", "ledger_entries",
+                  "account_balances", "looms", "loom_production", "contracts", "yarn_movements", "fabric_dispatches",
+                  "beams", "beam_movements", "loom_monitor"):
         assert con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > 0, table
 
 
@@ -445,3 +451,11 @@ def test_pdf_output(env, tmp_path):
     for rep in (audit.run(con, cfg, END).report(), bm.beam_report(con, cfg, END), stock.stock_status(con, cfg, END)):
         p = rep.write_pdf(tmp_path, "x.pdf", "Test Mill", "Smart Layer")
         assert p.read_bytes()[:4] == b"%PDF" and p.stat().st_size > 2000
+
+
+def test_loom_monitor_second_source(env):
+    cfg, con = env
+    found = {f.title.split(" ")[0]: f for f in audit.run(con, cfg, END).findings if f.section == "Looms"}
+    assert set(found) == {"LOOM-15", "LOOM-22"}
+    assert "%)" in found["LOOM-15"].title and "-" in found["LOOM-15"].title.split("(")[-1]
+    assert "+" in found["LOOM-22"].title.split("(")[-1]

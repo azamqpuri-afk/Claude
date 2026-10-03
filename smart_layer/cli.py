@@ -29,7 +29,7 @@ from .textile import beams, closing, pilferage, stock_position
 def _open_erp(cfg):
     mapping = erp.Mapping(cfg.path(cfg["erp"]["mapping"]))
     con, style = erp.connect(cfg["erp"], cfg.base_dir)
-    return erp.ERP(con, style, mapping)
+    return erp.ERP(con, style, mapping, cfg["sources"], cfg.base_dir)
 
 
 def _store(cfg):
@@ -47,7 +47,9 @@ def cmd_check(cfg, args):
             continue
         try:
             n = sum(1 for _ in e.fetch(ent.name, since))
-            print(f"  {ent.name:<17} ok ({n:,} rows{' in the last 30 days' if ent.date_column else ''})")
+            src = e.mapping.source.get(ent.name, "erp")
+            print(f"  {ent.name:<17} ok ({n:,} rows{' in the last 30 days' if ent.date_column else ''})"
+                  + (f"  [source: {src}]" if src != "erp" else ""))
         except Exception as ex:                      # report every entity, not just the first failure
             ok = False
             print(f"  {ent.name:<17} FAILED: {ex}")

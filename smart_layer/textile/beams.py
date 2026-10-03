@@ -39,7 +39,7 @@ def learned_shrinkage(con, default_pct):
         if length and length > 0:
             per_c[cno][0] += length
             per_c[cno][1] += woven
-    by_c = {c: 1 - w / l for c, (l, w) in per_c.items() if l > 0 and 0 < w <= l}
+    by_c = {c: 1 - w / ln for c, (ln, w) in per_c.items() if ln > 0 and 0 < w <= ln}
     qual = {c: q for c, q in con.execute("SELECT contract_no, quality FROM contracts")}
     by_q = defaultdict(list)
     for c, s in by_c.items():

@@ -12,6 +12,7 @@ read-only database user as well.
 
 import os
 import re
+import shutil
 import sqlite3
 import tomllib
 from datetime import date, datetime
@@ -44,10 +45,12 @@ class Mapping:
         self.name = meta.get("name", self.path.stem)
         self.notes = meta.get("notes", "")
         self.entities = {}
+        self.source = {}                             # entity -> source name ("erp" = the main ERP connection)
         for name, spec in data.get("entities", {}).items():
             if name not in schema.BY_NAME:
                 raise MappingError(f"{self.path.name}: unknown entity '{name}' (known: {', '.join(schema.BY_NAME)})")
             self.entities[name] = check_select(spec["sql"])
+            self.source[name] = spec.get("source", "erp")
 
     def missing(self):
         return [e.name for e in schema.ENTITIES if e.name not in self.entities]
@@ -56,6 +59,14 @@ class Mapping:
 def connect(erp_cfg, base_dir="."):
     """Open a connection to the ERP database. Drivers are imported only when used."""
     driver = erp_cfg.get("driver", "sqlite").lower()
+    if erp_cfg.get("copy_first") and driver in ("sqlite", "access"):
+        # read a copy, never the live file (e.g. a loom scoreboard database another program keeps open)
+        src = Path(erp_cfg["path"])
+        src = src if src.is_absolute() else Path(base_dir) / src
+        dst = Path(base_dir) / "data" / f"source_copy_{src.stem}{src.suffix}"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        erp_cfg = {**erp_cfg, "path": str(dst)}
     if driver != "sqlite" and "password" in erp_cfg and not erp_cfg["password"]:
         raise SystemExit("The ERP password is empty: put ERP_PASSWORD=... in the .env file next to config.toml "
                          "(check it is named .env, not .env.txt).")
@@ -91,13 +102,18 @@ def connect(erp_cfg, base_dir="."):
     if driver == "mssql":
         import pyodbc
         return pyodbc.connect(erp_cfg["dsn"], readonly=True), "qmark"
+    if driver == "access":                           # MS Access .mdb / .accdb (Windows, Access ODBC driver)
+        import pyodbc
+        p = Path(erp_cfg["path"])
+        p = p if p.is_absolute() else Path(base_dir) / p
+        return pyodbc.connect(rf"DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};DBQ={p};ReadOnly=1;", readonly=True), "qmark"
     if driver == "mysql":
         import pymysql
         con = pymysql.connect(host=erp_cfg["host"], user=erp_cfg["user"], password=erp_cfg["password"],
                               database=erp_cfg["database"], port=int(erp_cfg.get("port", 3306)))
         con.cursor().execute("SET SESSION TRANSACTION READ ONLY")
         return con, "pyformat"
-    raise MappingError(f"unsupported driver '{driver}' (sqlite, oracle, postgres, mssql, mysql)")
+    raise MappingError(f"unsupported driver '{driver}' (sqlite, oracle, postgres, mssql, mysql, access)")
 
 
 def bind(sql, params, style):
@@ -134,17 +150,30 @@ def normalise(value, col_type):
 
 
 class ERP:
-    def __init__(self, con, style, mapping):
+    def __init__(self, con, style, mapping, sources=None, base_dir="."):
         self.con, self.style, self.mapping = con, style, mapping
+        self.sources_cfg, self.base_dir = sources or {}, base_dir
+        self._open = {"erp": (con, style)}
+
+    def connection(self, entity_name):
+        name = self.mapping.source.get(entity_name, "erp")
+        if name not in self._open:
+            if name not in self.sources_cfg:
+                raise MappingError(f"{entity_name} reads source '{name}' - add [sources.{name}] to config.toml")
+            self._open[name] = connect(self.sources_cfg[name], self.base_dir)
+        return self._open[name]
 
     def fetch(self, entity_name, since):
         """Rows of one entity as tuples in schema column order."""
         entity = schema.BY_NAME[entity_name]
+        con, style = self.connection(entity_name)
         params = {"since": since, "today": date.today()}
-        if isinstance(self.con, sqlite3.Connection):     # SQLite keeps dates as ISO text
+        if isinstance(con, sqlite3.Connection):          # SQLite keeps dates as ISO text
             params = {k: v.isoformat() for k, v in params.items()}
-        sql, params = bind(self.mapping.entities[entity_name], params, self.style)
-        cur = self.con.cursor()
+        elif style == "qmark":                            # ODBC (SQL Server, Access) binds datetimes most reliably
+            params = {k: datetime(v.year, v.month, v.day) for k, v in params.items()}
+        sql, params = bind(self.mapping.entities[entity_name], params, style)
+        cur = con.cursor()
         cur.execute(sql, params)
         got = [d[0].lower() for d in cur.description]
         extra = set(got) - set(entity.column_names)

@@ -58,3 +58,9 @@ sizing_loss_pct = 6
 [beams]
 warn_days = 5
 urgent_days = 3
+
+# The loom scoreboard - a separate database, read from a copy
+[sources.scoreboard]
+driver = "sqlite"
+path = "demo/demo_scoreboard.db"
+copy_first = true

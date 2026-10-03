@@ -149,3 +149,12 @@ SELECT m.mv_dt AS move_date, m.gp_no AS doc_no, m.beam_no AS beam_no,
 FROM bm_move m LEFT JOIN bp_partner p ON p.bp_id = m.bp_id
 WHERE m.mv_dt >= :since
 """
+
+# The loom scoreboard is a separate database: [sources.scoreboard] in the config says where it is.
+[entities.loom_monitor]
+source = "scoreboard"
+sql = """
+SELECT dt AS read_date, 'L' || printf('%02d', loom_no) AS loom_code, mtrs AS meters, eff AS efficiency_pct, rpm AS rpm,
+       stops AS stops
+FROM olms_day WHERE dt >= :since
+"""

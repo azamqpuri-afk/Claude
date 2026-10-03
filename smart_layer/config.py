@@ -34,6 +34,7 @@ DEFAULTS = {
     "pilferage": {},                      # thresholds - see smart_layer/textile/pilferage.py
     "beams": {},                          # see smart_layer/textile/beams.py
     "reconcile": {},                      # see smart_layer/reports/reconcile.py
+    "sources": {},                        # extra databases, e.g. [sources.scoreboard] for a loom monitoring system
     "serve": {"host": "127.0.0.1", "port": 8080},
     "ask": {"model": "claude-opus-5-5", "effort": "high", "max_rows": 200, "max_steps": 12},
 }

@@ -108,8 +108,8 @@ class Audit:
 
 
 def run(con, cfg, d0, d1=None):
-    from . import beams, edits, finance, store, weaving, yarn
+    from . import beams, edits, finance, monitor, store, weaving, yarn
     a = Audit(con, cfg, d0, d1 or d0)
-    for rules in (finance, store, weaving, yarn, beams, edits):
+    for rules in (finance, store, weaving, yarn, beams, monitor, edits):
         rules.run(a)
     return a
