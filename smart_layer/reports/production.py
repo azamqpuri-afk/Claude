@@ -63,3 +63,28 @@ def daily_production(con, cfg, day=None):
                        + ", ".join(f"{n} ({days} days)" for n, days in idle))
     return Report(f"Weaving production - {day:%d-%b-%Y}", ["Loom", "Meters", "Efficiency %", "Rejection %", "Quality"],
                   out, summary)
+
+
+def production_value(con, cfg, day=None, days=1):
+    """What the looms earned: meters x rate per meter, or picks per inch x rate per pick (per meter), by loom and contract.
+    days > 1 sums the days ending on `day` (e.g. 30 for a month)."""
+    day = day or (date.today() - timedelta(days=1))
+    d0 = (day - timedelta(days=days - 1)).isoformat()
+    basis = str(cfg["reports"].get("value_meters", "fresh"))         # fresh (first quality) | all
+    m_sql = "COALESCE(p.first_quality_m, p.meters - COALESCE(p.rejected_m, 0))" if basis == "fresh" else "p.meters"
+    rows, total = [], 0.0
+    for loom, cno, meters, rate_m, ppi, rate_pick in con.execute(f"""
+            SELECT COALESCE(l.loom_name, p.loom_code), p.contract_no, SUM({m_sql}), MAX(c.rate_per_meter), MAX(c.picks_per_inch),
+                   MAX(c.rate_per_pick)
+            FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code LEFT JOIN contracts c ON c.contract_no = p.contract_no
+            WHERE p.prod_date BETWEEN ? AND ? GROUP BY p.loom_code, p.contract_no ORDER BY 1""", (d0, day.isoformat())):
+        rate = rate_m if rate_m else (ppi * rate_pick if ppi and rate_pick else None)
+        value = (meters or 0) * rate if rate else None
+        total += value or 0
+        rows.append([loom, cno, round(meters or 0), rate, round(value) if value is not None else None,
+                     "" if rate else "no rate on the contract"])
+    cur = cfg["company"]["currency"]
+    period = f"{day:%d-%b-%Y}" if days == 1 else f"{d0} to {day.isoformat()}"
+    return Report(f"Production value - {period}",
+                  ["Loom", "Contract", f"{basis.capitalize()} meters", f"Rate {cur}/m", f"Value {cur}", "Note"], rows,
+                  [f"Looms earned {cur} {total:,.0f} ({basis} meters x contract rate)."])

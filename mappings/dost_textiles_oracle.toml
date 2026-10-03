@@ -56,16 +56,17 @@ FROM dostex.ach WHERE ac LIKE '3003%' OR ac LIKE '2001%'
 # Account groups from the chart's code structure (as used by the dashboard, 40_business_dashboard.py)
 [entities.accounts]
 sql = """
-SELECT ac AS account_code, an AS account_name,
-       CASE WHEN ac LIKE '300801%' THEN 'cash'
-            WHEN ac LIKE '3008%'   THEN 'bank'
-            WHEN ac LIKE '3003%'   THEN 'customer'
-            WHEN ac LIKE '2001%'   THEN 'supplier'
-            WHEN ac LIKE '35%'     THEN 'revenue'
-            WHEN ac LIKE '40%' OR ac LIKE '45%' OR ac LIKE '55%' THEN 'expense'
+SELECT a.ac AS account_code, a.an AS account_name,
+       CASE WHEN a.ac LIKE '300801%' THEN 'cash'
+            WHEN a.ac LIKE '3008%'   THEN 'bank'
+            WHEN a.ac LIKE '3003%'   THEN 'customer'
+            WHEN a.ac LIKE '2001%'   THEN 'supplier'
+            WHEN a.ac LIKE '35%'     THEN 'revenue'
+            WHEN a.ac LIKE '40%' OR a.ac LIKE '45%' OR a.ac LIKE '55%' THEN 'expense'
             ELSE 'other' END AS account_group,
-       CASE WHEN ac LIKE '3003%' OR ac LIKE '2001%' THEN ac END AS party_code
-FROM dostex.ach
+       CASE WHEN a.ac LIKE '3003%' OR a.ac LIKE '2001%' THEN a.ac END AS party_code,
+       h.an AS head_name
+FROM dostex.ach a LEFT JOIN dostex.ach h ON h.ac = SUBSTR(a.ac, 1, 6) AND LENGTH(a.ac) > 6
 """
 
 # A voucher is (tbl, vt, vno, date), the grouping 70_erp_audit.py uses for its balance checks.

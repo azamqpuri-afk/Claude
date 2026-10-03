@@ -57,7 +57,8 @@ SELECT acct_no AS account_code, acct_title AS account_name,
        CASE acct_class WHEN 'CASH' THEN 'cash' WHEN 'BANK' THEN 'bank' WHEN 'AR' THEN 'customer'
                        WHEN 'AP' THEN 'supplier' WHEN 'INC' THEN 'revenue' WHEN 'EXP' THEN 'expense'
                        WHEN 'STOCK' THEN 'asset' WHEN 'FA' THEN 'asset' WHEN 'CAP' THEN 'equity' ELSE 'other' END AS account_group,
-       bp_id AS party_code
+       bp_id AS party_code,
+       CASE acct_class WHEN 'AR' THEN 'Trade debtors' WHEN 'AP' THEN 'Trade creditors' ELSE acct_title END AS head_name
 FROM gl_coa
 """
 

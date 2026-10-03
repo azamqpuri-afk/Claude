@@ -39,6 +39,10 @@ class Report:
 def fmt(v):
     if v is None:
         return ""
+    if isinstance(v, bool):
+        return str(v)
+    if isinstance(v, int):
+        return f"{v:,}"
     if isinstance(v, float):
         return f"{v:,.0f}" if abs(v) >= 100 else f"{v:,.2f}".rstrip("0").rstrip(".")
     return str(v)

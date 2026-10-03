@@ -22,8 +22,8 @@ import sys
 from datetime import date, timedelta
 
 from . import PRODUCT, config, erp, notify, schema, store
-from .reports import production, stock
-from .textile import beams, closing, pilferage
+from .reports import finance, production, reconcile, stock
+from .textile import beams, closing, pilferage, stock_position
 
 
 def _open_erp(cfg):
@@ -67,11 +67,14 @@ def cmd_report(cfg, args):
     day = date.fromisoformat(args.date) if args.date else None
     builders = {"stock": stock.stock_status, "zero": stock.new_zero, "reorder": stock.reorder_list,
                 "production": production.daily_production, "closing": closing.contract_closing,
-                "pilferage": pilferage.pilferage, "beams": beams.beam_report, "sizers": beams.sizer_ledger}
+                "pilferage": pilferage.pilferage, "beams": beams.beam_report, "sizers": beams.sizer_ledger,
+                "pnl": finance.pnl, "balances": finance.balances, "parties": finance.parties,
+                "store-recon": reconcile.store_consumption, "yarn-stock": stock_position.yarn_stock,
+                "fabric-stock": stock_position.fabric_stock, "value": production.production_value}
     rep = builders[args.name](con, cfg, day)
     print(rep.text())
     if args.csv:
-        default = date.today() - timedelta(days=1) if args.name in ("production", "pilferage") else date.today()
+        default = date.today() - timedelta(days=1) if args.name in ("production", "pilferage", "value") else date.today()
         tag = (day or default).isoformat()
         print("\nSaved", rep.write_csv(cfg.path(cfg["reports"]["output_dir"]), f"{args.name}_{tag}.csv"))
     if args.push and (rep.rows or args.name != "zero"):
@@ -206,7 +209,8 @@ def main(argv=None):
     s = sub.add_parser("sync")
     s.add_argument("--entities", nargs="*")
     r = sub.add_parser("report")
-    r.add_argument("name", choices=["stock", "zero", "reorder", "production", "closing", "pilferage", "beams", "sizers"])
+    r.add_argument("name", choices=["stock", "zero", "reorder", "production", "closing", "pilferage", "beams", "sizers", "pnl", "balances",
+                                      "parties", "store-recon", "yarn-stock", "fabric-stock", "value"])
     r.add_argument("--date")
     r.add_argument("--csv", action="store_true")
     r.add_argument("--push", action="store_true")

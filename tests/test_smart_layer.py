@@ -402,3 +402,38 @@ def test_beam_audit_and_sizer_ledger(env):
     assert "CONFIRMED Beam BM-20A on LOOM-20" in titles and "WATCH Empty beam BM-X9" in titles
     led = {r[0]: r for r in beams_mod.sizer_ledger(con, cfg, END).rows}
     assert led["Rehman Sizing"][4] == 1 and led["Ali Sizing"][4] == 0
+
+
+def test_edits_detected_between_audits(env):
+    cfg, con = env
+    store.set_state(con, "edit_snapshot", None)
+    con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
+    audit.run(con, cfg, END)                                           # first run: snapshot only
+    doc, item = con.execute("SELECT doc_no, item_code FROM store_issues WHERE qty > 2 AND doc_date BETWEEN '2026-07-01' AND '2026-09-01' LIMIT 1").fetchone()
+    con.execute("UPDATE store_issues SET qty = qty + 1 WHERE doc_no = ? AND item_code = ?", (doc, item))
+    d, loom = con.execute("SELECT prod_date, loom_code FROM loom_production WHERE prod_date BETWEEN '2026-09-01' AND '2026-09-20' LIMIT 1").fetchone()
+    con.execute("UPDATE loom_production SET meters = meters + 40 WHERE prod_date = ? AND loom_code = ?", (d, loom))
+    try:
+        found = [f for f in audit.run(con, cfg, END).findings if f.section == "Edits"]
+        assert any(f.severity == "CONFIRMED" and doc in f.title and "quantity changed" in f.title for f in found)
+        assert any(f.severity == "WATCH" and "production of" in f.title and "changed" in f.title for f in found)
+    finally:
+        con.execute("UPDATE store_issues SET qty = qty - 1 WHERE doc_no = ? AND item_code = ?", (doc, item))
+        con.execute("UPDATE loom_production SET meters = meters - 40 WHERE prod_date = ? AND loom_code = ?", (d, loom))
+        con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
+
+
+def test_new_reports_run(env):
+    cfg, con = env
+    from smart_layer.reports import finance, reconcile
+    from smart_layer.reports.production import production_value
+    from smart_layer.textile import stock_position
+    pl = finance.pnl(con, cfg, END)
+    assert pl.rows[-1][1] == "PROFIT / (LOSS)" and pl.rows[-1][-1] > 0
+    assert "difference Rs 2,000" in finance.balances(con, cfg, END).summary[0]           # the planted unbalanced JV
+    assert finance.parties(con, cfg, END).rows
+    rec = reconcile.store_consumption(con, cfg, END)
+    assert "5103" in rec.summary[0] and rec.rows
+    v = production_value(con, cfg, END)
+    assert v.rows and all(r[4] for r in v.rows) and "Rs" in v.summary[0]
+    assert stock_position.fabric_stock(con, cfg, END).rows and stock_position.yarn_stock(con, cfg, END).rows

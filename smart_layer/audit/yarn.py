@@ -3,10 +3,16 @@
 from datetime import date
 
 from ..textile.pilferage import analyse
+from ..textile.stock_position import fabric_positions
 
 
 def run(a):
     d0, d1 = (date.fromisoformat(x) for x in a.window)
+    for f in fabric_positions(a.con, d1):            # fabric dispatched beyond what was produced, per grade
+        if f["fresh"] < -50 or f["rejected"] < -50:
+            a.add("CONFIRMED", "Fabric", f"fabneg-{f['contract']}-{round(f['fresh'])}-{round(f['rejected'])}",
+                  f"Contract {f['contract']}: fabric stock negative (fresh {f['fresh']:,.0f} m, other grades {f['rejected']:,.0f} m)",
+                  "dispatched more than produced in a grade - grade keyed wrong on the gate pass or on production")
     if not a.q("SELECT 1 FROM yarn_movements LIMIT 1"):
         return
     flags, weekly, sizing, t = analyse(a.con, a.cfg, d0, d1)

@@ -44,6 +44,20 @@ def run(a):
                   f"{loom}: no production entered for {idle} days (last {last})",
                   f"normally booked every {usual} days - loom stopped, or production not keyed")
 
+    # a loom's output far from its own usual (last 14 days vs the 60 days before) - quality change, stoppage, or
+    # production booked to the wrong loom
+    recent = dict(a.q("""SELECT loom_code, SUM(meters) / 14.0 FROM loom_production
+                         WHERE prod_date > date(?, '-14 days') AND prod_date <= ? GROUP BY loom_code""", d1, d1))
+    before = a.q("""SELECT p.loom_code, COALESCE(MAX(l.loom_name), p.loom_code), SUM(p.meters) / 60.0 FROM loom_production p
+                    LEFT JOIN looms l ON l.loom_code = p.loom_code
+                    WHERE p.prod_date > date(?, '-74 days') AND p.prod_date <= date(?, '-14 days') GROUP BY p.loom_code""", d1, d1)
+    for code, loom, usual in before:
+        now = recent.get(code, 0) or 0
+        if usual and usual >= 50 and now and (now < 0.5 * usual or now > 1.8 * usual):
+            a.add("WATCH", "Weaving", f"lhist-{code}-{d1}-{round(now / usual, 1)}",
+                  f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
+                  "a big change in the loom's output - quality change, stoppage, or entries booked to the wrong loom")
+
     looms, m, rej = a.q("""SELECT COUNT(DISTINCT loom_code), SUM(meters), SUM(COALESCE(rejected_m, 0))
                            FROM loom_production WHERE prod_date BETWEEN ? AND ?""", d0, d1)[0]
     eff = a.q(f"""SELECT {EFF_AGG}
