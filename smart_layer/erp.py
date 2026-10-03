@@ -10,6 +10,7 @@ the session is put in read-only mode where the database supports it. Use a
 read-only database user as well.
 """
 
+import os
 import re
 import sqlite3
 import tomllib
@@ -66,8 +67,19 @@ def connect(erp_cfg, base_dir="."):
         return sqlite3.connect(f"file:{p}?mode=ro", uri=True), "named"
     if driver == "oracle":
         import oracledb
-        if erp_cfg.get("thick") or erp_cfg.get("client_lib_dir"):   # Oracle Client mode, needed for 11g and older
-            oracledb.init_oracle_client(lib_dir=erp_cfg.get("client_lib_dir") or None)
+        # Where the TNS names (e.g. "ORCL") are defined: config tns_admin, else the client's network\admin folder.
+        # Scheduled tasks run as SYSTEM, which may not have the TNS_ADMIN / ORACLE_HOME settings of the logged-in user.
+        tns = erp_cfg.get("tns_admin")
+        lib = erp_cfg.get("client_lib_dir")
+        if not tns and lib:
+            for cand in (Path(lib).parent / "network" / "admin", Path(lib) / "network" / "admin"):
+                if (cand / "tnsnames.ora").exists():
+                    tns = str(cand)
+                    break
+        if tns:
+            os.environ.setdefault("TNS_ADMIN", tns)
+        if erp_cfg.get("thick") or lib:              # Oracle Client mode, needed for 11g and older
+            oracledb.init_oracle_client(lib_dir=lib or None, config_dir=tns or None)
         con = oracledb.connect(user=erp_cfg["user"], password=erp_cfg["password"], dsn=erp_cfg["dsn"])
         con.cursor().execute("SET TRANSACTION READ ONLY")
         return con, "named"

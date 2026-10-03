@@ -39,10 +39,18 @@ DEFAULTS = {
 _ENV = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
+def read_text_any(path):
+    """Text of a file saved by any Windows tool: UTF-8 with or without BOM, or UTF-16 (PowerShell's default)."""
+    raw = Path(path).read_bytes()
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        return raw.decode("utf-16")
+    return raw.decode("utf-8-sig")
+
+
 def _load_dotenv(path):
     if not path.exists():
         return
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in read_text_any(path).splitlines():
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
@@ -83,8 +91,10 @@ class Config:
 def load(path="config.toml"):
     path = Path(path).resolve()
     if not path.exists():
-        raise FileNotFoundError(f"{path} not found - copy config.example.toml to config.toml and fill it in")
+        raise FileNotFoundError(f"{path} not found - run  python -m smart_layer setup  (or copy config.example.toml)")
     _load_dotenv(path.parent / ".env")
-    with open(path, "rb") as f:
-        data = tomllib.load(f)
+    try:
+        data = tomllib.loads(read_text_any(path))
+    except tomllib.TOMLDecodeError as e:
+        raise SystemExit(f"{path.name} has a mistake: {e}. Tip: Windows paths need single quotes, e.g. 'C:\\oracle\\bin'")
     return Config(_merge(DEFAULTS, _expand(data)), path.parent)

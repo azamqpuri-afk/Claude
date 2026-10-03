@@ -1,0 +1,5 @@
+Project Smart Layer by Azam Puri
+Copyright (c) 2026 Azam Puri. All rights reserved.
+
+This software is licensed, not sold. A mill may install and use it on its own servers under its licence
+agreement with Azam Puri. Copying, reselling, sharing or modifying it outside that agreement is not permitted.

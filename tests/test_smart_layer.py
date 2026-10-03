@@ -326,3 +326,49 @@ def test_sync_keeps_full_history_for_yarn_and_fabric(env):
     since = dict(con.execute("SELECT entity, since FROM sync_log"))
     assert since["yarn_movements"] == "1900-01-01" and since["fabric_dispatches"] == "1900-01-01"
     assert since["loom_production"] > "2025-01-01"
+
+
+# ---- installation -------------------------------------------------------------------------------------
+
+from smart_layer.setup_wizard import Wizard  # noqa: E402
+
+
+def test_setup_wizard_writes_config_and_env(tmp_path):
+    shutil_src = ROOT / "mappings"
+    (tmp_path / "mappings").mkdir()
+    for f in shutil_src.glob("*.toml"):
+        (tmp_path / "mappings" / f.name).write_text(f.read_text(encoding="utf-8"), encoding="utf-8")
+    answers = iter(["Test Mill", "Rs", "1", "10.0.0.5:1521/ORCL", "smartlayer_ro", "y", r"C:\oracle\bin", "",
+                    "2", "y", "8080", "y"])
+    secrets_ = iter(["db-pass", "dash-pass", ""])
+    out = []
+    w = Wizard(tmp_path, ask=lambda q: next(answers), ask_secret=lambda q: next(secrets_), out=out.append, install=False)
+    cfg_path = w.run()
+    cfg = config.load(cfg_path)
+    assert cfg["company"]["name"] == "Test Mill" and cfg["erp"]["driver"] == "oracle"
+    assert cfg["erp"]["client_lib_dir"] == r"C:\oracle\bin"                  # Windows path kept as typed
+    assert cfg["erp"]["password"] == "db-pass" and cfg["serve"]["password"] == "dash-pass"
+    assert cfg["serve"]["host"] == "0.0.0.0" and "ntfy" in cfg["notify"]["channels"]
+    assert len(cfg["notify"]["ntfy_topic"]) > 20
+    assert "db-pass" not in cfg_path.read_text() and "db-pass" in (tmp_path / ".env").read_text()
+
+
+def test_config_reads_windows_encodings(tmp_path, monkeypatch):
+    monkeypatch.delenv("ERP_PASSWORD", raising=False)
+    (tmp_path / "config.toml").write_bytes('\ufeff[company]\nname = "BOM"\n[erp]\npassword = "${ERP_PASSWORD}"\n'.encode())
+    (tmp_path / ".env").write_bytes("ERP_PASSWORD=x1\r\n".encode("utf-16"))
+    c = config.load(tmp_path / "config.toml")
+    assert c["company"]["name"] == "BOM" and c["erp"]["password"] == "x1"
+
+
+def test_grants_lists_every_mapped_object(tmp_path, capsys):
+    from smart_layer import cli
+    (tmp_path / "config.toml").write_text(f"""[erp]
+driver = "oracle"
+mapping = "{(ROOT / 'mappings' / 'dost_textiles_oracle.toml').as_posix()}"
+""")
+    assert cli.main(["-c", str(tmp_path / "config.toml"), "grants"]) == 0
+    sql = capsys.readouterr().out
+    for obj in ("dostex.wv_prod_v", "dostex.wytm", "dostex.fab_gp_v", "dostex.acl"):
+        assert f"GRANT SELECT ON {obj} TO smartlayer_ro;" in sql
+    assert "GRANT EXECUTE ON dostex.get_item_stock" in sql and "INSERT" not in sql.upper().replace("INSERT INTO", "")

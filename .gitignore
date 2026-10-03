@@ -24,3 +24,6 @@ verify_report.json
 erp_audit_*.json
 beam_alert_state.json
 photo_agent*/
+dist/
+python_path.txt
+*.bak

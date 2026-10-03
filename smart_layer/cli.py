@@ -1,6 +1,9 @@
 """
 Command line for Project Smart Layer by Azam Puri.
 
+  python -m smart_layer setup                    first-time setup: asks questions, writes config.toml and .env
+  python -m smart_layer status                   health of this installation (last sync, dashboard, tasks)
+  python -m smart_layer grants [--user NAME]     SQL to create the read-only database user the mapping needs
   python -m smart_layer check                    test the ERP connection and mapping
   python -m smart_layer sync                     refresh the local store from the ERP
   python -m smart_layer report stock|zero|reorder|production|closing|pilferage [--date D] [--csv] [--push]
@@ -68,7 +71,8 @@ def cmd_report(cfg, args):
     rep = builders[args.name](con, cfg, day)
     print(rep.text())
     if args.csv:
-        tag = (day or date.today()).isoformat()
+        default = date.today() - timedelta(days=1) if args.name in ("production", "pilferage") else date.today()
+        tag = (day or default).isoformat()
         print("\nSaved", rep.write_csv(cfg.path(cfg["reports"]["output_dir"]), f"{args.name}_{tag}.csv"))
     if args.push and (rep.rows or args.name != "zero"):
         notify.send(cfg, rep.title, "\n".join(rep.summary) + ("\n\n" + rep.text(limit=15) if args.name == "zero" else ""))
@@ -130,6 +134,70 @@ def cmd_dashboard(cfg, args):
     return 0
 
 
+def cmd_grants(cfg, args):
+    """SQL for the mill's IT person: a read-only database user that can see only what the mapping reads."""
+    import re
+    mapping = erp.Mapping(cfg.path(cfg["erp"]["mapping"]))
+    sql = "\n".join(mapping.entities.values())
+    tables = sorted({m.lower() for m in re.findall(r"(?:FROM|JOIN)\s+([A-Za-z_][\w$#]*(?:\.[A-Za-z_][\w$#]*)?)", sql, re.I)
+                     if m.lower() not in ("dual",)})
+    funcs = sorted({m.lower() for m in re.findall(r"\b([A-Za-z_]\w*\.[A-Za-z_]\w*)\s*\(", sql)
+                    if m.split(".")[0].lower() not in {t.split(".")[-1] for t in tables} and "." in m})
+    user, driver = args.user, cfg["erp"].get("driver", "oracle")
+    print(f"-- Read-only user for {PRODUCT} ({mapping.name})")
+    print("-- Run as a database administrator. Replace the password; put the same one in .env as ERP_PASSWORD.")
+    if driver == "oracle":
+        print(f'CREATE USER {user} IDENTIFIED BY "ChangeThisPassword";\nGRANT CREATE SESSION TO {user};')
+        for t in tables:
+            print(f"GRANT SELECT ON {t} TO {user};")
+        for f in funcs:
+            print(f"GRANT EXECUTE ON {f} TO {user};")
+    elif driver == "mssql":
+        print(f"CREATE LOGIN {user} WITH PASSWORD = 'ChangeThisPassword';\nCREATE USER {user} FOR LOGIN {user};")
+        for t in tables:
+            print(f"GRANT SELECT ON {t} TO {user};")
+    elif driver == "mysql":
+        print(f"CREATE USER '{user}'@'%' IDENTIFIED BY 'ChangeThisPassword';")
+        for t in tables:
+            print(f"GRANT SELECT ON {t if '.' in t else cfg['erp'].get('database', 'erp') + '.' + t} TO '{user}'@'%';")
+    elif driver == "postgres":
+        print(f"CREATE ROLE {user} LOGIN PASSWORD 'ChangeThisPassword';")
+        for t in tables:
+            print(f"GRANT SELECT ON {t} TO {user};")
+    else:
+        print("-- SQLite files have no users: give the service read access to the file only.")
+    return 0
+
+
+def cmd_status(cfg, args):
+    import os
+    import subprocess
+    print(f"{PRODUCT} - {cfg['company']['name']}")
+    print(f"  ERP mapping : {cfg['erp'].get('mapping')}  ({cfg['erp'].get('driver')})")
+    db = cfg.path(cfg["store"]["path"])
+    if db.exists():
+        con = store.open_store(db)
+        rows = con.execute("SELECT entity, MAX(synced_at), rows FROM sync_log GROUP BY entity ORDER BY MIN(rowid)").fetchall()
+        last = max((r[1] for r in rows), default=None)
+        print(f"  Last sync   : {last or 'never'}  ({db.stat().st_size / 1e6:,.1f} MB)")
+        for e, when, n in rows:
+            print(f"      {e:<17} {n:>9,} rows")
+    else:
+        print("  Last sync   : never - run  python -m smart_layer sync")
+    sv = cfg["serve"]
+    print(f"  Dashboard   : http://{'<this server>' if sv.get('host') == '0.0.0.0' else sv.get('host')}:{sv.get('port')}"
+          f"  password {'set' if sv.get('password') else 'NOT set'}")
+    print(f"  Alerts      : {', '.join(cfg['notify'].get('channels', []))}")
+    chat = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    print(f"  Chat        : {'ready' if chat else 'not set up (no ANTHROPIC_API_KEY in .env)'}")
+    if os.name == "nt":
+        for task in ("Smart Layer Daily", "Smart Layer Dashboard"):
+            r = subprocess.run(["schtasks", "/query", "/tn", task, "/fo", "list"], capture_output=True, text=True)
+            state = next((ln.split(":", 1)[1].strip() for ln in r.stdout.splitlines() if ln.startswith("Status")), "not installed")
+            print(f"  Task        : {task} - {state}")
+    return 0
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="smart_layer", description=PRODUCT)
     p.add_argument("-c", "--config", default="config.toml")
@@ -155,13 +223,25 @@ def main(argv=None):
     d.add_argument("--date")
     d.add_argument("--out")
     sub.add_parser("schema")
+    sub.add_parser("setup")
+    sub.add_parser("status")
+    g = sub.add_parser("grants")
+    g.add_argument("--user", default="smartlayer_ro")
     args = p.parse_args(argv)
     if args.cmd == "schema":
         print(schema.describe())
         return 0
+    if args.cmd == "setup":
+        from pathlib import Path
+
+        from .setup_wizard import run
+        cfg_path = run(Path(args.config).resolve().parent)
+        print("\nTesting the connection to the ERP ...")
+        return cmd_check(config.load(cfg_path), args)
     cfg = config.load(args.config)
     return {"check": cmd_check, "sync": cmd_sync, "report": cmd_report, "audit": cmd_audit, "ask": cmd_ask, "serve": cmd_serve,
-            "dashboard": cmd_dashboard}[args.cmd](cfg, args)
+            "dashboard": cmd_dashboard,
+            "status": cmd_status, "grants": cmd_grants}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

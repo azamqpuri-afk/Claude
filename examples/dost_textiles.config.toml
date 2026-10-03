@@ -1,0 +1,167 @@
+# Project Smart Layer by Azam Puri - installation settings.
+# Copy to config.toml (never committed) and fill in. Secrets go in environment
+# variables or a .env file next to this one (also never committed):
+#     ERP_PASSWORD=...
+#     NTFY_TOPIC=...            long random name, e.g. from: python -c "import secrets; print(secrets.token_hex(16))"
+#     ANTHROPIC_API_KEY=...     for "ask the ERP" (Claude Console -> API keys)
+
+[company]
+name = "Dost Textiles"
+currency = "Rs"
+
+[erp]
+mapping = "mappings/dost_textiles_oracle.toml"
+driver = "oracle"                  # oracle | sqlite | postgres | mssql | mysql
+dsn = "localhost:1521/ORCL"        # host:port/service of the ERP database
+user = "dostex"                    # best: a read-only user with SELECT on the mapped tables/views
+password = "${ERP_PASSWORD}"
+thick = true                       # Oracle 11g needs Oracle Client (thick) mode
+# client_lib_dir = 'C:\oracle\instantclient_19_x'   # if Oracle Client is not on PATH
+# tns_admin = 'C:\oracle\network\admin'           # folder with tnsnames.ora (found next to the client if not set)
+
+[store]
+path = "data/smart_layer.db"       # local copy that reports, audits and Claude read
+
+[sync]
+history_days = 400                 # dated records re-pulled each sync (catches backdated edits)
+
+[notify]
+channels = ["console"]             # add "ntfy" for phone pushes
+ntfy_topic = "${NTFY_TOPIC}"
+# ntfy_token = "${NTFY_TOKEN}"     # recommended: an access token so nobody else can read the topic
+# ntfy_server = "https://ntfy.sh"
+
+[reports]
+tracked_issue_days = 60            # items issued in this many days are "tracked"
+reorder_cover_months = 2           # order enough for this many months of use
+output_dir = "output"
+
+[audit]
+large_payment = 500000
+duplicate_payment_min = 5000
+# Owner-confirmed normal practices: matching findings are kept as INFO and never pushed.
+# dismiss = [{ match = "^big-", why = "advance payments to sizers are normal" }]
+
+# The mill's own contract-closing method. Every value is the mill's choice; this is Dost Textiles' method.
+[closing]
+divisor = 800                      # 840 = hank length; Dost uses 800
+bag_lb = 100
+basis = "dispatched"               # dispatched (net of returns) | woven
+rejection_charged_to = "mill"      # mill: party pays yarn for fresh meters only | party: all meters
+wastage_allowance_pct = 0
+yarn_groups = [["6", "18"], ["102", "120"]]
+# weight_formula = "threads_per_inch * width_in * 1.0936 / divisor / count"   # replace with the mill's own formula
+
+# Closing counts and rates per lb by ERP yarn code (Dost Textiles, from 48_contract_closing.py)
+[closing.yarns."91"]        # 12/1 CTN
+weft_closing_count = 11
+rate_per_lb = 275
+[closing.yarns."3"]         # 12/1 SLUB
+weft_closing_count = 11
+rate_per_lb = 290
+[closing.yarns."104"]       # 16/1 VIS SHORT SLUB
+weft_closing_count = 14.5
+rate_per_lb = 520
+[closing.yarns."5"]         # 30/1 CTN
+warp_closing_count = 28
+weft_closing_count = 29
+rate_per_lb = 440
+[closing.yarns."109"]       # 30/1 PC
+warp_closing_count = 29
+weft_closing_count = 30
+rate_per_lb = 380
+[closing.yarns."7"]         # 30/1 STAPLE DULL
+warp_closing_count = 28
+rate_per_lb = 400
+[closing.yarns."34"]        # 30/1 VISCOSE (PV)
+warp_closing_count = 28
+rate_per_lb = 400
+[closing.yarns."103"]       # 30/1 STAPLE (VIS)
+warp_closing_count = 28
+rate_per_lb = 400
+[closing.yarns."14"]        # 32/1 CTN
+warp_closing_count = 30
+weft_closing_count = 31
+rate_per_lb = 440
+[closing.yarns."98"]        # 36/2 VA
+warp_closing_count = 16
+weft_closing_count = 17
+rate_per_lb = 350
+[closing.yarns."4"]         # 40/1 CTN
+warp_closing_count = 38
+weft_closing_count = 39
+rate_per_lb = 550
+[closing.yarns."97"]        # 40/1 VISCOSE
+warp_closing_count = 38
+rate_per_lb = 400
+[closing.yarns."115"]       # 120/1 VISCOSE
+warp_closing_count = 42
+weft_closing_count = 42
+rate_per_lb = 800
+[closing.yarns."6"]         # 52/1 CTN
+warp_closing_count = 53
+weft_closing_count = 53
+rate_per_lb = 610
+[closing.yarns."18"]        # 54/1 CTN
+warp_closing_count = 51.5
+weft_closing_count = 52.5
+rate_per_lb = 610
+[closing.yarns."2"]         # 60/1 CTN
+warp_closing_count = 58
+weft_closing_count = 59
+rate_per_lb = 650
+[closing.yarns."1"]         # 80/1 CTN
+warp_closing_count = 78
+weft_closing_count = 79
+rate_per_lb = 750
+[closing.yarns."102"]       # 40/1 STAPLE
+warp_closing_count = 40
+rate_per_lb = 425
+[closing.yarns."120"]       # 42/1 STAPLE (40 staple)
+warp_closing_count = 40
+rate_per_lb = 425
+[closing.yarns."122"]       # 20/2 VISCOSE (10s)
+weft_closing_count = 9
+rate_per_lb = 375
+
+# One yarn booked under several ERP codes shares one balance (52/1 and 54/1 CTN are the same yarn;
+# Wahab's 40 staple came as two codes)
+# Party-specific closing counts (from 48_contract_closing.py OVERRIDES)
+[[closing.parties]]
+match = "QADRI"
+[closing.parties.yarns."6"]
+warp_closing_count = 51.5
+weft_closing_count = 52.5
+[closing.parties.yarns."18"]
+warp_closing_count = 51.5
+weft_closing_count = 52.5
+
+[[closing.parties]]
+match = "HM FABRICS"
+[closing.parties.yarns."6"]
+warp_closing_count = 53
+weft_closing_count = 53
+
+# Contract corrections, e.g. where the ERP has the construction wrong:
+# [[closing.contracts]]
+# contract_no = "46"
+# picks_per_inch = 64
+
+[pilferage]
+lookback_days = 90
+excess_kg = 400                    # weft issued above need over the window
+sizing_loss_pct = 6
+
+[serve]
+host = "0.0.0.0"                   # reachable from phones on the mill network
+port = 8080
+password = "${DASHBOARD_PASSWORD}"
+
+[ask]
+model = "claude-opus-5-5"
+effort = "high"
+notes = """
+Voucher types: CP cash payment, BP bank payment, CR cash receipt, BR bank receipt, JV journal,
+SRN store receipt, OGP_* outward gate passes (sales), IGP_* inward gate passes, OPN opening balances.
+Store issues go to looms ("LOOM # 1" ...) and departments.
+"""

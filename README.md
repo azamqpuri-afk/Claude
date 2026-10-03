@@ -70,34 +70,41 @@ python -m smart_layer -c config.demo.toml ask "which loom had the highest reject
 
 ## Install at a mill
 
-1. Copy `config.example.toml` to `config.toml` and fill in the ERP connection.
-   Put passwords and keys in a `.env` file next to it (never committed).
-2. Point `erp.mapping` at the mill's mapping file (see [docs/CONNECTING_AN_ERP.md](docs/CONNECTING_AN_ERP.md)).
-3. `python -m smart_layer check` tests every entity and names any that fail.
-4. `python -m smart_layer sync`, then run the reports.
-5. On Windows, schedule `run_daily.ps1` once a day with Task Scheduler.
+Follow **[docs/INSTALL_AT_A_MILL.md](docs/INSTALL_AT_A_MILL.md)** - the pilot playbook (what to ask beforehand, the
+read-only database user, installation, checking the numbers with the owner, handover, support).
 
-Phone alerts use [ntfy](https://ntfy.sh). Topics can be read by anyone who knows the name, so use a
-long random topic name and preferably an access token.
+In short, on the mill's Windows server:
+
+1. Copy the `SmartLayer` folder (from `dist/SmartLayer-<version>.zip`, built with `python tools/make_release.py`).
+2. Double-click **`Install Smart Layer.bat`** and answer the questions. The installer finds or installs Python,
+   writes `config.toml` and `.env` (passwords only in `.env`), tests every table, does the first sync,
+   schedules the daily run, starts the dashboard with Windows and opens its port for phones on the mill network.
+3. `python -m smart_layer status` shows the health of the installation at any time.
+
+A new ERP needs a mapping file first - see [docs/CONNECTING_AN_ERP.md](docs/CONNECTING_AN_ERP.md).
+`python -m smart_layer grants` prints the SQL for the mill's IT person to create the read-only database user.
 
 ## Repository layout
 
 ```
-smart_layer/        the product
-  schema.py         the standard data model (single source of truth)
-  erp.py            ERP connector + mapping loader (read-only guard)
-  store.py          local store and sync
-  reports/          stock, reorder, production
-  audit/            finance, store, weaving checks
-  textile/          contract closing (method.py = the mill's own rules) and pilferage
-  web/              owner dashboard page, data builder and web server
-  ask.py            "ask the ERP" with Claude
-mappings/           one file per ERP
-  dost_textiles_oracle.toml
-  demo_sqlite.toml
-demo/               demo ERP generator
-tests/              end-to-end tests on the demo ERP
-legacy/dost_textiles/   the original Dost Textiles scripts, kept as they are
+smart_layer/            the product
+  schema.py             the standard data model (single source of truth)
+  erp.py                ERP connector + mapping loader (read-only guard)
+  store.py              local store and sync
+  reports/              stock, reorder, production
+  audit/                finance, store, weaving, yarn checks
+  textile/              contract closing (method.py = the mill's own rules) and pilferage
+  web/                  owner dashboard page, data builder and web server
+  ask.py                "ask the ERP" with Claude
+  setup_wizard.py       first-time setup questions
+mappings/               one file per ERP
+docs/                   pilot playbook, connecting a new ERP
+demo/                   demo ERP generator (fictional mill)
+Install Smart Layer.bat, install_windows.ps1, run_daily.ps1, run_dashboard.ps1, uninstall_windows.ps1
+tools/make_release.py   builds the customer package (dist/)
+tests/                  end-to-end tests
+examples/               Dost Textiles' settings (not shipped to customers)
+legacy/dost_textiles/   the original Dost Textiles scripts (not shipped to customers)
 ```
 
 ## Tests
