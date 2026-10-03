@@ -184,7 +184,7 @@ def _closing(cfg, con, **over):
 def test_closing_balances_follow_the_mills_method(env):
     cfg, con = env
     base = _closing(cfg, con)
-    assert set(base) == {"CON-39", "CON-40", "CON-41", "CON-42"}
+    assert set(base) == {"CON-40", "CON-41", "CON-42"}          # CON-39 has nothing left to close: hidden
     r = base["CON-41"]
     assert r["received_bags"] > r["used_bags"] > 0 and abs(r["balance_bags"] - (r["received_bags"] - r["used_bags"])) < 1e-6
     # a smaller divisor means more yarn per meter, so less balance left with the mill
@@ -197,9 +197,25 @@ def test_closing_balances_follow_the_mills_method(env):
     # per-party override touches only that party
     o = _closing(cfg, con, parties=[{"match": "Kohinoor", "divisor": 800}])
     assert o["CON-42"]["used_bags"] > base["CON-42"]["used_bags"] and o["CON-41"]["used_bags"] == r["used_bags"]
+    # a party can close the same yarn at its own count
+    pc = _closing(cfg, con, parties=[{"match": "Lahore", "yarns": {"Y40": {"closing_count": 35}}}])
+    assert pc["CON-41"]["used_bags"] > r["used_bags"] and pc["CON-40"]["used_bags"] == base["CON-40"]["used_bags"]
     # the mill's own formula replaces the standard one
     f = _closing(cfg, con, weight_formula="threads_per_inch * width_in / 700 / count")
     assert f["CON-41"]["used_bags"] != r["used_bags"]
+
+
+def test_yarn_groups_share_one_balance(env):
+    cfg, con = env
+    con.execute("UPDATE contracts SET weft_yarn = 'Y40B' WHERE contract_no = 'CON-41'")   # weft booked under a second code
+    try:
+        split = [r for r in closing.contract_rows(con, method.Method({}), END) if r["contract"] == "CON-41"]
+        joined = [r for r in closing.contract_rows(con, method.Method({"yarn_groups": [["Y40", "Y40B"]]}), END)
+                  if r["contract"] == "CON-41"]
+        assert len(split) == 2 and len(joined) == 1
+        assert joined[0]["balance_bags"] == pytest.approx(sum(r["balance_bags"] for r in split))
+    finally:
+        con.execute("UPDATE contracts SET weft_yarn = 'Y40' WHERE contract_no = 'CON-41'")
 
 
 @pytest.mark.parametrize("formula", ["__import__('os').system('x')", "open('f')", "count.real", "[1, 2]", "x + 1"])

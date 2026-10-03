@@ -22,14 +22,14 @@ def contract_rows(con, method, as_of):
                                       ends_per_inch, picks_per_inch, width_in, warp_yarn, warp_count, weft_yarn, weft_count,
                                       ordered_meters, COALESCE(yarn_owner, 'party')
                                FROM contracts c LEFT JOIN parties p USING (party_code)""").fetchall()
+    names = {code: name for code, name in con.execute(
+        "SELECT yarn_code, MAX(yarn_name) FROM yarn_movements WHERE yarn_name IS NOT NULL GROUP BY yarn_code")}
     received = defaultdict(float)
-    names = {}
-    for cno, code, name, mt, kg in con.execute("""
-            SELECT contract_no, yarn_code, MAX(yarn_name), move_type, SUM(kg) FROM yarn_movements
+    for cno, code, mt, kg in con.execute("""
+            SELECT contract_no, yarn_code, move_type, SUM(kg) FROM yarn_movements
             WHERE move_type IN ('party_receipt', 'party_return', 'opening') AND move_date <= ?
             GROUP BY contract_no, yarn_code, move_type""", (d,)):
-        received[(cno, code)] += (kg or 0) * (-1 if mt == "party_return" else 1)
-        names[code] = name or code
+        received[(cno, method.group(code))] += (kg or 0) * (-1 if mt == "party_return" else 1)
     disp = {cno: (o_all or 0, o_fresh or 0) for cno, o_all, o_fresh in con.execute("""
             SELECT contract_no, SUM(CASE direction WHEN 'out' THEN meters ELSE -meters END),
                    SUM(CASE direction WHEN 'out' THEN COALESCE(fresh_m, meters) ELSE -COALESCE(fresh_m, meters) END)
@@ -57,21 +57,30 @@ def contract_rows(con, method, as_of):
             if w is None:
                 missing.append(side)
                 continue
-            need[ycode] += w * meters * allow
+            need[method.group(ycode)] += w * meters * allow
         last = woven.get(cno, (0, 0, None))[2]
         status = "running" if last and last >= (as_of - timedelta(days=30)).isoformat() else "finished" if last else "no production"
         for ycode in sorted(set(need) | {y for (c, y) in received if c == cno}, key=str):
             rec_lb = received.get((cno, ycode), 0) / KG_PER_LB
             used_lb = need.get(ycode, 0)
             bal_lb = rec_lb - used_lb
-            rate = method.rate(ycode)
+            if abs(rec_lb) < 0.5 and abs(used_lb) < 0.5:
+                continue                            # nothing received or used: an empty / old contract
+            rate = method.rate(ycode, s)
             bag = float(s["bag_lb"])
             rows.append(dict(contract=cno, party=party or pcode or "?", quality=quality, status=status, yarn=ycode,
-                             yarn_name=names.get(ycode, ycode), meters=meters, received_bags=rec_lb / bag,
+                             yarn_name=_yarn_label(method, ycode, names), meters=meters, received_bags=rec_lb / bag,
                              used_bags=used_lb / bag, balance_bags=bal_lb / bag, balance_lb=bal_lb,
                              value=bal_lb * rate if rate else None,
                              note=("construction missing for " + " and ".join(missing)) if missing else ""))
     return rows
+
+
+def _yarn_label(method, code, names):
+    for g in method.cfg["yarn_groups"]:
+        if str(g[0]) == str(code) and len(g) > 1:
+            return " + ".join(str(names.get(str(c), c)) for c in g)
+    return names.get(code, code)
 
 
 def contract_closing(con, cfg, as_of=None, party=None):

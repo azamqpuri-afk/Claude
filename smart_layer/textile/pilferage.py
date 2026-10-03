@@ -118,17 +118,36 @@ def analyse(con, cfg, d0, d1):
     return flags, weekly, sizing, t
 
 
+def episodes(flags, gap_days=3):
+    """Consecutive flagged days of one contract merged into one episode (worst day's reasons kept)."""
+    out = []
+    for f in sorted(flags, key=lambda f: (str(f["contract"]), f["date"])):
+        e = out[-1] if out else None
+        if e and e["contract"] == f["contract"] and (date.fromisoformat(f["date"]) - date.fromisoformat(e["last"])).days <= gap_days:
+            e["last"], e["kg"], e["days"] = f["date"], e["kg"] + f["kg"], e["days"] + 1
+            if len(f["reasons"]) >= e["n"]:
+                e["why"], e["n"] = "; ".join(f["reasons"]), len(f["reasons"])
+        else:
+            out.append(dict(contract=f["contract"], party=f["party"], first=f["date"], last=f["date"], kg=f["kg"], days=1,
+                            why="; ".join(f["reasons"]), n=len(f["reasons"])))
+    for e in out:
+        if e["days"] > 1:
+            e["why"] = f"{e['days']} days flagged; worst: {e['why']}"
+    return sorted(out, key=lambda e: (-e["n"], -e["days"], e["first"]))
+
+
 def pilferage(con, cfg, as_of=None):
     as_of = as_of or (date.today() - timedelta(days=1))
     look = int({**DEFAULTS, **cfg["pilferage"]}["lookback_days"])
     flags, weekly, sizing, t = analyse(con, cfg, as_of - timedelta(days=look), as_of)
-    rows = [["Day", f["date"], f["contract"], f["party"], round(f["kg"]), "; ".join(f["reasons"])]
-            for f in sorted(flags, key=lambda f: (-len(f["reasons"]), f["date"]))]
+    rows = [["Days" if e["first"] != e["last"] else "Day", e["first"] if e["first"] == e["last"] else f"{e['first']} to {e['last']}",
+             e["contract"], e["party"], round(e["kg"]), e["why"]] for e in episodes(flags)]
     rows += [["Sizing", "", s["contract"], s["sizer"], round(s["sent"] - s["back"]),
               f"sent {s['sent']:,.0f} kg, sized beams back {s['back']:,.0f} kg: loss {s['loss_pct']:.1f}%"]
              for s in sorted(sizing, key=lambda s: -s["loss_pct"]) if s["loss_pct"] > float(t["sizing_loss_pct"])]
     over = [w for w in weekly if w[4] is not None and w[4] > float(t["excess_kg"])]
-    summary = [f"Last {look} days to {as_of:%d-%b-%Y}: {len(flags)} issue days to check, "
+    summary = [f"Last {look} days to {as_of:%d-%b-%Y}: {len(rows) - sum(1 for r in rows if r[0] == 'Sizing')} episodes "
+               f"({len(flags)} issue days) to check, "
                f"{sum(1 for s in sizing if s['loss_pct'] > float(t['sizing_loss_pct']))} sizer/contract with loss over "
                f"{t['sizing_loss_pct']}%."]
     summary += [f"  Contract {w[0]} ({w[1]}): last {t['window_days']} days {w[2]:,} kg weft issued vs {w[3]:,} kg needed (+{w[4]:,} kg)"

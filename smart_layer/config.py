@@ -27,6 +27,7 @@ DEFAULTS = {
         "rejection_pct": 15,
         "rejection_min_meters": 200,
         "idle_loom_min_days": 5,
+        "trial_balance_tolerance": 10,    # rounding differences below this are not an error
         "dismiss": [],                    # [{match = "regex", why = "normal practice ..."}]
     },
     "closing": {},                        # the mill's closing method - see smart_layer/textile/method.py

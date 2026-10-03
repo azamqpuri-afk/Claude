@@ -45,7 +45,7 @@ def run(a):
 
     # trial balance and cash
     tb = a.q("SELECT SUM(balance) FROM account_balances")[0][0]
-    if tb is not None and abs(tb) > 1:
+    if tb is not None and abs(tb) > float(t.get("trial_balance_tolerance", 10)):
         a.add("CONFIRMED", "Finance", f"tb-{round(tb)}", f"Trial balance is out by {cur} {tb:,.0f}",
               "total debits differ from total credits - see the unbalanced vouchers")
     for acc, name, bal in a.q("""SELECT b.account_code, ac.account_name, b.balance FROM account_balances b

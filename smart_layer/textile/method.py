@@ -34,6 +34,7 @@ DEFAULT_CLOSING = {
     "warp_crimp_pct": 0,
     "weft_crimp_pct": 0,
     "yarns": {},                     # {"Y40": {closing_count = 39, rate_per_lb = 550}}
+    "yarn_groups": [],               # [["6", "18"]]: one yarn booked under several codes (first code names the group)
     "parties": [],                   # [{match = "WAHAB", divisor = 800, ...}]
     "contracts": [],                 # [{contract_no = "46", picks_per_inch = 64, ...}]
 }
@@ -86,26 +87,37 @@ class Method:
     def settings(self, contract_no=None, party=None):
         """Mill defaults, then the matching party override, then the contract override."""
         s = {k: self.cfg[k] for k in OVERRIDABLE}
+        yarns = {}                                  # per-party / per-contract yarn counts and rates (same keys as [closing.yarns])
         for p in self.cfg["parties"]:
             if party and re.search(str(p.get("match", "^$")), party, re.I):
                 s.update({k: v for k, v in p.items() if k in OVERRIDABLE})
+                yarns.update({str(k): v for k, v in p.get("yarns", {}).items()})
         for c in self.cfg["contracts"]:
             if contract_no is not None and str(c.get("contract_no")) == str(contract_no):
                 s.update({k: v for k, v in c.items() if k in OVERRIDABLE})
+                yarns.update({str(k): v for k, v in c.get("yarns", {}).items()})
+        s["_yarns"] = yarns
         return s
 
     def contract_overrides(self, contract_no):
         """Construction corrections for one contract (e.g. picks the ERP has wrong)."""
         for c in self.cfg["contracts"]:
             if str(c.get("contract_no")) == str(contract_no):
-                return {k: v for k, v in c.items() if k not in OVERRIDABLE and k != "contract_no"}
+                return {k: v for k, v in c.items() if k not in OVERRIDABLE and k not in ("contract_no", "yarns")}
         return {}
+
+    def group(self, code):
+        """The yarn account a code belongs to (codes in one yarn_groups entry share one balance)."""
+        for g in self.cfg["yarn_groups"]:
+            if str(code) in [str(c) for c in g]:
+                return str(g[0])
+        return code
 
     def yarn(self, code):
         return self.cfg["yarns"].get(str(code), {}) if code is not None else {}
 
     def closing_count(self, side, yarn_code, count, s):
-        y = self.yarn(yarn_code)
+        y = {**self.yarn(yarn_code), **s.get("_yarns", {}).get(str(yarn_code), {})}
         own = y.get(f"{side}_closing_count", y.get("closing_count"))
         if own:
             return float(own)
@@ -121,6 +133,6 @@ class Method:
         return f(threads_per_inch=float(threads), width_in=float(width), count=float(count),
                  divisor=float(s["divisor"]), crimp_pct=float(s[f"{side}_crimp_pct"]))
 
-    def rate(self, yarn_code):
-        r = self.yarn(yarn_code).get("rate_per_lb")
+    def rate(self, yarn_code, s=None):
+        r = {**self.yarn(yarn_code), **((s or {}).get("_yarns", {}).get(str(yarn_code), {}))}.get("rate_per_lb")
         return float(r) if r else None
