@@ -109,3 +109,52 @@ LEFT JOIN (SELECT TRUNC(td) td, lcode, NVL(TO_CHAR(shift), '-') shift, quality,
            GROUP BY TRUNC(td), lcode, NVL(TO_CHAR(shift), '-'), quality) e
   ON e.td = p.td AND e.lcode = p.lcode AND e.shift = p.shift AND e.quality = p.quality
 """
+
+# Contracts (DOSTEX.CONTM) as read by 48_contract_closing.py. warp_thread / weft_thread are taken as
+# ends / picks per inch; counts come from the yarn master.
+[entities.contracts]
+sql = """
+SELECT TO_CHAR(c.cont_no) AS contract_no, c.party_code AS party_code, a.an AS party_name, TRUNC(c.cont_date) AS contract_date,
+       c.warp_thread AS ends_per_inch, c.weft_thread AS picks_per_inch, c.width AS width_in,
+       TO_CHAR(c.warp_yarn_code) AS warp_yarn, wy.count AS warp_count,
+       TO_CHAR(c.weft_yarn_code) AS weft_yarn, fy.count AS weft_count,
+       c.cont_qty AS ordered_meters, c.conver_per_meter AS rate_per_meter, 'party' AS yarn_owner
+FROM dostex.contm c LEFT JOIN dostex.ach a ON a.ac = c.party_code
+LEFT JOIN dostex.yarn wy ON wy.ycode = c.warp_yarn_code LEFT JOIN dostex.yarn fy ON fy.ycode = c.weft_yarn_code
+"""
+
+# Yarn gate passes (WYTM / WYTD). Weight rule from 48_contract_closing.py: the typed kg is used only when it is
+# plausible (15-60 kg a bag, ~5 kg a cone), otherwise bags x 45.36 kg (100 lb). A yarn OGP with a price in its
+# description is mill yarn sold to the party, not a return.
+[entities.yarn_movements]
+sql = """
+SELECT TRUNC(m.td) AS move_date, m.feedd AS entered_at, TO_CHAR(NVL(m.gp_no, m.tno)) AS doc_no,
+       CASE m.tt WHEN 'IGP_YARN' THEN 'party_receipt'
+                 WHEN 'OGP_YARN' THEN CASE WHEN REGEXP_LIKE(m.tdesc, '@ *[0-9]') THEN 'sale' ELSE 'party_return' END
+                 WHEN 'TO_SIZING' THEN 'to_sizer' WHEN 'FROM_SIZING' THEN 'from_sizer'
+                 WHEN 'IGP_SIZED_BEAMS' THEN 'sized_beams_received' WHEN 'OPN_SIZED_BEAMS' THEN 'opening'
+                 WHEN 'YARN_TO_LOOMS' THEN 'to_looms' WHEN 'YARN_FROM_LOOMS' THEN 'from_looms' ELSE 'other' END AS move_type,
+       TO_CHAR(d.ycode) AS yarn_code, y.yarn_desc AS yarn_name, TO_CHAR(c.cont_no) AS contract_no,
+       NVL(m.ac1, m.ac2) AS party_code, a.an AS party_name, d.bags AS bags,
+       CASE WHEN NVL(d.yarn_wt,0) > 0 AND ((NVL(d.bags,0) = 0 AND (NVL(d.cones,0) = 0 OR d.yarn_wt <= d.cones*5 + 5))
+                                          OR (NVL(d.bags,0) > 0 AND d.yarn_wt BETWEEN d.bags*15 AND d.bags*60 + 60))
+            THEN d.yarn_wt
+            ELSE NVL(d.bags,0)*45.36 + NVL(d.cones,0)*45.36/NVL(NULLIF(d.cone_pbag,0), CASE WHEN y.count > 40 THEN 40 ELSE 24 END) END AS kg,
+       m.usern AS entered_by
+FROM dostex.wytm m JOIN dostex.wytd d ON d.trans_no = m.trans_no
+LEFT JOIN dostex.yarn y ON y.ycode = d.ycode LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id
+LEFT JOIN dostex.ach a ON a.ac = NVL(m.ac1, m.ac2)
+WHERE m.td >= :since
+"""
+
+# Fabric gate passes (FAB_GP_V): GPOUT = to the party, GPIN = returned. Fresh = A + A2, rejected = B + C + CP.
+[entities.fabric_dispatches]
+sql = """
+SELECT TO_CHAR(NVL(v.gp_no, v.trans_no)) AS doc_no, TRUNC(v.trans_date) AS dispatch_date, TO_CHAR(c.cont_no) AS contract_no,
+       CASE v.trans_type WHEN 'GPOUT' THEN 'out' ELSE 'in' END AS direction,
+       SUM(NVL(v.a,0) + NVL(v.a2,0)) AS fresh_m, SUM(NVL(v.b,0) + NVL(v.c,0) + NVL(v.cp,0)) AS rejected_m,
+       SUM(v.total_mtr) AS meters, SUM(v.amt) AS amount
+FROM dostex.fab_gp_v v JOIN dostex.wc_cont_sub_v s ON s.cont_sub_id = v.cont_sub_id JOIN dostex.contm c ON c.cont_id = s.cont_id
+WHERE v.trans_type IN ('GPOUT', 'GPIN') AND v.trans_date >= :since
+GROUP BY NVL(v.gp_no, v.trans_no), TRUNC(v.trans_date), c.cont_no, v.trans_type
+"""

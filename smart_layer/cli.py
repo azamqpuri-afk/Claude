@@ -3,7 +3,7 @@ Command line for Project Smart Layer by Azam Puri.
 
   python -m smart_layer check                    test the ERP connection and mapping
   python -m smart_layer sync                     refresh the local store from the ERP
-  python -m smart_layer report stock|zero|reorder|production [--date D] [--csv] [--push]
+  python -m smart_layer report stock|zero|reorder|production|closing|pilferage [--date D] [--csv] [--push]
   python -m smart_layer audit [--date D | --month YYYY-MM] [--csv] [--push]
   python -m smart_layer ask ["question"]         ask the ERP (interactive without a question)
   python -m smart_layer schema                   print the standard data model
@@ -18,6 +18,7 @@ from datetime import date, timedelta
 
 from . import PRODUCT, config, erp, notify, schema, store
 from .reports import production, stock
+from .textile import closing, pilferage
 
 
 def _open_erp(cfg):
@@ -59,7 +60,8 @@ def cmd_report(cfg, args):
     con = _store(cfg)
     day = date.fromisoformat(args.date) if args.date else None
     builders = {"stock": stock.stock_status, "zero": stock.new_zero, "reorder": stock.reorder_list,
-                "production": production.daily_production}
+                "production": production.daily_production, "closing": closing.contract_closing,
+                "pilferage": pilferage.pilferage}
     rep = builders[args.name](con, cfg, day)
     print(rep.text())
     if args.csv:
@@ -117,7 +119,7 @@ def main(argv=None):
     s = sub.add_parser("sync")
     s.add_argument("--entities", nargs="*")
     r = sub.add_parser("report")
-    r.add_argument("name", choices=["stock", "zero", "reorder", "production"])
+    r.add_argument("name", choices=["stock", "zero", "reorder", "production", "closing", "pilferage"])
     r.add_argument("--date")
     r.add_argument("--csv", action="store_true")
     r.add_argument("--push", action="store_true")

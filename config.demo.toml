@@ -28,3 +28,29 @@ notes = """
 Voucher types: CPV cash payment, BPV bank payment, CRV cash receipt, BRV bank receipt, JV journal, SV sales, OPN opening.
 Issues go to looms (LOOM-01 .. LOOM-24) or departments (SIZING, FOLDING, GENERAL).
 """
+
+# The mill's own closing method. Every value here is the mill's choice.
+[closing]
+divisor = 840
+bag_lb = 100
+basis = "dispatched"               # dispatched | woven
+rejection_charged_to = "mill"      # mill | party
+wastage_allowance_pct = 1
+
+[closing.yarns.Y60]
+rate_per_lb = 650
+[closing.yarns.Y40]
+rate_per_lb = 550
+closing_count = 39                 # this mill closes 40s at 39
+[closing.yarns.Y20]
+rate_per_lb = 330
+
+# Kohinoor's contracts are closed their way: divisor 800, 2% allowance
+[[closing.parties]]
+match = "Kohinoor"
+divisor = 800
+wastage_allowance_pct = 2
+
+[pilferage]
+lookback_days = 90
+sizing_loss_pct = 6

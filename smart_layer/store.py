@@ -48,7 +48,8 @@ def create(con):
             con.execute(f"CREATE INDEX IF NOT EXISTS ix_{e.name}_date ON {e.name} ({e.date_column})")
     for t, c in (("store_receipts", "item_code"), ("store_issues", "item_code"),
                  ("ledger_entries", "voucher_id"), ("ledger_entries", "account_code"),
-                 ("loom_production", "loom_code")):
+                 ("loom_production", "loom_code"), ("loom_production", "contract_no"),
+                 ("yarn_movements", "contract_no"), ("fabric_dispatches", "contract_no")):
         con.execute(f"CREATE INDEX IF NOT EXISTS ix_{t}_{c} ON {t} ({c})")
     con.execute("CREATE TABLE IF NOT EXISTS sync_log (entity TEXT, synced_at TEXT, since TEXT, rows INTEGER)")
     con.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")

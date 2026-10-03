@@ -165,3 +165,62 @@ def test_ask_cannot_write(env):
     assert bot.messages[2]["content"][0]["is_error"] is True
     con = sqlite3.connect(cfg.path(cfg["store"]["path"]))
     assert con.execute("SELECT COUNT(*) FROM looms").fetchone()[0] == 24
+
+
+# ---- contract closing and pilferage ---------------------------------------------------------------
+
+from smart_layer.textile import closing, method, pilferage  # noqa: E402
+
+
+def _closing(cfg, con, **over):
+    saved = cfg.data.get("closing", {})
+    cfg.data["closing"] = {**saved, **over}
+    try:
+        return {r["contract"]: r for r in closing.contract_rows(con, method.Method(cfg["closing"]), END)}
+    finally:
+        cfg.data["closing"] = saved
+
+
+def test_closing_balances_follow_the_mills_method(env):
+    cfg, con = env
+    base = _closing(cfg, con)
+    assert set(base) == {"CON-39", "CON-40", "CON-41", "CON-42"}
+    r = base["CON-41"]
+    assert r["received_bags"] > r["used_bags"] > 0 and abs(r["balance_bags"] - (r["received_bags"] - r["used_bags"])) < 1e-6
+    # a smaller divisor means more yarn per meter, so less balance left with the mill
+    assert _closing(cfg, con, divisor=800)["CON-41"]["used_bags"] > r["used_bags"]
+    # allowance, basis and rejection rule all change the result
+    assert _closing(cfg, con, wastage_allowance_pct=2)["CON-41"]["used_bags"] == pytest.approx(r["used_bags"] * 1.02)
+    assert _closing(cfg, con, basis="woven")["CON-41"]["meters"] != r["meters"]
+    assert _closing(cfg, con, basis="woven", rejection_charged_to="party")["CON-41"]["meters"] > \
+        _closing(cfg, con, basis="woven")["CON-41"]["meters"]
+    # per-party override touches only that party
+    o = _closing(cfg, con, parties=[{"match": "Kohinoor", "divisor": 800}])
+    assert o["CON-42"]["used_bags"] > base["CON-42"]["used_bags"] and o["CON-41"]["used_bags"] == r["used_bags"]
+    # the mill's own formula replaces the standard one
+    f = _closing(cfg, con, weight_formula="threads_per_inch * width_in / 700 / count")
+    assert f["CON-41"]["used_bags"] != r["used_bags"]
+
+
+@pytest.mark.parametrize("formula", ["__import__('os').system('x')", "open('f')", "count.real", "[1, 2]", "x + 1"])
+def test_closing_formula_is_arithmetic_only(formula):
+    with pytest.raises(method.FormulaError):
+        method.Method({"weight_formula": formula})
+
+
+def test_pilferage_finds_planted_cases(env):
+    cfg, con = env
+    flags, weekly, sizing, _ = pilferage.analyse(con, cfg, date(2026, 7, 4), END)
+    f = {(x["contract"], x["date"]): " ".join(x["reasons"]) for x in flags}
+    assert "no production" in f[("CON-39", "2026-09-20")] and "outside working hours" in f[("CON-39", "2026-09-20")]
+    assert "kg needed" in f[("CON-41", "2026-10-02")] and "outside working hours" in f[("CON-41", "2026-10-02")]
+    assert "11 days after" in f[("CON-42", "2026-09-12")]
+    loss = {(s["sizer"], s["contract"]): s["loss_pct"] for s in sizing}
+    assert loss[("Rehman Sizing", "CON-42")] == pytest.approx(9.0, abs=0.2)
+    assert loss[("Ali Sizing", "CON-41")] < 5
+
+
+def test_daily_audit_pushes_yarn_action(env):
+    cfg, con = env
+    found = audit.run(con, cfg, END).findings
+    assert any(f.severity == "ACTION" and f.section == "Yarn" and "CON-41" in f.title for f in found)

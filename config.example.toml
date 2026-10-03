@@ -41,6 +41,47 @@ duplicate_payment_min = 5000
 # Owner-confirmed normal practices: matching findings are kept as INFO and never pushed.
 # dismiss = [{ match = "^big-", why = "advance payments to sizers are normal" }]
 
+# The mill's own contract-closing method. Every value is the mill's choice; this is Dost Textiles' method.
+[closing]
+divisor = 800                      # 840 = hank length; Dost uses 800
+bag_lb = 100
+basis = "dispatched"               # dispatched (net of returns) | woven
+rejection_charged_to = "mill"      # mill: party pays yarn for fresh meters only | party: all meters
+wastage_allowance_pct = 0
+# weight_formula = "threads_per_inch * width_in * 1.0936 / divisor / count"   # replace with the mill's own formula
+
+# closing counts and rates per lb, by ERP yarn code (from 48_contract_closing.py)
+[closing.yarns."4"]                # 40/1 CTN
+warp_closing_count = 38
+weft_closing_count = 39
+rate_per_lb = 550
+[closing.yarns."5"]                # 30/1 CTN
+warp_closing_count = 28
+weft_closing_count = 29
+rate_per_lb = 440
+[closing.yarns."109"]              # 30/1 PC
+warp_closing_count = 29
+weft_closing_count = 30
+rate_per_lb = 380
+
+# per-party and per-contract overrides, e.g.
+# [[closing.parties]]
+# match = "WAHAB"
+# wastage_allowance_pct = 1
+# [[closing.contracts]]
+# contract_no = "46"
+# picks_per_inch = 64
+
+[pilferage]
+lookback_days = 90
+excess_kg = 400                    # weft issued above need over the window
+sizing_loss_pct = 6
+
+[serve]
+host = "0.0.0.0"                   # reachable from phones on the mill network
+port = 8080
+password = "${DASHBOARD_PASSWORD}"
+
 [ask]
 model = "claude-opus-5-5"
 effort = "high"

@@ -93,3 +93,36 @@ SELECT log_dt AS prod_date, keyed_on AS entered_at, loom_id AS loom_code, shift_
 FROM prd_shift_log
 WHERE log_dt >= :since
 """
+
+[entities.contracts]
+sql = """
+SELECT o.order_ref AS contract_no, o.bp_id AS party_code, p.bp_name AS party_name, o.ord_dt AS contract_date,
+       o.sort_no AS quality, o.epi AS ends_per_inch, o.ppi AS picks_per_inch, o.width_in AS width_in,
+       o.warp_yarn AS warp_yarn, wy.cnt AS warp_count, o.weft_yarn AS weft_yarn, fy.cnt AS weft_count,
+       o.ord_mtr AS ordered_meters, o.rate_mtr AS rate_per_meter,
+       CASE o.supply_type WHEN 'CMT' THEN 'party' ELSE 'mill' END AS yarn_owner
+FROM so_order o LEFT JOIN bp_partner p ON p.bp_id = o.bp_id
+LEFT JOIN yrn_master wy ON wy.yarn_cd = o.warp_yarn LEFT JOIN yrn_master fy ON fy.yarn_cd = o.weft_yarn
+"""
+
+[entities.yarn_movements]
+sql = """
+SELECT t.txn_dt AS move_date, t.entry_ts AS entered_at, t.gp_no AS doc_no,
+       CASE t.txn_kind WHEN 'YRCV' THEN 'party_receipt' WHEN 'YRET' THEN 'party_return' WHEN 'YSALE' THEN 'sale'
+                       WHEN 'SZO' THEN 'to_sizer' WHEN 'SZR' THEN 'from_sizer' WHEN 'BMR' THEN 'sized_beams_received'
+                       WHEN 'WFI' THEN 'to_looms' WHEN 'WFR' THEN 'from_looms' WHEN 'OPN' THEN 'opening' ELSE 'other' END AS move_type,
+       l.yarn_cd AS yarn_code, y.descr AS yarn_name, t.order_ref AS contract_no, t.bp_id AS party_code, p.bp_name AS party_name,
+       l.bag_qty AS bags, l.net_kg AS kg, t.user_id AS entered_by
+FROM yrn_txn t JOIN yrn_txn_line l ON l.txn_id = t.txn_id
+LEFT JOIN yrn_master y ON y.yarn_cd = l.yarn_cd LEFT JOIN bp_partner p ON p.bp_id = t.bp_id
+WHERE t.txn_dt >= :since
+"""
+
+[entities.fabric_dispatches]
+sql = """
+SELECT g.gp_no AS doc_no, g.gp_dt AS dispatch_date, g.order_ref AS contract_no, o.bp_id AS party_code,
+       CASE g.io WHEN 'O' THEN 'out' ELSE 'in' END AS direction, g.fresh_mtr AS fresh_m, g.sec_mtr AS rejected_m,
+       g.fresh_mtr + g.sec_mtr AS meters, (g.fresh_mtr + g.sec_mtr) * g.rate AS amount
+FROM fab_gatepass g LEFT JOIN so_order o ON o.order_ref = g.order_ref
+WHERE g.gp_dt >= :since
+"""

@@ -29,6 +29,9 @@ DEFAULTS = {
         "idle_loom_min_days": 5,
         "dismiss": [],                    # [{match = "regex", why = "normal practice ..."}]
     },
+    "closing": {},                        # the mill's closing method - see smart_layer/textile/method.py
+    "pilferage": {},                      # thresholds - see smart_layer/textile/pilferage.py
+    "serve": {"host": "127.0.0.1", "port": 8080},
     "ask": {"model": "claude-opus-5-5", "effort": "high", "max_rows": 200, "max_steps": 12},
 }
 

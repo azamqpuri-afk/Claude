@@ -11,6 +11,7 @@ audit to find (see PLANTED below). Fully deterministic for a given end date.
 
 import argparse
 import random
+from collections import defaultdict
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -113,6 +114,7 @@ def build(out, end):
     db.executemany("INSERT INTO prd_loom VALUES (?,?,?)",
                    [(f"L{n:02d}", f"LOOM-{n:02d}", "Hall A" if n <= 12 else "Hall B") for n in range(1, LOOMS + 1)])
 
+    cprod, cfresh = defaultdict(float), defaultdict(float)
     stock = {}
     for code, *_rest in ITEMS:
         monthly = _rest[4]
@@ -191,6 +193,8 @@ def build(out, end):
                 rej = meters * (0.20 if n == 15 and d == yesterday else rnd.uniform(0.005, 0.03))
                 b = meters * rnd.uniform(0.01, 0.04)
                 ids["log"] += 1
+                cprod[(f"CON-{40 + (n - 1) % 3}", d)] += meters
+                cfresh[(f"CON-{40 + (n - 1) % 3}", d)] += meters - b - rej
                 db.execute("INSERT INTO prd_shift_log VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                            (ids["log"], d.isoformat(), f"L{n:02d}", shift, q[0], f"CON-{40 + (n - 1) % 3}", f"BM-{n:02d}{(d.toordinal() // 25) % 10}",
                             rpm, q[2], mins, round(picks), round(meters - b - rej, 1), round(b, 1), round(rej, 1), keyed(d, 1)))
@@ -232,9 +236,102 @@ def build(out, end):
     txn("GRN", y1, [("PK-003", 50, 330)], vendor="V05", bill="V05-777")
     txn("GRN", y, [("PK-003", 50, 330)], vendor="V05", bill="V05-777")
     txn("ISS", y, [("EL-002", 6, 2900)], dept="LOOM-18")
+    build_yarn(db, cprod, cfresh, start, end)
     db.commit()
     db.close()
     return out
+
+
+YARNS = [("Y60", "60/1 CTN", 60), ("Y40", "40/1 CTN", 40), ("Y20", "20/1 CTN", 20)]
+CONTRACTS = [  # order, party, sort, epi, ppi, width, yarn, ordered m, rate/m, sizer
+    ("CON-39", "C02", "Q-4040", 110, 80, 67, "Y40", 60_000, 31, "S01"),
+    ("CON-40", "C01", "Q-6060", 92, 88, 63, "Y60", 180_000, 38, "S01"),
+    ("CON-41", "C02", "Q-4040", 110, 80, 67, "Y40", 160_000, 31, "S01"),
+    ("CON-42", "C03", "Q-2020", 60, 56, 98, "Y20", 200_000, 27, "S02"),
+]
+BAG_KG = 45.36
+PLANTED += """
+  yarn     - CON-41: weft issued ~60% above need over the last 7 days, last issue keyed at 22:45
+           - CON-39 (finished contract): 8 bags weft issued 12 days ago, keyed at 23:20, no production
+           - CON-42: a weft issue keyed 11 days after its date
+           - Rehman Sizing: ~9% sizing loss on CON-42 (Ali Sizing ~3.5%)"""
+
+
+def build_yarn(db, cprod, cfresh, start, end):
+    """Contracts, yarn movements and fabric gate passes in MillPro's own tables."""
+    rnd = random.Random(11)
+    db.executescript("""
+        CREATE TABLE yrn_master (yarn_cd TEXT PRIMARY KEY, descr TEXT, cnt REAL);
+        CREATE TABLE so_order (order_ref TEXT PRIMARY KEY, bp_id TEXT, ord_dt TEXT, sort_no TEXT, epi REAL, ppi REAL,
+                               width_in REAL, warp_yarn TEXT, weft_yarn TEXT, ord_mtr REAL, rate_mtr REAL, supply_type TEXT);
+        CREATE TABLE yrn_txn (txn_id INTEGER PRIMARY KEY, txn_dt TEXT, entry_ts TEXT, txn_kind TEXT, gp_no TEXT,
+                              order_ref TEXT, bp_id TEXT, user_id TEXT);
+        CREATE TABLE yrn_txn_line (txn_id INTEGER, yarn_cd TEXT, bag_qty REAL, net_kg REAL);
+        CREATE TABLE fab_gatepass (gp_no TEXT, gp_dt TEXT, order_ref TEXT, io TEXT, fresh_mtr REAL, sec_mtr REAL, rate REAL);
+    """)
+    db.executemany("INSERT INTO yrn_master VALUES (?,?,?)", YARNS)
+    db.executemany("INSERT INTO bp_partner VALUES (?,?,?)", [("S01", "Ali Sizing", "S"), ("S02", "Rehman Sizing", "S")])
+    count = {y: c for y, _, c in YARNS}
+    for o, bp, sort, epi, ppi, w, y, om, rate, _ in CONTRACTS:
+        db.execute("INSERT INTO so_order VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (o, bp, (start - timedelta(days=200 if o == "CON-39" else 20)).isoformat(), sort, epi, ppi, w, y, y, om, rate, "CMT"))
+    ids = {"t": 0, "gp": 7000}
+
+    def mv(kind, d, order, bp, yarn, kg, hour=None, keyed_on=None):
+        ids["t"] += 1
+        ts = datetime.combine(keyed_on or d, datetime.min.time()) + timedelta(hours=hour if hour is not None else rnd.randint(9, 17),
+                                                                              minutes=rnd.randint(0, 59))
+        db.execute("INSERT INTO yrn_txn VALUES (?,?,?,?,?,?,?,?)", (ids["t"], d.isoformat(), ts.isoformat(sep=" "), kind,
+                                                                   f"YG-{ids['t']:05d}", order, bp, rnd.choice(["yarn1", "yarn2"])))
+        db.execute("INSERT INTO yrn_txn_line VALUES (?,?,?,?)", (ids["t"], yarn, round(kg / BAG_KG, 1), round(kg, 1)))
+
+    def lb_per_m(threads, width, cnt):
+        return threads * width * 1.0936 / 840 / cnt
+
+    # CON-39: an old contract, closed and squared up before the demo period
+    mv("OPN", start, "CON-39", "C02", "Y40", 12 * BAG_KG)
+    mv("YRET", start + timedelta(days=5), "CON-39", "C02", "Y40", 12 * BAG_KG)
+
+    for o, bp, sort, epi, ppi, w, y, om, rate, sizer in CONTRACTS[1:]:
+        weft_kg = lb_per_m(ppi, w, count[y]) * 0.45359237
+        warp_kg = lb_per_m(epi, w, count[y]) * 0.45359237
+        days = [start + timedelta(days=i) for i in range((end - start).days + 1)]
+        mv("OPN", start, o, bp, y, round(sum(cprod[(o, start + timedelta(days=k))] for k in range(5)) * (weft_kg + warp_kg)
+                                         / BAG_KG) * BAG_KG)
+        fresh_since = 0.0
+        rec_cover = 0
+        for i, d in enumerate(days):
+            m = cprod[(o, d)]
+            need = m * weft_kg
+            over = 1.6 if o == "CON-41" and d > end - timedelta(days=7) else rnd.uniform(0.97, 1.05)
+            bags = round(need * over / BAG_KG)
+            if bags:
+                late = o == "CON-42" and d == end - timedelta(days=20)
+                hour = 22 if o == "CON-41" and d == end else None
+                mv("WFI", d, o, None, y, bags * BAG_KG, hour=hour, keyed_on=d + timedelta(days=11) if late else None)
+            if d.weekday() == 5 and m:
+                mv("WFR", d, o, None, y, rnd.uniform(4, 15))
+            if i % 10 == 0:                                   # warp to the sizer for the next 10 days
+                sent = sum(cprod[(o, d + timedelta(days=k))] for k in range(10)) * warp_kg / 0.9 * 1.04
+                mv("SZO", d, o, sizer, y, round(sent / BAG_KG) * BAG_KG)
+                loss = 0.09 if sizer == "S02" else rnd.uniform(0.03, 0.04)
+                if d + timedelta(days=4) <= end:
+                    mv("BMR", d + timedelta(days=4), o, sizer, y, round(sent / BAG_KG) * BAG_KG * (1 - loss))
+            if i >= rec_cover:                                # party sends yarn every ~15 days
+                ahead = sum(cprod[(o, d + timedelta(days=k))] for k in range(15))
+                mv("YRCV", d, o, bp, y, round(ahead * (weft_kg + warp_kg / 0.9) * rnd.uniform(1.0, 1.04) / BAG_KG) * BAG_KG)
+                rec_cover = i + 15
+            fresh_since += cfresh[(o, d)]
+            if i % 3 == 2 and fresh_since > 0:                # fabric to the party every 3 days
+                ids["gp"] += 1
+                db.execute("INSERT INTO fab_gatepass VALUES (?,?,?,?,?,?,?)",
+                           (f"FG-{ids['gp']}", d.isoformat(), o, "O", round(fresh_since * 0.97, 1), 0, rate))
+                fresh_since *= 0.03
+            if i % 45 == 30:
+                ids["gp"] += 1
+                db.execute("INSERT INTO fab_gatepass VALUES (?,?,?,?,?,?,?)",
+                           (f"FG-{ids['gp']}", d.isoformat(), o, "I", round(rnd.uniform(150, 400), 1), 0, rate))
+    mv("WFI", end - timedelta(days=12), "CON-39", None, "Y40", 8 * BAG_KG, hour=23)
 
 
 if __name__ == "__main__":
