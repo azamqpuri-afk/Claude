@@ -92,7 +92,8 @@ sql = "SELECT lcode AS loom_code, lname AS loom_name FROM dostex.looms"
 
 # Grades and meters from WV_PROD_V; efficiency from WV_EFF_V as the dashboard computes it
 # (SUM(total_mtr) / SUM(eff_100)), matched on date, loom, shift and quality.
-# Grades: first = A + A2, second = B, rejected = C + CP (as in the audit's rejection check).
+# Grades as the ERP's own Daily Production report counts them: first = A + A2; rejection = everything else
+# (B + C + CP, i.e. 100 - "Grade %"); second = B is kept separately for reference.
 [entities.loom_production]
 sql = """
 SELECT p.td AS prod_date, p.lcode AS loom_code, p.shift AS shift, p.cont_no AS contract_no, p.quality AS quality,
@@ -100,7 +101,7 @@ SELECT p.td AS prod_date, p.lcode AS loom_code, p.shift AS shift, p.cont_no AS c
        p.rej AS rejected_m, e.eff AS efficiency_pct
 FROM (SELECT TRUNC(v.td) td, v.lcode, NVL(TO_CHAR(v.shift), '-') shift, v.quality, MAX(v.cont_no) cont_no,
              MAX(TO_CHAR(v.ref_tno)) beam, SUM(NVL(v.total_mtr, 0)) meters, SUM(NVL(v.a, 0) + NVL(v.a2, 0)) first_q,
-             SUM(NVL(v.b, 0)) second_q, SUM(NVL(v.c, 0) + NVL(v.cp, 0)) rej
+             SUM(NVL(v.b, 0)) second_q, SUM(NVL(v.b, 0) + NVL(v.c, 0) + NVL(v.cp, 0)) rej
       FROM dostex.wv_prod_v v WHERE v.tt = 'PRODUCTION' AND v.td >= :since
       GROUP BY TRUNC(v.td), v.lcode, NVL(TO_CHAR(v.shift), '-'), v.quality) p
 LEFT JOIN (SELECT TRUNC(td) td, lcode, NVL(TO_CHAR(shift), '-') shift, quality,
