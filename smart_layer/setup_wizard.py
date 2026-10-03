@@ -260,6 +260,23 @@ lookback_days = 90
 excess_kg = 400
 sizing_loss_pct = 6
 
+[beams]
+warn_days = 15                     # alert when a loom finishes its beam within this many days with no backup
+urgent_days = 5
+rate_days = 30                     # days of production used for each loom's meters a day
+ends_tolerance = 5                 # a sized beam within this many ends counts as a backup
+default_shrinkage_pct = 7          # used until the mill has finished beams to learn from
+
+[reconcile]
+store_consumption_accounts = []    # ledger accounts for store consumption (empty: found by name)
+difference_limit = 50000
+
+# A loom monitoring system (scoreboard / sensors), if the mill has one - see docs/CONNECTING_AN_ERP.md
+# [sources.scoreboard]
+# driver = "access"
+# path = 'E:\scoreboard\OLMSDB.mdb'
+# copy_first = true
+
 [ask]
 model = "claude-opus-5-5"
 effort = "high"

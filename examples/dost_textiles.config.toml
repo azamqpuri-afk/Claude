@@ -165,3 +165,16 @@ Voucher types: CP cash payment, BP bank payment, CR cash receipt, BR bank receip
 SRN store receipt, OGP_* outward gate passes (sales), IGP_* inward gate passes, OPN opening balances.
 Store issues go to looms ("LOOM # 1" ...) and departments.
 """
+
+[beams]
+warn_days = 15
+urgent_days = 5
+rate_days = 30
+ends_tolerance = 5                 # 8,855 / 8,856-end sets count as the same (63_beam_backup_alert.py)
+own_beam_sizers = ["Hiba"]         # parties that bring their own beams - left out of the sizer ledger
+
+# The OLMS loom scoreboard (MS Access on the scoreboard PC), read from a copy as 74_scoreboard_data.py does
+[sources.scoreboard]
+driver = "access"
+path = 'E:\scoreboard_copy\OLMSDB_copy.mdb'
+copy_first = true

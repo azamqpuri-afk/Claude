@@ -415,7 +415,8 @@ def test_edits_detected_between_audits(env):
     store.set_state(con, "edit_snapshot", None)
     con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
     audit.run(con, cfg, END)                                           # first run: snapshot only
-    doc, item = con.execute("SELECT doc_no, item_code FROM store_issues WHERE qty > 2 AND doc_date BETWEEN '2026-07-01' AND '2026-09-01' LIMIT 1").fetchone()
+    doc, item = con.execute("""SELECT doc_no, item_code FROM store_issues
+                               WHERE qty > 2 AND doc_date BETWEEN '2026-07-01' AND '2026-09-01' LIMIT 1""").fetchone()
     con.execute("UPDATE store_issues SET qty = qty + 1 WHERE doc_no = ? AND item_code = ?", (doc, item))
     d, loom = con.execute("SELECT prod_date, loom_code FROM loom_production WHERE prod_date BETWEEN '2026-09-01' AND '2026-09-20' LIMIT 1").fetchone()
     con.execute("UPDATE loom_production SET meters = meters + 40 WHERE prod_date = ? AND loom_code = ?", (d, loom))
@@ -459,3 +460,11 @@ def test_loom_monitor_second_source(env):
     assert set(found) == {"LOOM-15", "LOOM-22"}
     assert "%)" in found["LOOM-15"].title and "-" in found["LOOM-15"].title.split("(")[-1]
     assert "+" in found["LOOM-22"].title.split("(")[-1]
+
+
+def test_csv_source(tmp_path):
+    (tmp_path / "exp").mkdir()
+    (tmp_path / "exp" / "scb_2026-10-01.csv").write_text("LOOM NO,DATE,TOTAL METERS\n7,2026-10-01,210.5\n8,2026-10-01,190\n")
+    (tmp_path / "exp" / "scb_2026-10-02.csv").write_bytes("LOOM NO,DATE,TOTAL METERS\n7,2026-10-02,205\n".encode("utf-8-sig"))
+    con = erp.csv_connection({"files": "exp/*.csv", "table": "readings"}, tmp_path)
+    assert con.execute("SELECT COUNT(*), SUM(TOTAL_METERS) FROM readings").fetchone() == (3, 605.5)

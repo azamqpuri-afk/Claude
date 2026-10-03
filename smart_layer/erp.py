@@ -102,6 +102,8 @@ def connect(erp_cfg, base_dir="."):
     if driver == "mssql":
         import pyodbc
         return pyodbc.connect(erp_cfg["dsn"], readonly=True), "qmark"
+    if driver == "csv":                              # exported files (many scoreboard / sensor vendors only export CSV)
+        return csv_connection(erp_cfg, base_dir), "named"
     if driver == "access":                           # MS Access .mdb / .accdb (Windows, Access ODBC driver)
         import pyodbc
         p = Path(erp_cfg["path"])
@@ -113,7 +115,34 @@ def connect(erp_cfg, base_dir="."):
                               database=erp_cfg["database"], port=int(erp_cfg.get("port", 3306)))
         con.cursor().execute("SET SESSION TRANSACTION READ ONLY")
         return con, "pyformat"
-    raise MappingError(f"unsupported driver '{driver}' (sqlite, oracle, postgres, mssql, mysql, access)")
+    raise MappingError(f"unsupported driver '{driver}' (sqlite, oracle, postgres, mssql, mysql, access, csv)")
+
+
+def csv_connection(src_cfg, base_dir="."):
+    """Load CSV files (a folder / pattern) into an in-memory table so the mapping's SELECT can read them.
+    [sources.x] driver = "csv", files = 'C:\\scoreboard\\export\\*.csv', table = "readings" (default "data")."""
+    import csv
+    import glob
+    pattern = str(src_cfg["files"])
+    if not Path(pattern).is_absolute():
+        pattern = str(Path(base_dir) / pattern)
+    table = re.sub(r"\W", "_", src_cfg.get("table", "data"))
+    rows, cols = [], []
+    for f in sorted(glob.glob(pattern)):
+        from .config import read_text_any
+        reader = csv.DictReader(read_text_any(f).splitlines(), delimiter=src_cfg.get("delimiter", ","))
+        for r in reader:
+            for k in r:
+                if k and k not in cols:
+                    cols.append(k)
+            rows.append(r)
+    con = sqlite3.connect(":memory:")
+    safe = [re.sub(r"\W", "_", c.strip()) for c in cols] or ["empty"]
+    con.execute(f"CREATE TABLE {table} ({', '.join(safe)})")
+    if cols:
+        con.executemany(f"INSERT INTO {table} VALUES ({', '.join('?' * len(cols))})",
+                        [[(r.get(c) or None) for c in cols] for r in rows])
+    return con
 
 
 def bind(sql, params, style):

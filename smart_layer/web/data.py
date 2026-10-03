@@ -84,7 +84,7 @@ def build(con, cfg, as_of=None):
                   "days": round(r["days"], 1) if r["days"] is not None else None,
                   "to_come": round(r["to_come"]) if r["to_come"] is not None else None, "rate": round(r["rate"]),
                   "backup": (r["backup"] or {}).get("beam"), "over": r["over"],
-                  "alert": bool(r["days"] is not None and r["days"] <= float(bt["warn_days"]) and not r["backup"])}
+                  "alert": bool(r["days"] is not None and r["days"] <= float(bt["warn_days"]) and not r["backup"] and not r["over"])}
                  for r in beams_mod.beams_on_looms(con, cfg, as_of)]
 
     return {

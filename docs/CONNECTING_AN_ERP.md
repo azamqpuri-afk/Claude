@@ -19,6 +19,12 @@ Ask the ERP vendor or the mill's IT person for read access, then find where each
 | `account_balances` | Balance per account (usually a `GROUP BY` over the ledger) |
 | `looms` | Loom master |
 | `loom_production` | Production per loom per shift |
+| `contracts` | Contracts / sales orders with construction (ends, picks, width, yarns, counts, rates) |
+| `yarn_movements` | Yarn gate passes: from / to parties, to / from sizers, sized beams in, issues to looms |
+| `fabric_dispatches` | Fabric gate passes out to parties and returns |
+| `beams` | Beams now: on looms (set length, woven), sized and waiting, empty, at sizers |
+| `beam_movements` | Beam gate passes and beams on / off looms |
+| `loom_monitor` | Optional: the loom monitoring system (scoreboard / sensors) - usually a separate source |
 
 `python -m smart_layer schema` prints every standard column with its meaning. Columns marked
 `NOT NULL` are required; the rest can be left out if the ERP doesn't have them.
@@ -41,6 +47,27 @@ Copy `mappings/demo_sqlite.toml` and replace each SELECT. Rules:
 - **Efficiency:** give `efficiency_pct` if the ERP calculates it, or `meters_at_100`
   (e.g. `rpm * shift_minutes / (ppi * 39.37)`) so it can be calculated.
 - Only `SELECT` / `WITH`, one statement per entity; anything else is refused.
+
+## Other sources (loom scoreboard, sensors, exported files)
+
+Some data lives outside the ERP - typically the loom monitoring system, which differs from vendor to vendor.
+Give it its own connection in `config.toml` and point the entity at it with `source`:
+
+```toml
+[sources.scoreboard]
+driver = "access"                 # access | sqlite | mssql | mysql | postgres | oracle | csv
+path = 'E:\scoreboard\OLMSDB.mdb'
+copy_first = true                 # read a copy - never lock the file the scoreboard program writes to
+```
+```toml
+[entities.loom_monitor]
+source = "scoreboard"
+sql = """SELECT ... AS read_date, ... AS loom_code, ... AS meters FROM <the vendor's table> WHERE ... >= :since"""
+```
+
+Each vendor's tables and formulas go in that SELECT (for example meters = picks x panels / (picks per inch x 39.37)).
+A vendor that only exports files: `driver = "csv"`, `files = 'C:\exports\*.csv'`, `table = "readings"`, then
+`SELECT ... FROM readings`. Looms are matched by loom code, or by the number in the loom name.
 
 ## 3. Test it
 

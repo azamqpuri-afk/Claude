@@ -29,26 +29,30 @@ ERP, can be connected with one mapping file.
 
 | Command | What you get |
 |---|---|
-| `audit` | Yesterday's entries checked across finance, store and weaving. Findings graded **ACTION** (do something today), **CONFIRMED** (definite data error), **WATCH** (unusual). Only new ACTION and CONFIRMED findings are pushed, each one once. `--month 2026-09` for a full monthly audit. |
-| `report stock` | Every item used in the last 60 days: out of stock / low (under one month of use) / in stock. |
-| `report zero` | Items that ran out since the last check: for a daily phone push. |
-| `report reorder` | Draft order list with last supplier, last rate and estimated value. Nothing is sent to suppliers. |
-| `report production` | Meters, efficiency and rejection per loom for a day, and looms with nothing entered. |
-| `report closing` | **Contract closing**: each party's yarn account per contract (received − returned − consumed = balance in bags and money). The whole method is the mill's own: divisor, bag size, closing counts, basis (dispatched or woven), who bears rejection, allowances, per-party and per-contract overrides, even the yarn-weight formula. |
-| `report pilferage` | **Yarn pilferage check**: weft issued vs weft needed for the fabric woven, suspicious entries (no production nearby, very large, keyed late or after hours), sizing loss per sizer. Yarn findings also join the daily audit. |
-| `serve` | **Owner dashboard** on the mill network (phone and PC): key figures, what needs attention, production and finance charts, contract closing, yarn flags, stock, looms, and an "Ask the ERP" chat. Password-protected. |
-| `dashboard` | The same dashboard saved as one HTML file (for sharing or demos; chat needs `serve`). |
-| `ask` | Questions in plain language, answered from the data, with the queries shown on request. |
+| `audit` | Yesterday's entries checked across finance, store, weaving, yarn, beams, fabric and the loom monitor. Graded **ACTION** (do something today), **CONFIRMED** (definite data error), **WATCH** (unusual). Only new ACTION and CONFIRMED findings are pushed, each once. `--month 2026-09` for a full monthly audit. |
+| `report production` / `value` | Meters, efficiency and rejection per loom; what the looms earned (rate per meter or per pick). |
+| `report stock` / `zero` / `reorder` | Store stock status, items that just ran out (push), draft order list. |
+| `report closing` | Contract closing: each party's yarn account, using the mill's own method. |
+| `report pilferage` | Weft issued vs needed per party and yarn, suspicious entries, sizing loss. |
+| `report beams` / `sizers` | Every beam on a loom with days to finish and its backup; empty beams with each sizer. |
+| `report yarn-stock` / `fabric-stock` | Yarn in hand and at sizers; fabric in the mill by grade with ageing. |
+| `report pnl` / `balances` / `parties` | Monthly P&L by head, balance summary, receivable / payable per party. |
+| `report store-recon` | Store consumption in the ledger vs what the store issued, month by month. |
+| `serve` / `dashboard` | Owner dashboard on phone and PC (password-protected), with "Ask the ERP" chat. |
+| `ask` | Questions in English, Urdu or Roman Urdu, answered from the data. |
 
-Audit checks include: unbalanced vouchers, trial balance, negative cash, backdated and
-future-dated vouchers, possible double payments, large payments, zero-quantity issue slips,
-negative stock, purchase-rate jumps, cheaper prices from other suppliers, the same part issued
-twice to one machine, the same supplier bill on two receipts, efficiency over 100%, production
-without a beam, high rejection, and looms with no production for longer than usual.
+Add `--csv` and/or `--pdf` to any report or the audit to save it in the output folder.
 
-Thresholds **learn each mill's own habits** (how late each voucher type is normally keyed, how
-often each loom is booked, which suppliers reuse bill numbers), so a flag means "unusual for this
-mill". Practices the owner confirms as normal go in `audit.dismiss` and stop being pushed.
+Audit checks include: unbalanced vouchers, trial balance, negative cash, backdated and future-dated vouchers,
+double payments, large payments; zero-quantity slips, negative stock, purchase-rate jumps, cheaper elsewhere,
+the same part issued twice, the same supplier bill twice; efficiency over 100%, production without a beam,
+high rejection, idle looms, a loom far from its usual output; suspicious weft issues and sizing loss; looms
+about to run out of beam with no backup, beams woven beyond their length, empty beams not back from sizers;
+negative fabric stock; entries edited or deleted after saving; ERP production vs the loom monitor.
+
+Thresholds **learn each mill's own habits**, and every method (contract closing, rejection, efficiency,
+shrinkage, warning days) is the mill's own setting. See [docs/FEATURE_COVERAGE.md](docs/FEATURE_COVERAGE.md)
+for how each of Dost Textiles' original scripts maps to the product (in the repository).
 
 ## Try it now on the demo mill
 
@@ -64,6 +68,7 @@ python -m smart_layer -c config.demo.toml audit
 python -m smart_layer -c config.demo.toml report production
 python -m smart_layer -c config.demo.toml report closing
 python -m smart_layer -c config.demo.toml report pilferage
+python -m smart_layer -c config.demo.toml report beams --pdf
 python -m smart_layer -c config.demo.toml serve          # then open http://localhost:8080
 python -m smart_layer -c config.demo.toml ask "which loom had the highest rejection last week?"   # needs ANTHROPIC_API_KEY
 ```

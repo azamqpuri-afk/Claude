@@ -15,6 +15,8 @@ Ask the mill owner or their IT person:
 | Can the ERP vendor / IT create a **read-only** database user? | Smart Layer never needs write access. |
 | A list of the ERP's tables or views for: items, stock, GRN, issue slips, ledger, looms, production, contracts, yarn gate passes, fabric gate passes | Needed to write the mapping (one day of work for a new ERP; minutes if the ERP is already mapped). |
 | How do they close contracts? (divisor 800/840, bag weight, who bears rejection, closing counts per yarn) | Goes into the closing settings - the product follows the mill's own method. |
+| Do they track beams in the ERP (sized beams in, beams on/off looms, empty beams to sizers)? | Enables days-to-finish, backup alerts and the sizer ledger. |
+| Is there a loom monitoring system (scoreboard / sensors)? Which vendor, and does it keep a database or export files? | Optional second source - ERP production checked against the looms' own counts. |
 | Who should get phone alerts? | Owner / GM install the free **ntfy** app. |
 
 **If the ERP is new to you:** get read access first (or a backup copy), write `mappings/<erp>.toml`

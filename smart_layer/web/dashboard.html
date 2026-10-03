@@ -120,7 +120,7 @@ td.nowrap { white-space: nowrap; }
   <section class="grid2">
     <div class="card"><h2>Meters woven per day</h2><p class="hint">Last 30 days, all looms</p>
       <div class="chart" id="cMeters"></div></div>
-    <div class="card"><h2>Weaving efficiency %</h2><p class="hint">Meter-weighted, last 30 days</p>
+    <div class="card"><h2>Weaving efficiency %</h2><p class="hint">Meters ÷ meters at 100%, last 30 days</p>
       <div class="chart" id="cEff"></div></div>
   </section>
 
@@ -321,7 +321,7 @@ function render() {
   $("#day").value = D.as_of;
   const tiles = [
     ["Meters woven", num(k.meters), `${k.looms} looms`],
-    ["Efficiency", k.eff == null ? "–" : num(k.eff, 1) + "%", "meter-weighted"],
+    ["Efficiency", k.eff == null ? "–" : num(k.eff, 1) + "%", "meters ÷ meters at 100%"],
     ["Rejection", k.rej == null ? "–" : num(k.rej, 1) + "%", "of meters woven"],
     ["Needs action", num(k.action), `${num(k.confirmed)} confirmed errors`],
     ["Yarn flags", num(k.yarn_flags), "issue days to check"],
