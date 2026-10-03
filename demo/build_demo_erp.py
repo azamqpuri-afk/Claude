@@ -91,6 +91,10 @@ def build(out, end):
     if out.exists():
         out.unlink()
     db = sqlite3.connect(out)
+    # A marker so the product recognises its own fictional demo data and allows it without a licence; a real ERP
+    # copy renamed to demo_erp.db will not have it, so it still needs a licence (smart_layer/licence.py is_demo).
+    db.executescript("CREATE TABLE _smartlayer_demo (token TEXT);")
+    db.execute("INSERT INTO _smartlayer_demo VALUES ('Sitara-Weaving-demo-v1')")
     db.executescript("""
         CREATE TABLE inv_item_master (itm_id TEXT PRIMARY KEY, itm_desc TEXT, uom_cd TEXT, grp_cd TEXT);
         CREATE TABLE inv_opening (itm_id TEXT, qty REAL);

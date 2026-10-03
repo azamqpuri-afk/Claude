@@ -39,8 +39,8 @@ def check_select(sql):
 class Mapping:
     def __init__(self, path):
         self.path = Path(path)
-        with open(self.path, "rb") as f:
-            data = tomllib.load(f)
+        from .secret import read_mapping_text    # sealed <name>.map in the product, plain <name>.toml in dev
+        data = tomllib.loads(read_mapping_text(self.path))
         meta = data.get("mapping", {})
         self.name = meta.get("name", self.path.stem)
         self.notes = meta.get("notes", "")

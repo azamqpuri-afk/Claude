@@ -33,3 +33,10 @@ python_path.txt
 *.pem
 SmartLayerKeys/
 license*.key
+
+# protected build (generated; never commit the baked key or sealed mappings)
+smart_layer/_buildkey.py
+mapping_key.txt
+mappings/*.map
+build/
+*.exe

@@ -139,9 +139,27 @@ def licence_path(cfg):
     return cfg.path(cfg["licence"].get("file", "license.key"))
 
 
+DEMO_TOKEN = "Sitara-Weaving-demo-v1"
+
+
 def is_demo(cfg):
+    """True only for the bundled fictional demo data - checked by a marker, not just the file name, so a real
+    ERP copy renamed to demo_erp.db does not slip past the licence."""
     e = cfg["erp"]
-    return e.get("driver") == "sqlite" and Path(str(e.get("path", ""))).name == "demo_erp.db"
+    if e.get("driver") != "sqlite":
+        return False
+    p = cfg.path(str(e.get("path", "")))
+    if not Path(p).exists():
+        return False
+    import sqlite3
+    try:
+        con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
+        try:
+            return con.execute("SELECT token FROM _smartlayer_demo").fetchone()[0] == DEMO_TOKEN
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return False
 
 
 def status(cfg, today=None):

@@ -74,6 +74,22 @@ def cmd_issue(args):
     print(f"  code : {code}")
 
 
+def cmd_mapkey(args):
+    """The key that seals the mapping SQL in the sold package. Keep it with the private key and back it up."""
+    from cryptography.fernet import Fernet
+    path = Path(args.mapkey_file)
+    if path.exists() and not args.force:
+        print(f"Mapping key already exists: {path}")
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(Fernet.generate_key().decode("ascii") + "\n", encoding="ascii")
+        print(f"Mapping key created: {path}  - BACK IT UP with your private key, never share it.")
+    print("For a local protected build:  set SMARTLAYER_MAPPING_KEY to the line in that file.")
+    print("For GitHub builds: add it as the repository secret SMARTLAYER_MAPPING_KEY.")
+    print("  key:", path.read_text(encoding="ascii").strip())
+    return 0
+
+
 def cmd_show(args):
     text = Path(args.licence).read_text(encoding="ascii") if Path(args.licence).exists() else args.licence
     parts = text.strip().split(".")
@@ -99,10 +115,13 @@ def main(argv=None):
     s.add_argument("--machine", required=True, help='server ID from the mill, or "*" for any server')
     s.add_argument("--expires", required=True, help="YYYY-MM-DD")
     s.add_argument("--out")
+    mk = sub.add_parser("mapkey")
+    mk.add_argument("--mapkey-file", default=str(DEFAULT_KEY.with_name("mapping_key.txt")))
+    mk.add_argument("--force", action="store_true")
     sh = sub.add_parser("show")
     sh.add_argument("licence")
     a = p.parse_args(argv)
-    return {"init": cmd_init, "issue": cmd_issue, "show": cmd_show}[a.cmd](a) or 0
+    return {"init": cmd_init, "issue": cmd_issue, "mapkey": cmd_mapkey, "show": cmd_show}[a.cmd](a) or 0
 
 
 if __name__ == "__main__":

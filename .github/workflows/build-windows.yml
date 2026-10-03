@@ -1,0 +1,82 @@
+name: Build Windows installer
+
+# Builds the protected installer SmartLayer-Setup-<version>.exe:
+#   * the code is compiled to machine code (Nuitka) - no readable .py files ship
+#   * the ERP mapping SQL is sealed (.map) with the SMARTLAYER_MAPPING_KEY repository secret
+#   * the licence check and the mapping key live inside the .exe
+# Run it from the GitHub website: Actions -> "Build Windows installer" -> Run workflow (pick the version),
+# then download the installer from that run's Artifacts. Or push a tag like v0.5.0.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version number, e.g. 0.5.0"
+        required: true
+        default: "0.5.0"
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Work out the version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then V="${GITHUB_REF_NAME#v}"; else V="${{ inputs.version }}"; fi
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      - name: Install build tools and runtime packages
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install nuitka oracledb pyodbc pymysql "psycopg[binary]"
+
+      - name: Check the licence public key is present
+        shell: bash
+        run: |
+          test -f smart_layer/licence_key.pub || { echo "::error::smart_layer/licence_key.pub is missing. Run 'python tools/issue_license.py init' on your computer and commit the .pub file."; exit 1; }
+
+      - name: Bake in the mapping key and seal the mappings
+        shell: bash
+        env:
+          SMARTLAYER_MAPPING_KEY: ${{ secrets.SMARTLAYER_MAPPING_KEY }}
+        run: |
+          test -n "$SMARTLAYER_MAPPING_KEY" || { echo "::error::Add the repository secret SMARTLAYER_MAPPING_KEY (python tools/issue_license.py mapkey shows it)."; exit 1; }
+          printf 'MAPPING_KEY = "%s"\n' "$SMARTLAYER_MAPPING_KEY" > smart_layer/_buildkey.py
+          python tools/pack_mappings.py
+          rm -f mappings/*.toml                        # ship only the sealed .map, never the plain SQL
+
+      - name: Compile with Nuitka (standalone)
+        run: |
+          python -m nuitka --standalone --assume-yes-for-downloads --output-filename=SmartLayer.exe `
+            --output-dir=build `
+            --include-package=smart_layer `
+            --include-package-data=smart_layer `
+            --include-data-dir=mappings=mappings `
+            --include-data-dir=demo=demo `
+            --include-data-dir=docs=docs `
+            --include-data-files=config.example.toml=config.example.toml `
+            --include-data-files=config.demo.toml=config.demo.toml `
+            --include-package=oracledb --include-package=pyodbc --include-package=pymysql --include-package=psycopg `
+            --include-package=reportlab --include-package=anthropic `
+            app_main.py
+
+      - name: Build the installer with Inno Setup
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" /DMyVersion=${{ steps.ver.outputs.version }} installer\SmartLayer.iss
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: SmartLayer-Setup-${{ steps.ver.outputs.version }}
+          path: dist/SmartLayer-Setup-*.exe
+          if-no-files-found: error

@@ -91,8 +91,20 @@ def test_install_from_code_and_file(keys, mill, tmp_path):
 
 
 def test_demo_needs_no_licence(tmp_path):
-    (tmp_path / "config.toml").write_text('[erp]\ndriver = "sqlite"\npath = "demo/demo_erp.db"\nmapping = "x.toml"\n')
+    import sqlite3
+    db = tmp_path / "demo_erp.db"
+    sqlite3.connect(db).executescript(
+        "CREATE TABLE _smartlayer_demo (token TEXT); INSERT INTO _smartlayer_demo VALUES ('Sitara-Weaving-demo-v1');")
+    (tmp_path / "config.toml").write_text('[erp]\ndriver = "sqlite"\npath = "demo_erp.db"\nmapping = "x.toml"\n')
     assert licence.status(config.load(tmp_path / "config.toml")).state == "demo"
+
+
+def test_renamed_real_db_is_not_demo(tmp_path):
+    import sqlite3
+    db = tmp_path / "demo_erp.db"                       # a real ERP copy renamed to look like the demo
+    sqlite3.connect(db).execute("CREATE TABLE sales (x)")
+    (tmp_path / "config.toml").write_text('[erp]\ndriver = "sqlite"\npath = "demo_erp.db"\nmapping = "x.toml"\n')
+    assert licence.status(config.load(tmp_path / "config.toml")).state == "missing"
 
 
 def test_cli_stops_without_licence(keys, mill, capsys):

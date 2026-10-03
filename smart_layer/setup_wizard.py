@@ -203,8 +203,12 @@ class Wizard:
         if env_path.exists():
             from .config import read_text_any
             old = dict(ln.split("=", 1) for ln in read_text_any(env_path).splitlines() if "=" in ln and not ln.startswith("#"))
-        env_path.write_text("\n".join(f"{k}={v}" for k, v in {**old, **self.env}.items()) + "\n", encoding="utf-8")
-        self.out(f"\nSaved {cfg_path.name} and {env_path.name} (passwords only in .env).")
+        from .secret import seal_secret            # on Windows: bind credentials to this server; elsewhere no-op
+        sealed = {k: (seal_secret(v) if k in ("ERP_PASSWORD", "DASHBOARD_PASSWORD", "ANTHROPIC_API_KEY") else v)
+                  for k, v in self.env.items()}
+        env_path.write_text("\n".join(f"{k}={v}" for k, v in {**old, **sealed}.items()) + "\n", encoding="utf-8")
+        note = " (passwords sealed to this server)" if os.name == "nt" else ""
+        self.out(f"\nSaved {cfg_path.name} and {env_path.name} - passwords only in .env{note}.")
         return cfg_path
 
 

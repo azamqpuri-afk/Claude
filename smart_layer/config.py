@@ -58,7 +58,14 @@ def _load_dotenv(path):
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             k, v = line.split("=", 1)
-            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+            v = v.strip().strip('"').strip("'")
+            if v.startswith("DPAPI:"):          # a secret sealed to this machine (see smart_layer/secret.py)
+                from .secret import open_secret
+                try:
+                    v = open_secret(v)
+                except OSError as e:
+                    raise SystemExit(f"{k.strip()}: {e}  Re-run setup on this server to enter it again.")
+            os.environ.setdefault(k.strip(), v)
 
 
 def _expand(value):
