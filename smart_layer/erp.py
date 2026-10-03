@@ -55,6 +55,9 @@ class Mapping:
 def connect(erp_cfg, base_dir="."):
     """Open a connection to the ERP database. Drivers are imported only when used."""
     driver = erp_cfg.get("driver", "sqlite").lower()
+    if driver != "sqlite" and "password" in erp_cfg and not erp_cfg["password"]:
+        raise SystemExit("The ERP password is empty: put ERP_PASSWORD=... in the .env file next to config.toml "
+                         "(check it is named .env, not .env.txt).")
     if driver == "sqlite":
         p = Path(erp_cfg["path"])
         p = p if p.is_absolute() else Path(base_dir) / p
