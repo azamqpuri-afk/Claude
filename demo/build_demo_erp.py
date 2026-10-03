@@ -247,7 +247,7 @@ def build(out, end):
 
 YARNS = [("Y60", "60/1 CTN", 60), ("Y40", "40/1 CTN", 40), ("Y20", "20/1 CTN", 20)]
 CONTRACTS = [  # order, party, sort, epi, ppi, width, yarn, ordered m, rate/m, sizer
-    ("CON-39", "C02", "Q-4040", 110, 80, 67, "Y40", 60_000, 31, "S01"),
+    ("CON-39", "C02", "Q-2020", 60, 56, 98, "Y20", 60_000, 27, "S01"),
     ("CON-40", "C01", "Q-6060", 92, 88, 63, "Y60", 180_000, 38, "S01"),
     ("CON-41", "C02", "Q-4040", 110, 80, 67, "Y40", 160_000, 31, "S01"),
     ("CON-42", "C03", "Q-2020", 60, 56, 98, "Y20", 200_000, 27, "S02"),
@@ -292,8 +292,8 @@ def build_yarn(db, cprod, cfresh, start, end):
         return threads * width * 1.0936 / 840 / cnt
 
     # CON-39: an old contract, closed and squared up before the demo period
-    mv("OPN", start, "CON-39", "C02", "Y40", 12 * BAG_KG)
-    mv("YRET", start + timedelta(days=5), "CON-39", "C02", "Y40", 12 * BAG_KG)
+    mv("OPN", start, "CON-39", "C02", "Y20", 12 * BAG_KG)
+    mv("YRET", start + timedelta(days=5), "CON-39", "C02", "Y20", 12 * BAG_KG)
 
     for o, bp, sort, epi, ppi, w, y, om, rate, sizer in CONTRACTS[1:]:
         weft_kg = lb_per_m(ppi, w, count[y]) * 0.45359237
@@ -334,7 +334,7 @@ def build_yarn(db, cprod, cfresh, start, end):
                 ids["gp"] += 1
                 db.execute("INSERT INTO fab_gatepass VALUES (?,?,?,?,?,?,?)",
                            (f"FG-{ids['gp']}", d.isoformat(), o, "I", round(rnd.uniform(150, 400), 1), 0, rate))
-    mv("WFI", end - timedelta(days=12), "CON-39", None, "Y40", 8 * BAG_KG, hour=23)
+    mv("WFI", end - timedelta(days=12), "CON-39", None, "Y20", 8 * BAG_KG, hour=23)
 
 
 if __name__ == "__main__":

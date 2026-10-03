@@ -298,3 +298,31 @@ def test_server_will_not_open_to_network_without_password(env):
             web_server.serve(cfg)
     finally:
         cfg.data["serve"] = {}
+
+
+def test_pilferage_compares_per_party_and_yarn(env):
+    """Weft booked to one contract but woven on another contract of the same party and yarn is not excess."""
+    cfg, con = env
+    con.execute("""INSERT INTO contracts SELECT 'CON-41B', party_code, party_name, contract_date, quality, ends_per_inch,
+                   picks_per_inch, width_in, warp_yarn, warp_count, weft_yarn, weft_count, 0, rate_per_meter, yarn_owner
+                   FROM contracts WHERE contract_no = 'CON-41'""")
+    con.execute("UPDATE yarn_movements SET contract_no = 'CON-41B' WHERE contract_no = 'CON-41' AND move_type = 'to_looms'")
+    try:
+        _, weekly, _, _ = pilferage.analyse(con, cfg, END, END)
+        row = [w for w in weekly if "CON-41" in w[0]][0]
+        assert "CON-41B" in row[0] and row[4] == pytest.approx(519, abs=60)       # same account, same excess as before
+        cfg.data["pilferage"] = {"compare_by": "contract"}
+        _, weekly_c, _, _ = pilferage.analyse(con, cfg, END, END)
+        by = {w[0]: w for w in weekly_c}
+        assert by["CON-41B"][3] == 0 and by["CON-41"][2] <= 50                   # contract level: issues and fabric apart
+    finally:
+        cfg.data["pilferage"] = {}
+        con.execute("UPDATE yarn_movements SET contract_no = 'CON-41' WHERE contract_no = 'CON-41B'")
+        con.execute("DELETE FROM contracts WHERE contract_no = 'CON-41B'")
+
+
+def test_sync_keeps_full_history_for_yarn_and_fabric(env):
+    _, con = env
+    since = dict(con.execute("SELECT entity, since FROM sync_log"))
+    assert since["yarn_movements"] == "1900-01-01" and since["fabric_dispatches"] == "1900-01-01"
+    assert since["loom_production"] > "2025-01-01"

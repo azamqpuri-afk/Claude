@@ -56,8 +56,11 @@ def create(con):
     con.commit()
 
 
-def sync(con, erp, history_days, entities=None, log=print):
-    since = date.today() - timedelta(days=int(history_days))
+FULL_HISTORY = ("yarn_movements", "fabric_dispatches")     # contract closing needs each contract's whole life
+
+
+def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HISTORY):
+    window = date.today() - timedelta(days=int(history_days))
     now = datetime.now().isoformat(sep=" ", timespec="seconds")
     result = {}
     for e in schema.ENTITIES:
@@ -66,6 +69,7 @@ def sync(con, erp, history_days, entities=None, log=print):
         if e.name not in erp.mapping.entities:
             log(f"  {e.name:<17} skipped (not in mapping)")
             continue
+        since = date(1900, 1, 1) if e.name in full_history else window
         rows = list(erp.fetch(e.name, since))
         with con:
             if e.date_column:

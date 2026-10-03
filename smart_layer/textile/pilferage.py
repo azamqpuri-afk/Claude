@@ -19,7 +19,8 @@ from .method import KG_PER_LB, Method
 
 DEFAULTS = {"lookback_days": 90, "window_days": 7, "excess_kg": 400, "excess_ratio": 1.3,
             "no_production_kg": 300, "no_production_days": 3, "large_issue_kg": 700,
-            "late_entry_days": 7, "work_start_hour": 6, "work_end_hour": 21, "sizing_loss_pct": 6}
+            "late_entry_days": 7, "work_start_hour": 6, "work_end_hour": 21, "sizing_loss_pct": 6,
+            "compare_by": "yarn"}
 
 
 def weft_kg_per_m(method, row):
@@ -38,52 +39,74 @@ def analyse(con, cfg, d0, d1):
     win = int(t["window_days"])
     start = d0 - timedelta(days=win + int(t["no_production_days"]))
     end_p = d1 + timedelta(days=int(t["no_production_days"]))
-    kgm = {}
+    # Weft is compared per yarn account (party + weft yarn group) by default: mills often book weft issues to one
+    # contract while the same yarn is woven on several contracts of that party. compare_by = "contract" is stricter.
+    by_contract = str(t.get("compare_by", "yarn")) == "contract"
+    cinfo = {}
     for row in con.execute("""SELECT contract_no, COALESCE(c.party_name, p.party_name), picks_per_inch, width_in, weft_yarn, weft_count
                               FROM contracts c LEFT JOIN parties p USING (party_code)"""):
-        kgm[row[0]] = (weft_kg_per_m(method, row), row[1])
-    issues = defaultdict(float)
+        cinfo[row[0]] = (weft_kg_per_m(method, row), row[1], method.group(method.contract_overrides(row[0]).get("weft_yarn", row[4])))
+
+    def account(cno, yarn=None):
+        k, party, wgroup = cinfo.get(cno, (None, None, None))
+        return (cno,) if by_contract else (party, method.group(yarn) if yarn is not None else wgroup)
+
+    issues, needed, woven = defaultdict(float), defaultdict(float), defaultdict(float)
     lines = defaultdict(list)
-    for d, cno, mt, kg, doc, ea, user in con.execute("""
-            SELECT move_date, contract_no, move_type, kg, doc_no, entered_at, entered_by FROM yarn_movements
+    members = defaultdict(set)
+    for d, cno, yarn, mt, kg, doc, ea, user in con.execute("""
+            SELECT move_date, contract_no, yarn_code, move_type, kg, doc_no, entered_at, entered_by FROM yarn_movements
             WHERE move_type IN ('to_looms', 'from_looms') AND move_date BETWEEN ? AND ?""", (start.isoformat(), d1.isoformat())):
-        issues[(cno, d)] += (kg or 0) * (1 if mt == "to_looms" else -1)
+        a = account(cno, yarn)
+        members[a].add(cno)
+        issues[(a, d)] += (kg or 0) * (1 if mt == "to_looms" else -1)
         if mt == "to_looms":
-            lines[(cno, d)].append((doc, kg or 0, ea, user))
-    prod = defaultdict(float)
+            lines[(a, d)].append((doc, kg or 0, ea, user, cno))
+    unknown = set()                                 # accounts where some woven contract has no weft per meter
     for cno, d, m in con.execute("""SELECT contract_no, prod_date, SUM(meters) FROM loom_production
                                     WHERE prod_date BETWEEN ? AND ? GROUP BY contract_no, prod_date""",
                                  (start.isoformat(), end_p.isoformat())):
-        prod[(cno, d)] = m or 0
+        a = account(cno)
+        members[a].add(cno)
+        woven[(a, d)] += m or 0
+        k = cinfo.get(cno, (None,))[0]
+        if k:
+            needed[(a, d)] += (m or 0) * k
+        else:
+            unknown.add(a)
 
     def days(a, b):
         return [(a + timedelta(days=i)).isoformat() for i in range((b - a).days + 1)]
 
+    def label(a):
+        cs = sorted(members[a], key=lambda x: str(x))
+        return ", ".join(str(c) for c in cs if c is not None) or "?"
+
     flags, weekly = [], []
-    for cno in sorted({c for c, _ in issues} | {c for c, _ in prod}, key=lambda x: str(x)):
-        k, party = kgm.get(cno, (None, None))
+    for a in sorted(members, key=lambda x: tuple(str(v) for v in x)):
+        party = cinfo.get(a[0], (None, None))[1] if by_contract else a[0]
         for d in days(d0, d1):
             dd = date.fromisoformat(d)
             w = days(dd - timedelta(days=win - 1), dd)
-            iss = sum(issues[(cno, x)] for x in w)
-            need = sum(prod[(cno, x)] for x in w) * k if k else None
+            iss = sum(issues[(a, x)] for x in w)
+            need = None if a in unknown else sum(needed[(a, x)] for x in w)
             if dd == d1 and (iss or need):
-                weekly.append([cno, party, round(iss), round(need) if need is not None else None,
+                weekly.append([label(a), party, round(iss), round(need) if need is not None else None,
                                round(iss - need) if need is not None else None])
-            L = lines.get((cno, d))
+            L = lines.get((a, d))
             if not L:
                 continue
             tot = sum(x[1] for x in L)
-            near = sum(prod[(cno, x)] for x in days(dd - timedelta(days=int(t["no_production_days"])),
-                                                    dd + timedelta(days=int(t["no_production_days"]))))
+            near = sum(woven[(a, x)] for x in days(dd - timedelta(days=int(t["no_production_days"])),
+                                                     dd + timedelta(days=int(t["no_production_days"]))))
             why = []
             if tot >= float(t["no_production_kg"]) and near == 0:
-                why.append(f"{tot:,.0f} kg issued but no production on this contract within {t['no_production_days']} days")
+                why.append(f"{tot:,.0f} kg issued but no production with this yarn within {t['no_production_days']} days")
             if tot >= float(t["large_issue_kg"]):
                 why.append(f"very large day: {tot:,.0f} kg issued")
             if need is not None and iss - need > float(t["excess_kg"]) and iss > float(t["excess_ratio"]) * max(need, 1):
                 why.append(f"last {win} days: {iss:,.0f} kg issued vs {need:,.0f} kg needed for fabric woven (+{iss - need:,.0f} kg)")
-            for doc, kg, ea, user in L:
+            for doc, kg, ea, user, cno in L:
                 if not ea:
                     continue
                 e = datetime.fromisoformat(ea)
@@ -92,7 +115,7 @@ def analyse(con, cfg, d0, d1):
                 if e.hour >= int(t["work_end_hour"]) or e.hour < int(t["work_start_hour"]):
                     why.append(f"issue {doc} keyed at {e:%H:%M}, outside working hours (by {user or '?'})")
             if why:
-                flags.append(dict(contract=cno, party=party, date=d, kg=tot, reasons=list(dict.fromkeys(why))))
+                flags.append(dict(contract=label(a), party=party, date=d, kg=tot, reasons=list(dict.fromkeys(why))))
 
     # Sizing loss per sizer and contract over the contract's whole history (so beams are matched with the yarn
     # they were made from); yarn sent after the last sized beams came back is still at the sizer and left out.
@@ -150,7 +173,7 @@ def pilferage(con, cfg, as_of=None):
                f"({len(flags)} issue days) to check, "
                f"{sum(1 for s in sizing if s['loss_pct'] > float(t['sizing_loss_pct']))} sizer/contract with loss over "
                f"{t['sizing_loss_pct']}%."]
-    summary += [f"  Contract {w[0]} ({w[1]}): last {t['window_days']} days {w[2]:,} kg weft issued vs {w[3]:,} kg needed (+{w[4]:,} kg)"
+    summary += [f"  Contracts {w[0]} ({w[1]}): last {t['window_days']} days {w[2]:,} kg weft issued vs {w[3]:,} kg needed (+{w[4]:,} kg)"
                 for w in over]
     return Report(f"Yarn pilferage check - {as_of:%d-%b-%Y}", ["Check", "Date", "Contract", "Party / sizer", "Kg", "Why"],
                   rows, summary)

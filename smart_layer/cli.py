@@ -53,8 +53,9 @@ def cmd_check(cfg, args):
 
 def cmd_sync(cfg, args):
     e = _open_erp(cfg)
-    print(f"Syncing from {e.mapping.name} (last {cfg['sync']['history_days']} days of dated records)")
-    store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities)
+    print(f"Syncing from {e.mapping.name} (last {cfg['sync']['history_days']} days; full history for yarn and fabric)")
+    store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities,
+               full_history=cfg["sync"].get("full_history", store.FULL_HISTORY))
     return 0
 
 
