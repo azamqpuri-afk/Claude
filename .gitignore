@@ -8,6 +8,7 @@ service_account*.json
 data/
 output/
 demo/demo_erp.db
+demo/demo_scoreboard.db
 __pycache__/
 *.pyc
 .pytest_cache/
