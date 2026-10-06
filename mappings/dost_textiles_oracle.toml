@@ -63,6 +63,10 @@ SELECT a.ac AS account_code, a.an AS account_name,
             WHEN a.ac LIKE '2001%'   THEN 'supplier'
             WHEN a.ac LIKE '35%'     THEN 'revenue'
             WHEN a.ac LIKE '40%' OR a.ac LIKE '45%' OR a.ac LIKE '55%' THEN 'expense'
+            WHEN a.ac LIKE '10%'     THEN 'equity'      -- capital, reserves, partners' drawing
+            WHEN a.ac LIKE '25%'     THEN 'asset'       -- fixed assets: plant, land, buildings, vehicles
+            WHEN a.ac LIKE '30%'     THEN 'asset'       -- other current assets: stores, advances, taxes
+            WHEN a.ac LIKE '20%'     THEN 'liability'   -- sales tax, accrued and other payables
             ELSE 'other' END AS account_group,
        CASE WHEN a.ac LIKE '3003%' OR a.ac LIKE '2001%' THEN a.ac END AS party_code,
        h.an AS head_name
