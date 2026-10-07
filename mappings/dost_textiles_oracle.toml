@@ -125,6 +125,8 @@ SELECT TO_CHAR(c.cont_no) AS contract_no, c.party_code AS party_code, a.an AS pa
        c.warp_thread AS ends_per_inch, c.weft_thread AS picks_per_inch, c.width AS width_in,
        TO_CHAR(c.warp_yarn_code) AS warp_yarn, wy.count AS warp_count,
        TO_CHAR(c.weft_yarn_code) AS weft_yarn, fy.count AS weft_count,
+       -- construction, so beams of the same cloth share a learned shrinkage (beam report) and rejection pattern
+       c.warp_thread || 'x' || c.weft_thread || ' ' || wy.count || '/' || fy.count || ' ' || c.width AS quality,
        c.cont_qty AS ordered_meters, c.conver_per_meter AS rate_per_meter, 'party' AS yarn_owner
 FROM dostex.contm c LEFT JOIN dostex.ach a ON a.ac = c.party_code
 LEFT JOIN dostex.yarn wy ON wy.ycode = c.warp_yarn_code LEFT JOIN dostex.yarn fy ON fy.ycode = c.weft_yarn_code
