@@ -15,45 +15,54 @@ uses contracts of the same quality, then the mill's average, then [beams] defaul
 Settings in config [beams].
 """
 
+import statistics
 from collections import defaultdict
 from datetime import date, timedelta
 
 from ..reports import Report
 
 DEFAULTS = {"warn_days": 15, "urgent_days": 5, "rate_days": 30, "ends_tolerance": 5, "default_shrinkage_pct": 7,
-            "sizer_return_days": 30, "own_beam_sizers": []}
+            "sizer_return_days": 30, "own_beam_sizers": [],
+            "shrink_min_pct": 1, "shrink_max_pct": 15}   # real shrinkage is ~1-12% by quality; outside = cut/on-loom beam
 
 
 def settings(cfg):
     return {**DEFAULTS, **cfg["beams"]}
 
 
-def learned_shrinkage(con, default_pct):
-    """{contract: shrinkage}, {quality: shrinkage}, mill shrinkage - from beams taken off finished."""
-    per_c = defaultdict(lambda: [0.0, 0.0])
+def learned_shrinkage(con, default_pct, lo=0.01, hi=0.20):
+    """Shrinkage (warp length -> fabric) learned from genuinely finished beams: the median per contract, per
+    quality (construction), and mill-wide. Beams still on a loom, and any outside the sane band `lo`..`hi`
+    (a half-woven or cut beam looks like huge 'shrinkage'), are left out - they are not finished shrinkage."""
+    per_c = defaultdict(list)
     for cno, length, woven in con.execute("""
             SELECT m.contract_no, COALESCE(m.length_m, s.length_m), m.woven_m FROM beam_movements m
             LEFT JOIN (SELECT beam_no, set_no, MAX(length_m) length_m FROM beam_movements WHERE move_type = 'sized_received'
                        GROUP BY beam_no, set_no) s ON s.beam_no = m.beam_no AND s.set_no = m.set_no
-            WHERE m.move_type = 'from_loom_finished' AND m.woven_m > 0"""):
-        if length and length > 0:
-            per_c[cno][0] += length
-            per_c[cno][1] += woven
-    by_c = {c: 1 - w / ln for c, (ln, w) in per_c.items() if ln > 0 and 0 < w <= ln}
+            WHERE m.move_type = 'from_loom_finished' AND m.woven_m > 0
+              AND NOT EXISTS (SELECT 1 FROM beams b WHERE b.status = 'on_loom'
+                              AND b.beam_no = m.beam_no AND b.set_no = m.set_no)"""):
+        if length and length > 0 and woven and woven > 0:
+            s = 1 - woven / length
+            if lo <= s <= hi:
+                per_c[cno].append(s)
+    by_c = {c: statistics.median(v) for c, v in per_c.items() if v}
     qual = {c: q for c, q in con.execute("SELECT contract_no, quality FROM contracts")}
-    by_q = defaultdict(list)
-    for c, s in by_c.items():
-        by_q[qual.get(c)].append(s)
-    tot_l = sum(v[0] for c, v in per_c.items() if c in by_c)
-    tot_w = sum(v[1] for c, v in per_c.items() if c in by_c)
-    mill = 1 - tot_w / tot_l if tot_l else float(default_pct) / 100
-    return by_c, {q: sum(v) / len(v) for q, v in by_q.items()}, mill, qual
+    by_qvals = defaultdict(list)
+    for c, v in per_c.items():
+        if qual.get(c):                              # skip contracts with no construction, so they fall back to mill
+            by_qvals[qual[c]].extend(v)
+    by_q = {q: statistics.median(v) for q, v in by_qvals.items() if v}
+    allv = [s for v in per_c.values() for s in v]
+    mill = statistics.median(allv) if allv else float(default_pct) / 100
+    return by_c, by_q, mill, qual
 
 
 def beams_on_looms(con, cfg, as_of=None):
     as_of = as_of or date.today()
     t = settings(cfg)
-    by_c, by_q, mill, qual = learned_shrinkage(con, t["default_shrinkage_pct"])
+    by_c, by_q, mill, qual = learned_shrinkage(con, t["default_shrinkage_pct"],
+                                               float(t["shrink_min_pct"]) / 100, float(t["shrink_max_pct"]) / 100)
     d = as_of.isoformat()
     since = (as_of - timedelta(days=int(t["rate_days"]))).isoformat()
     rate = {loom: (m or 0) / int(t["rate_days"]) for loom, m in con.execute(
