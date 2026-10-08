@@ -67,8 +67,10 @@ def beams_on_looms(con, cfg, as_of=None):
     t = settings(cfg)
     by_c, by_q, mill, qual = learned_shrinkage(con, t["default_shrinkage_pct"],
                                                float(t["shrink_min_pct"]) / 100, float(t["shrink_max_pct"]) / 100)
-    # The mill can pin shrinkage it knows (closed contracts are gone from the ERP, so learning can miss them):
-    #   [beams.shrinkage]        by construction/quality, e.g. "90x82 54/54 46" = 6
+    # Order of preference: (1) learned from this contract's finished beams, (2) learned from the same
+    # construction, (3) the mill's set rate by cloth, (4) by contract number, (5) the mill-wide average.
+    # So learned data is trusted first; the mill's set rates fill cloths with no finished history:
+    #   [beams.shrinkage]               by construction/quality, e.g. "90x82 54/54 46" = 6
     #   [beams.shrinkage_by_contract]   by contract number, e.g. "70" = 6
     set_q = {_norm(k): float(v) / 100 for k, v in t.get("shrinkage", {}).items()}
     set_c = {str(k): float(v) / 100 for k, v in t.get("shrinkage_by_contract", {}).items()}
@@ -86,12 +88,16 @@ def beams_on_looms(con, cfg, as_of=None):
             woven = con.execute("""SELECT SUM(meters) FROM loom_production WHERE loom_code = ? AND prod_date >= COALESCE(?, '0000')
                                    AND prod_date <= ? AND (beam_no = ? OR beam_no IS NULL)""", (loom, mounted, d, beam)).fetchone()[0] or 0
         qy = qual.get(cno)
-        if str(cno) in set_c:                        # the mill's own numbers win over learning
-            shrink = set_c[str(cno)]
-        elif _norm(qy) in set_q:
+        if cno in by_c:                              # 1. learned from this cloth's own finished beams
+            shrink = by_c[cno]
+        elif qy in by_q:                             # 2. learned from finished beams of the same construction
+            shrink = by_q[qy]
+        elif _norm(qy) in set_q:                     # 3. the mill's set rate by cloth
             shrink = set_q[_norm(qy)]
-        else:
-            shrink = by_c.get(cno, by_q.get(qy, mill))
+        elif str(cno) in set_c:                      # 4. the mill's set rate by contract number
+            shrink = set_c[str(cno)]
+        else:                                        # 5. the mill-wide average
+            shrink = mill
         to_come = max(0.0, (length or 0) * (1 - shrink) - woven) if length else None
         r = rate.get(loom, 0)
         since_entry = (as_of - date.fromisoformat(last_entry[loom])).days if last_entry.get(loom) else 0
