@@ -109,7 +109,7 @@ def test_renamed_real_db_is_not_demo(tmp_path):
 
 def test_cli_stops_without_licence(keys, mill, capsys):
     cfg_file = str(mill.path("config.toml"))
-    for cmd in (["sync"], ["report", "stock"], ["audit"], ["serve"]):
+    for cmd in (["sync"], ["report", "stock"], ["audit"]):   # serve/dashboard start regardless (licence added there)
         with pytest.raises(SystemExit) as e:
             cli.main(["--config", cfg_file, *cmd])
         assert "Licence" in str(e.value)
