@@ -284,8 +284,8 @@ def main(argv=None):
         print("\nTesting the connection to the ERP ...")
         return cmd_check(config.load(cfg_path), args)
     cfg = config.load(args.config)
-    if args.cmd in ("sync", "report", "audit", "ask", "dashboard", "serve"):
-        from .licence import require
+    if args.cmd in ("sync", "report", "audit", "ask"):   # the dashboard (serve) starts regardless, so the
+        from .licence import require                      # licence can be installed from its own Licence screen
         require(cfg)
     return {"check": cmd_check, "sync": cmd_sync, "report": cmd_report, "audit": cmd_audit, "ask": cmd_ask, "serve": cmd_serve,
             "dashboard": cmd_dashboard,
