@@ -158,3 +158,39 @@ SELECT dt AS read_date, 'L' || printf('%02d', loom_no) AS loom_code, mtrs AS met
        stops AS stops
 FROM olms_day WHERE dt >= :since
 """
+
+# Payroll and the gate register (demo HR tables), so the Payroll and Gate Passes tabs have data.
+[entities.employees]
+sql = """
+SELECT e.emp_cd AS emp_code, e.emp_nm AS name, e.father AS father_name, e.cnic AS cnic,
+       (SELECT dept_nm FROM hr_dept WHERE dept_cd = e.dept_cd) AS department, NULL AS sub_department,
+       e.sec AS section, e.desg AS designation, e.wage_type AS job_type, NULL AS shift, NULL AS segment,
+       e.doj AS date_joining, e.status AS status, e.wage_type AS wage_type, e.salary AS monthly_salary,
+       NULL AS per_day_wage, NULL AS bank, e.bank_ac AS bank_account, e.mobile AS mobile,
+       NULL AS eobi_no, NULL AS social_security_no
+FROM hr_emp e
+"""
+
+[entities.payroll]
+sql = """
+SELECT p.emp_cd AS emp_code, p.fdate AS period_start, p.tdate AS period_end, substr(p.fdate, 1, 7) AS pay_month,
+       (SELECT sec FROM hr_emp WHERE emp_cd = p.emp_cd) AS section, NULL AS designation, p.worked AS worked_days,
+       p.gross AS monthly_rate, p.earned AS earned, p.ot AS overtime, p.deduct AS deductions,
+       (p.earned + p.ot - p.deduct) AS net_pay, p.paid AS paid
+FROM hr_pay p WHERE p.tdate >= :since
+"""
+
+[entities.employee_loans]
+sql = """
+SELECT loan_cd AS loan_code, loan_dt AS loan_date, emp_cd AS emp_code, ltype AS loan_type, amount AS amount,
+       instal AS installment, opening AS opening, done AS completed, NULL AS remarks
+FROM hr_loan WHERE loan_dt >= :since
+"""
+
+[entities.gate_passes]
+sql = """
+SELECT gp_id AS gatepass_id, gp_no AS gp_no, gp_dt AS gp_date, io AS direction, gtype AS type,
+       NULL AS party_code, party AS party_name, vehicle AS vehicle, driver AS driver,
+       NULL AS item_code, item AS item, qty AS qty, uom AS uom, NULL AS contract_no, beam AS beam_no, entered_by AS entered_by
+FROM gatepass WHERE gp_dt >= :since
+"""

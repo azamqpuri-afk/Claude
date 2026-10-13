@@ -253,10 +253,75 @@ def build(out, end):
     txn("ISS", y, [("EL-002", 6, 2900)], dept="LOOM-18")
     build_yarn(db, cprod, cfresh, start, end)
     build_beams(db, lsegs, lday, end)
+    build_hr_and_gatepasses(db, start, end, rnd)
     build_scoreboard(out.with_name(out.stem.replace("_erp", "") + "_scoreboard.db"), lday, end)
     db.commit()
     db.close()
     return out
+
+
+def build_hr_and_gatepasses(db, start, end, rnd):
+    """A small fictional payroll system and gate register, so the Payroll and Gate Passes tabs have demo data."""
+    import calendar as _cal
+    db.executescript("""
+        CREATE TABLE hr_dept (dept_cd TEXT PRIMARY KEY, dept_nm TEXT);
+        CREATE TABLE hr_emp (emp_cd TEXT PRIMARY KEY, emp_nm TEXT, father TEXT, cnic TEXT, dept_cd TEXT, desg TEXT,
+                             sec TEXT, doj TEXT, status TEXT, wage_type TEXT, salary REAL, mobile TEXT, bank_ac TEXT);
+        CREATE TABLE hr_pay (emp_cd TEXT, fdate TEXT, tdate TEXT, worked REAL, gross REAL, earned REAL, ot REAL, deduct REAL, paid TEXT);
+        CREATE TABLE hr_loan (loan_cd TEXT PRIMARY KEY, loan_dt TEXT, emp_cd TEXT, ltype TEXT, amount REAL, instal REAL, opening REAL, done TEXT);
+        CREATE TABLE gatepass (gp_id TEXT, gp_no TEXT, gp_dt TEXT, io TEXT, gtype TEXT, party TEXT, vehicle TEXT,
+                               driver TEXT, item TEXT, qty REAL, uom TEXT, beam TEXT, entered_by TEXT);
+    """)
+    depts = [("D1", "Weaving"), ("D2", "Sizing"), ("D3", "Store"), ("D4", "Accounts"), ("D5", "Admin")]
+    db.executemany("INSERT INTO hr_dept VALUES (?,?)", depts)
+    first = ["Muhammad", "Ali", "Imran", "Bilal", "Usman", "Kashif", "Asif", "Naveed", "Zahid", "Saleem", "Rashid", "Tariq"]
+    last = ["Hussain", "Akram", "Iqbal", "Raza", "Shah", "Khan", "Butt", "Aslam", "Nawaz", "Javed"]
+    emps = []
+    for i in range(1, 41):
+        dept = rnd.choice(depts)[0]
+        emps.append((f"E{i:03d}", f"{rnd.choice(first)} {rnd.choice(last)}", f"{rnd.choice(first)} {rnd.choice(last)}",
+                     f"3520{rnd.randint(10**9, 10**10 - 1)}", dept,
+                     rnd.choice(["Weaver", "Jobber", "Fitter", "Helper", "Supervisor", "Clerk", "Operator", "Accountant"]),
+                     "Factory" if dept in ("D1", "D2", "D3") else "Admin",
+                     (start - timedelta(days=rnd.randint(200, 2500))).isoformat(),
+                     "Left" if i % 19 == 0 else "Active", "monthly",
+                     rnd.choice([28000, 32000, 36000, 40000, 45000, 52000, 66000]),
+                     f"03{rnd.randint(10**8, 4 * 10**8)}", f"PK{rnd.randint(10**8, 10**9)}"))
+    db.executemany("INSERT INTO hr_emp VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", emps)
+    periods = []
+    for back in range(3):
+        y, m = divmod((end.year * 12 + end.month - 1) - back, 12)
+        m += 1
+        periods += [(date(y, m, 1), date(y, m, 15)), (date(y, m, 16), date(y, m, _cal.monthrange(y, m)[1]))]
+    pay, loans, gps = [], [], []
+    for e in emps:
+        if e[8] == "Left":
+            continue
+        for ps, pe in periods:
+            days = (pe - ps).days + 1
+            worked = days - rnd.randint(0, 2)
+            pay.append((e[0], ps.isoformat(), pe.isoformat(), worked, e[10], round(e[10] / 2 * worked / days),
+                        round(rnd.choice([0, 0, 500, 1200, 2000, rnd.randint(0, 3000)])),
+                        round(rnd.choice([0, 0, 0, 2000, 3000])), "Y"))
+    db.executemany("INSERT INTO hr_pay VALUES (?,?,?,?,?,?,?,?,?)", pay)
+    for i, e in enumerate(emps[:8]):
+        loans.append((f"LN{i + 1:03d}", (start + timedelta(days=rnd.randint(0, 120))).isoformat(), e[0],
+                      rnd.choice(["Loan", "Advance"]), rnd.choice([20000, 30000, 50000]), 5000, 0, "N"))
+    db.executemany("INSERT INTO hr_loan VALUES (?,?,?,?,?,?,?,?)", loans)
+    gtypes = [("out", "OGP fabric"), ("in", "IGP yarn"), ("out", "OGP yarn"), ("in", "Store GRN"),
+              ("out", "Store sale"), ("out", "Empty beam to sizer"), ("in", "Sized beam in")]
+    parties = ["Al-Karam Textile", "Gul Ahmed", "Sapphire", "Nishat", "Chenab Ltd", "Sitara Chemicals"]
+    for i in range(1, 161):
+        d = end - timedelta(days=rnd.randint(0, 120))
+        io, gt = rnd.choice(gtypes)
+        no = rnd.randint(1, 60)                       # numbers repeat across types and over time - realistic
+        beam = f"BM-{rnd.randint(1, 24):02d}A" if "beam" in gt.lower() else None
+        gps.append((f"{gt}-{no}-{d.strftime('%Y%m%d')}", str(no), d.isoformat(), io, gt, rnd.choice(parties),
+                    f"LEB-{rnd.randint(1000, 9999)}", rnd.choice(first),
+                    None if beam else rnd.choice(["Grey fabric 60x60", "40/1 cotton yarn", "Reed 72s", "Lube oil", "Sizing chemical"]),
+                    round(rnd.uniform(50, 3000), 1), "beam" if beam else rnd.choice(["m", "kg", "nos"]),
+                    beam, rnd.choice(["ADMIN", "STORE", "ACCOUNT", "GATE"])))
+    db.executemany("INSERT INTO gatepass VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", gps)
 
 
 YARNS = [("Y60", "60/1 CTN", 60), ("Y40", "40/1 CTN", 40), ("Y20", "20/1 CTN", 20)]
