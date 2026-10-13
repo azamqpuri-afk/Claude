@@ -234,3 +234,111 @@ SELECT PDATE AS read_date, PMACH AS loom_code,
        AVG(PRPM) AS rpm, SUM(PWRP + PUD) AS stops
 FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
 """
+
+# ---------------------------------------------------------------------------------------------------------------
+# Payroll (separate PAYROLL schema, readable by the dostex login) and the gate register.
+# NOT YET RUN against the live database: run `python -m smart_layer check` on the server; it tests each entity
+# separately and names any that fail, so a wrong column or join here is caught before it is trusted.
+# Net pay was validated against salary voucher JV 4 of 30-Sep-2026 (earned + overtime - deductions).
+# ---------------------------------------------------------------------------------------------------------------
+
+# Employee master: EMP + the lookup tables for readable department / designation / shift names.
+# dept_sub is grouped to one row per sub-department so an employee is never duplicated.
+[entities.employees]
+sql = """
+SELECT e.emp_code AS emp_code, e.emp_name AS name, e.father_name AS father_name, e.nic_no AS cnic,
+       dp.dept_name AS department, ds.sub_dept_name AS sub_department,
+       CASE e.sec_code WHEN 1 THEN 'Admin' WHEN 2 THEN 'Factory' ELSE TO_CHAR(e.sec_code) END AS section,
+       dg.desg_name AS designation, jt.job_type AS job_type, sh.shift_name AS shift, sg.seg_desc AS segment,
+       TRUNC(e.doj) AS date_joining, e.emp_status AS status, TO_CHAR(e.sal_type) AS wage_type,
+       e.salary AS monthly_salary, e.per_day_wage AS per_day_wage,
+       CAST(NULL AS VARCHAR2(50)) AS bank, e.bank_acc_no AS bank_account, e.mobile AS mobile,
+       e.eobi_no AS eobi_no, e.ss_no AS social_security_no
+FROM payroll.emp e
+LEFT JOIN (SELECT sub_dept_code, MAX(dept_code) dept_code, MAX(sub_dept_name) sub_dept_name
+           FROM payroll.dept_sub GROUP BY sub_dept_code) ds ON ds.sub_dept_code = e.sub_dept_code
+LEFT JOIN payroll.dept dp ON dp.dept_code = ds.dept_code
+LEFT JOIN payroll.desg dg ON dg.desg_code = e.desg_code
+LEFT JOIN payroll.job_types jt ON TO_CHAR(jt.job_type_id) = e.job_type_id
+LEFT JOIN payroll.shifts sh ON sh.shift_id = e.shift_id
+LEFT JOIN payroll.segments sg ON sg.seg_id = e.seg_id
+"""
+
+# Payroll per employee per pay period (mills pay twice a month: 1-15, 16-end). The real key is emp + fdate + tdate
+# (DATED is always the 1st, so it does not identify the row). Net pay is CALCULATED, not stored:
+#   net = SALM.EARNED_AMOUNT + OT (MANUAL_HOURS x OT_RATE) - SALD deductions (ALLOWANCE_DEDUCTION = 'D'),
+# matched on emp + fdate + tdate. Validated to within rounding against salary voucher JV 4 (30-Sep-2026).
+# A month with more than 2 periods is a duplicate payroll run - the wage-bill report flags it.
+[entities.payroll]
+sql = """
+SELECT emp_code, period_start, period_end, pay_month, section, designation, worked_days, monthly_rate,
+       earned, overtime, deductions, (NVL(earned,0) + NVL(overtime,0) - NVL(deductions,0)) AS net_pay, paid
+FROM (
+  SELECT s.emp_code AS emp_code, TRUNC(s.fdate) AS period_start, TRUNC(s.tdate) AS period_end,
+         TO_CHAR(s.dated, 'YYYY-MM') AS pay_month,
+         CASE s.section_code WHEN 1 THEN 'Admin' WHEN 2 THEN 'Factory' ELSE TO_CHAR(s.section_code) END AS section,
+         dg.desg_name AS designation, s.emp_worked_days AS worked_days, s.gross_salary AS monthly_rate,
+         s.earned_amount AS earned,
+         (SELECT NVL(SUM(o.manual_hours * o.ot_rate), 0) FROM payroll.ot o
+          WHERE o.emp_code = s.emp_code AND o.fdate = s.fdate AND o.tdate = s.tdate) AS overtime,
+         (SELECT NVL(SUM(d.earned_amount), 0) FROM payroll.sald d
+          WHERE d.emp_code = s.emp_code AND d.fdate = s.fdate AND d.tdate = s.tdate
+            AND d.allowance_deduction = 'D') AS deductions,
+         s.paid AS paid
+  FROM payroll.salm s
+  LEFT JOIN payroll.desg dg ON dg.desg_code = s.desg_code
+  WHERE s.tdate >= :since
+)
+"""
+
+[entities.employee_loans]
+sql = """
+SELECT l.loan_code AS loan_code, TRUNC(l.loan_date) AS loan_date, l.emp_code AS emp_code,
+       l.loan_type AS loan_type, l.loan_amount AS amount, l.installment_amount AS installment,
+       l.loan_opening AS opening, l.loan_completed AS completed, l.remarks AS remarks
+FROM payroll.emp_loans l WHERE l.loan_date >= :since
+"""
+
+# The gate register: GATE_REG_V (store / fabric / yarn / sizing, the 10 types) UNION the beam gate passes that the
+# view leaves out (empty beams to/from the sizer, and sized beams received). gatepass_id = type + number + date, so
+# the same number across different types or years never clashes. Beam branches are keyed strictly within their own
+# tables (WV_GP_BEAMS* vs WYT*) because the two share TRANS_NO values that belong to different transactions.
+[entities.gate_passes]
+sql = """
+SELECT g.dt || '-' || TO_CHAR(g.gp_no) || '-' || TO_CHAR(g.gp_date, 'YYYYMMDD') AS gatepass_id,
+       TO_CHAR(g.gp_no) AS gp_no, TRUNC(g.gp_date) AS gp_date,
+       CASE g.mt WHEN 'I' THEN 'in' ELSE 'out' END AS direction,
+       CASE g.dt WHEN 'GPOUT' THEN 'OGP fabric' WHEN 'GPIN' THEN 'IGP fabric'
+                 WHEN 'IGP_YARN' THEN 'IGP yarn' WHEN 'OGP_YARN' THEN 'OGP yarn'
+                 WHEN 'TO_SIZING' THEN 'Yarn to sizing' WHEN 'FROM_SIZING' THEN 'Yarn from sizing'
+                 WHEN 'SRN' THEN 'Store GRN' WHEN 'IN' THEN 'Store returnable in'
+                 WHEN 'OUT' THEN 'Store returnable out' WHEN 'SAL' THEN 'Store sale' ELSE g.gname END AS type,
+       g.ac AS party_code, g.party AS party_name, g.vehicle AS vehicle, g.driver AS driver,
+       g.ic AS item_code, g.item AS item, g.qty AS qty, g.uom AS uom,
+       CAST(NULL AS VARCHAR2(50)) AS contract_no, CAST(NULL AS VARCHAR2(50)) AS beam_no, g.usern AS entered_by
+FROM dostex.gate_reg_v g WHERE g.gp_date >= :since
+UNION ALL
+SELECT 'EB-' || m.tt || '-' || m.gp_no || '-' || TO_CHAR(m.gp_date, 'YYYYMMDD'),
+       m.gp_no, TRUNC(m.gp_date), CASE WHEN m.tt = 'OGP_EMPTY_BEAMS' THEN 'out' ELSE 'in' END,
+       CASE m.tt WHEN 'OGP_EMPTY_BEAMS' THEN 'Empty beam to sizer'
+                 WHEN 'IGP_EMPTY_BEAMS' THEN 'Empty beam back' ELSE m.tt END,
+       m.ac1, a.an, m.vehicle, m.driver,
+       CAST(NULL AS VARCHAR2(50)), CAST(NULL AS VARCHAR2(200)), CAST(NULL AS NUMBER), 'beam',
+       CAST(NULL AS VARCHAR2(50)), d.beam_code, m.usern
+FROM dostex.wv_gp_beamsm m
+JOIN dostex.wv_gp_beamsd d ON d.trans_no = m.trans_no
+LEFT JOIN dostex.ach a ON a.ac = m.ac1
+WHERE m.tt IN ('OGP_EMPTY_BEAMS', 'IGP_EMPTY_BEAMS') AND m.gp_date >= :since
+UNION ALL
+SELECT 'SB-' || m.tt || '-' || m.gp_no || '-' || TO_CHAR(m.gp_date, 'YYYYMMDD'),
+       m.gp_no, TRUNC(m.gp_date), 'in', 'Sized beam in',
+       NVL(m.ac1, m.ac2), a.an, m.vehicle, m.driver,
+       CAST(NULL AS VARCHAR2(50)), CAST(NULL AS VARCHAR2(200)), CAST(NULL AS NUMBER), 'beam',
+       TO_CHAR(c.cont_no), b.bcode, m.usern
+FROM dostex.wytm m
+JOIN dostex.wytd d ON d.trans_no = m.trans_no
+JOIN dostex.wybeams b ON b.trans_no = m.trans_no AND b.ref_sr = d.sr_no
+LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id
+LEFT JOIN dostex.ach a ON a.ac = NVL(m.ac1, m.ac2)
+WHERE m.tt = 'IGP_SIZED_BEAMS' AND m.gp_date >= :since
+"""
