@@ -9,7 +9,7 @@ Each entry is  name -> (builder, label shown to the owner, day_report)
 
 from datetime import date, timedelta
 
-from .reports import finance, production, reconcile, stock
+from .reports import finance, gatepass, payroll, production, reconcile, stock
 from .textile import beams, closing, pilferage, stock_position
 
 REPORTS = {
@@ -28,6 +28,12 @@ REPORTS = {
     "store-recon":  (reconcile.store_consumption,   "Store: consumption reconciliation", False),
     "yarn-stock":   (stock_position.yarn_stock,     "Yarn stock position", False),
     "fabric-stock": (stock_position.fabric_stock,   "Fabric stock position", False),
+    "gate-register": (gatepass.register,            "Gate passes: latest register", False),
+    "gate-summary": (gatepass.summary,              "Gate passes: summary by type", True),
+    "wage-bill":    (payroll.wage_bill,             "Payroll: wage bill by section", False),
+    "payslips":     (payroll.payslips,              "Payroll: payslips for the period", False),
+    "staff":        (payroll.staff,                 "Payroll: employee list", False),
+    "emp-loans":    (payroll.loans,                 "Payroll: employee loans & advances", False),
 }
 
 NAMES = list(REPORTS)

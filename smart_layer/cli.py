@@ -58,6 +58,11 @@ def cmd_check(cfg, args):
 
 def cmd_sync(cfg, args):
     e = _open_erp(cfg)
+    if args.live:                                    # the 5-minute refresh: every module, only the last few days, no
+        days = int(cfg["sync"].get("live_days", 3))  # full-history re-read - quick and gentle on the ERP
+        print(f"Live sync from {e.mapping.name} (last {days} days, all modules)")
+        store.sync(_store(cfg), e, days, entities=args.entities, full_history=())
+        return 0
     print(f"Syncing from {e.mapping.name} (last {cfg['sync']['history_days']} days; full history for yarn and fabric)")
     store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities,
                full_history=cfg["sync"].get("full_history", store.FULL_HISTORY))
@@ -230,6 +235,7 @@ def main(argv=None):
     sub.add_parser("check")
     s = sub.add_parser("sync")
     s.add_argument("--entities", nargs="*")
+    s.add_argument("--live", action="store_true", help="quick refresh: all modules, last few days only (for the 5-minute task)")
     from . import report_registry
     r = sub.add_parser("report")
     r.add_argument("name", choices=report_registry.NAMES)

@@ -13,7 +13,7 @@ DEFAULTS = {
     "company": {"name": "My Mill", "currency": "Rs"},
     "erp": {"driver": "sqlite"},
     "store": {"path": "data/smart_layer.db"},
-    "sync": {"history_days": 400},
+    "sync": {"history_days": 400, "live_days": 3},   # live_days: the short window the 5-minute live sync re-reads
     "notify": {"channels": ["console"]},
     "reports": {"tracked_issue_days": 60, "reorder_cover_months": 2, "output_dir": "output"},
     "audit": {
