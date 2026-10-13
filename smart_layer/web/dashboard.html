@@ -70,6 +70,16 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-sp
 .pos { color: var(--text-primary); } .neg { color: var(--critical); }
 details.data summary { cursor: pointer; color: var(--text-secondary); font-size: 12.5px; margin-top: 8px; }
 .empty { color: var(--text-muted); font-size: 13.5px; padding: 8px 0; }
+.maintabs { position: sticky; top: 49px; z-index: 4; background: var(--bg); display: flex; gap: 4px; flex-wrap: wrap;
+  padding: 8px 16px; border-bottom: 1px solid var(--line); max-width: 1240px; margin: 0 auto; }
+.maintabs button { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 6px 13px; font: inherit;
+  font-size: 14px; font-weight: 600; color: var(--text-secondary); cursor: pointer; }
+.maintabs button[aria-selected="true"] { background: var(--surface-1); border-color: var(--line); color: var(--text-primary); }
+.pane { display: grid; gap: 16px; }
+.pane[hidden] { display: none; }
+.sel { font: inherit; font-size: 14px; color: var(--text-primary); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; max-width: 100%; }
+tr.hit td { background: color-mix(in srgb, var(--accent) 16%, transparent); }
 .tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
 .tabs button { background: var(--surface-2); border: 1px solid var(--line); border-radius: 99px; padding: 4px 12px; font: inherit;
   font-size: 13px; color: var(--text-secondary); }
@@ -122,58 +132,113 @@ td.nowrap { white-space: nowrap; }
     <button class="btn" id="licSave" type="button">Install licence</button></div>
 </dialog>
 
+<nav class="maintabs" id="mainTabs" role="tablist" aria-label="Sections">
+  <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+  <button role="tab" data-tab="weaving" aria-selected="false">Weaving</button>
+  <button role="tab" data-tab="store" aria-selected="false">Store</button>
+  <button role="tab" data-tab="finance" aria-selected="false">Finance</button>
+  <button role="tab" data-tab="payroll" aria-selected="false">Payroll</button>
+  <button role="tab" data-tab="gate" aria-selected="false">Gate Passes</button>
+  <button role="tab" data-tab="browse" aria-selected="false">Browse</button>
+</nav>
+
 <main>
-  <section class="kpis" id="kpis" aria-label="Key figures"></section>
+  <!-- OVERVIEW -->
+  <div class="pane" data-pane="overview">
+    <section class="kpis" id="kpis" aria-label="Key figures"></section>
+    <section class="card" aria-labelledby="att-h">
+      <h2 id="att-h">Needs attention</h2>
+      <p class="hint">The day's audit across finance, store, weaving and yarn. ACTION = do something today, CONFIRMED = a definite error in the data. Click an item to open it.</p>
+      <div class="tabs" id="attTabs" role="tablist"></div>
+      <div class="table-wrap" id="findings"></div>
+    </section>
+    <section class="card"><h2>Meters woven per day</h2><p class="hint">Last 30 days, all looms</p>
+      <div class="chart" id="cMeters"></div></section>
+    <section class="card" id="reportsCard" aria-labelledby="rep-h" style="display:none">
+      <h2 id="rep-h">Reports</h2>
+      <p class="hint">Pick a report to see it on screen, or download it as PDF (to print / WhatsApp) or Excel (CSV).</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <select id="repName" aria-label="Report" class="sel"></select>
+        <button class="btn" id="repView" type="button">View</button>
+        <button class="btn" id="repPdf" type="button">Download PDF</button>
+        <button class="btn" id="repCsv" type="button">Download Excel (CSV)</button>
+      </div>
+      <div id="repMsg" class="detail" style="margin-top:8px"></div>
+      <div class="table-wrap" id="repOut" style="margin-top:10px"></div>
+    </section>
+  </div>
 
-  <section class="card" aria-labelledby="att-h">
-    <h2 id="att-h">Needs attention</h2>
-    <p class="hint">The day's audit across finance, store, weaving and yarn. ACTION = do something today, CONFIRMED = a definite error in the data.</p>
-    <div class="tabs" id="attTabs" role="tablist"></div>
-    <div class="table-wrap" id="findings"></div>
-  </section>
+  <!-- WEAVING -->
+  <div class="pane" data-pane="weaving" hidden>
+    <section class="card"><h2>Beam stock</h2><p class="hint">Where every beam is right now</p>
+      <div class="kpis" id="beamStock"></div></section>
+    <section class="card"><h2>Beams on looms</h2>
+      <p class="hint" id="beamHint">Days left = fabric still to come on the beam ÷ the loom's meters a day</p>
+      <div class="table-wrap" id="beams"></div></section>
+    <section class="card"><h2>Weaving efficiency %</h2><p class="hint">Meters ÷ meters at 100%, last 30 days</p>
+      <div class="chart" id="cEff"></div></section>
+    <section class="grid2">
+      <div class="card"><h2>Contract closing: party yarn</h2>
+        <p class="hint">+ = mill holds the party's yarn · − = party is short. Method set by the mill.</p>
+        <div class="table-wrap" id="closing"></div></div>
+      <div class="card"><h2>Yarn: pilferage check</h2>
+        <p class="hint">Weft issued vs needed, suspicious entries, sizing loss</p>
+        <div class="table-wrap" id="pilferage"></div></div>
+    </section>
+    <section class="card"><h2>Looms on the day</h2><p class="hint">Meters, efficiency and rejection per loom</p>
+      <div class="table-wrap" id="looms"></div></section>
+  </div>
 
-  <section class="card" id="reportsCard" aria-labelledby="rep-h" style="display:none">
-    <h2 id="rep-h">Reports</h2>
-    <p class="hint">Pick a report to see it on screen, or download it as PDF (to print / WhatsApp) or Excel (CSV). Uses the day above where it applies.</p>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-      <select id="repName" aria-label="Report" style="font:inherit;font-size:14px;color:var(--text-primary);background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;max-width:100%"></select>
-      <button class="btn" id="repView" type="button">View</button>
-      <button class="btn" id="repPdf" type="button">Download PDF</button>
-      <button class="btn" id="repCsv" type="button">Download Excel (CSV)</button>
-    </div>
-    <div id="repMsg" class="detail" style="margin-top:8px"></div>
-    <div class="table-wrap" id="repOut" style="margin-top:10px"></div>
-  </section>
+  <!-- STORE -->
+  <div class="pane" data-pane="store" hidden>
+    <section class="card"><h2>Store: out of stock and low</h2><p class="hint">Items used in the last 60 days</p>
+      <div class="table-wrap" id="stock"></div></section>
+    <p class="hint">Use <b>Browse</b> to search every store item, receipt and issue.</p>
+  </div>
 
-  <section class="grid2">
-    <div class="card"><h2>Meters woven per day</h2><p class="hint">Last 30 days, all looms</p>
-      <div class="chart" id="cMeters"></div></div>
-    <div class="card"><h2>Weaving efficiency %</h2><p class="hint">Meters ÷ meters at 100%, last 30 days</p>
-      <div class="chart" id="cEff"></div></div>
-  </section>
+  <!-- FINANCE -->
+  <div class="pane" data-pane="finance" hidden>
+    <section class="card"><h2>Sales and expenses by month</h2><p class="hint">Last 12 months, from the ledger</p>
+      <div class="chart" id="cFin"></div></section>
+    <p class="hint">Use <b>Browse</b> to search parties, accounts and ledger entries.</p>
+  </div>
 
-  <section class="card"><h2>Sales and expenses by month</h2><p class="hint">Last 12 months, from the ledger</p>
-    <div class="chart" id="cFin"></div></section>
+  <!-- PAYROLL -->
+  <div class="pane" data-pane="payroll" hidden>
+    <section class="card"><h2>Payroll</h2>
+      <p class="hint">Wage bill, payslips and loans from the payroll system. Salaries are shown only here.</p>
+      <div class="tabs" id="payTabs" role="tablist"></div>
+      <div id="payMsg" class="detail"></div>
+      <div class="table-wrap" id="payOut"></div>
+    </section>
+  </div>
 
-  <section class="grid2">
-    <div class="card"><h2>Contract closing: party yarn</h2>
-      <p class="hint">+ = mill holds the party's yarn · − = party is short. Method set by the mill.</p>
-      <div class="table-wrap" id="closing"></div></div>
-    <div class="card"><h2>Yarn: pilferage check</h2>
-      <p class="hint">Weft issued vs needed, suspicious entries, sizing loss</p>
-      <div class="table-wrap" id="pilferage"></div></div>
-  </section>
+  <!-- GATE PASSES -->
+  <div class="pane" data-pane="gate" hidden>
+    <section class="card"><h2>Gate passes</h2>
+      <p class="hint">Every gate pass in and out - fabric, yarn, beams, store. Same number can repeat across types, so each shows its type.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <select id="gateType" class="sel" aria-label="Type"><option value="">All types</option></select>
+        <input type="search" id="gateQ" class="sel" placeholder="Search GP no, party, item, vehicle…" style="flex:1 1 200px">
+      </div>
+      <div id="gateMsg" class="detail"></div>
+      <div class="table-wrap" id="gateOut"></div>
+    </section>
+  </div>
 
-  <section class="card"><h2>Beams on looms</h2>
-    <p class="hint" id="beamHint">Days left = fabric still to come on the beam ÷ the loom's meters a day</p>
-    <div class="table-wrap" id="beams"></div></section>
-
-  <section class="grid2">
-    <div class="card"><h2>Store: out of stock and low</h2><p class="hint">Items used in the last 60 days</p>
-      <div class="table-wrap" id="stock"></div></div>
-    <div class="card"><h2>Looms on the day</h2><p class="hint">Meters, efficiency and rejection per loom</p>
-      <div class="table-wrap" id="looms"></div></div>
-  </section>
+  <!-- BROWSE -->
+  <div class="pane" data-pane="browse" hidden>
+    <section class="card"><h2>Browse the data</h2>
+      <p class="hint">Open any data set in the mill's records and search it. Read-only - nothing here changes the ERP.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <select id="browseEntity" class="sel" aria-label="Data set"></select>
+        <input type="search" id="browseQ" class="sel" placeholder="Search…" style="flex:1 1 220px">
+        <button class="btn" id="browseMore" type="button" style="display:none">Load more</button>
+      </div>
+      <div id="browseMsg" class="detail"></div>
+      <div class="table-wrap" id="browseOut"></div>
+    </section>
+  </div>
 </main>
 <footer id="foot"></footer>
 
@@ -367,9 +432,10 @@ function render() {
   $("#attTabs").innerHTML = tabs.map(([v, t]) => `<button role="tab" aria-selected="${v === attFilter}" data-v="${v}">${esc(t)}</button>`).join("");
   $("#attTabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { attFilter = b.dataset.v; render(); }));
   const fs = D.findings.filter((f) => attFilter === "all" || (attFilter === "important" ? ["ACTION", "CONFIRMED"].includes(f.severity) : f.severity === attFilter));
-  $("#findings").innerHTML = fs.length ? `<div class="items">` + fs.map((f) => `<div class="item"><div class="meta">${chip(f.severity)}<span>${esc(f.section)}</span></div>` +
+  $("#findings").innerHTML = fs.length ? `<div class="items">` + fs.map((f, i) => `<div class="item" data-f="${i}" style="cursor:pointer"><div class="meta">${chip(f.severity)}<span>${esc(f.section)}</span></div>` +
     `<div class="what">${esc(f.title)}</div>${f.detail ? `<div class="detail">${esc(f.detail)}</div>` : ""}</div>`).join("") + `</div>`
     : `<p class="empty">Nothing found for this day.</p>`;
+  $("#findings").querySelectorAll(".item[data-f]").forEach((el) => (el.onclick = () => openFinding(fs[+el.dataset.f])));
 
   const byParty = {};
   D.closing.forEach((r) => { if (r.pre_go_live) return;            // started in the old ERP: not counted in the totals
@@ -399,6 +465,10 @@ function render() {
       b.backup ? esc(b.backup) : (b.over ? "woven more than the beam holds" : "–")]), [5, 6, 7]);
   $("#looms").innerHTML = table(["Loom", "Quality", "Meters", "Eff %", "Rej %"], D.looms.map((r) =>
     [esc(r.loom), esc(r.quality || ""), num(r.meters), num(r.eff, 1), num(r.rej, 1)]), [2, 3, 4]);
+  const bs = D.beam_stock || {};
+  $("#beamStock").innerHTML = [["On looms", "on_loom"], ["Sized waiting", "sized_waiting"], ["Empty in mill", "empty_in_mill"],
+    ["At sizers", "at_sizer"], ["Sent out", "sent_out"]]
+    .map(([l, k]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${num(bs[k] || 0)}</div></div>`).join("");
   $("#foot").textContent = `${D.product} · figures from the mill's ERP, read-only`;
   renderCharts();
   applyFilter();
@@ -410,6 +480,7 @@ function applyFilter() {
   document.querySelectorAll("main tbody tr, main .item").forEach((el) => {
     const hit = !q || el.textContent.toLowerCase().includes(q);
     el.style.display = hit ? "" : "none";
+    if (el.tagName === "TR") el.classList.toggle("hit", !!q && hit);   // highlight a jumped-to row
     if (hit && q) {                                    // open any collapsed "Show as table" / details holding a match
       for (let d = el.closest("details"); d; d = d.parentElement.closest("details")) d.open = true;
     }
@@ -486,6 +557,112 @@ $("#repView").onclick = async () => {
 };
 $("#repPdf").onclick = () => { location.href = repUrl("pdf"); };
 $("#repCsv").onclick = () => { location.href = repUrl("csv"); };
+
+// ---------- tabs ----------
+let curTab = "overview";
+function setTab(name) {
+  curTab = name;
+  document.querySelectorAll("#mainTabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === name));
+  document.querySelectorAll(".pane").forEach((p) => (p.hidden = p.dataset.pane !== name));
+  if (D) renderCharts();                                 // size charts now that their pane is visible
+  if (name === "payroll") loadPayroll();
+  if (name === "gate") loadGate();
+  if (name === "browse") loadBrowseInit();
+  applyFilter();
+}
+document.querySelectorAll("#mainTabs button").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
+
+// ---------- click a finding -> open where it is ----------
+const SECTION_TAB = {Weaving: "weaving", Yarn: "weaving", Store: "store", Finance: "finance", Payroll: "payroll"};
+function openFinding(f) {
+  if (!f) return;
+  setTab(SECTION_TAB[f.section] || "overview");
+  const m = ((f.title || "") + " " + (f.detail || "")).match(/\b([A-Z][A-Z0-9]*-[A-Z0-9]+|LOOM[-\s]?\w+)\b/);
+  $("#search").value = m ? m[1] : "";
+  applyFilter();
+  const first = document.querySelector(".pane:not([hidden]) tr.hit, .pane:not([hidden]) .item");
+  if (first) first.scrollIntoView({behavior: "smooth", block: "center"});
+}
+
+// ---------- a report rendered into a table (Payroll tab) ----------
+async function reportInto(outSel, msgSel, name) {
+  if (STATIC_DATA) { $(msgSel).textContent = "Open from the server to see this."; return; }
+  $(msgSel).textContent = "Loading…"; $(outSel).innerHTML = "";
+  try {
+    const day = $("#day").value;
+    const r = await fetch(`api/report?name=${name}&fmt=json` + (day ? `&date=${day}` : ""));
+    if (!r.ok) { $(msgSel).textContent = "Could not load (licence or data)."; return; }
+    const j = await r.json();
+    const nums = j.columns.map((_, i) => i).filter((i) => j.rows.length && j.rows.every((row) => row[i] === "" || /^[-+\d.,%\s]+$/.test(String(row[i]))));
+    $(msgSel).textContent = j.title + (j.summary && j.summary.length ? " — " + j.summary.join("  ·  ") : "");
+    $(outSel).innerHTML = table(j.columns, j.rows.map((row) => row.map((c) => esc(c))), nums);
+    applyFilter();
+  } catch (e) { $(msgSel).textContent = "Could not reach the server."; }
+}
+
+let payView = "wage-bill";
+const PAY_REPORTS = [["wage-bill", "Wage bill"], ["payslips", "Payslips"], ["staff", "Employees"], ["emp-loans", "Loans"]];
+function loadPayroll() {
+  $("#payTabs").innerHTML = PAY_REPORTS.map(([v, t]) => `<button role="tab" aria-selected="${v === payView}" data-v="${v}">${esc(t)}</button>`).join("");
+  $("#payTabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { payView = b.dataset.v; loadPayroll(); }));
+  reportInto("#payOut", "#payMsg", payView);
+}
+
+// ---------- browse a data set (shared by Gate + Browse) ----------
+async function browseInto(entity, q, outSel, msgSel, offset, append) {
+  if (STATIC_DATA) { $(msgSel).textContent = "Open from the server to browse data."; return 0; }
+  $(msgSel).textContent = "Loading…";
+  try {
+    const r = await fetch(`api/browse?entity=${encodeURIComponent(entity)}&q=${encodeURIComponent(q || "")}&limit=200&offset=${offset || 0}`);
+    if (!r.ok) { $(msgSel).textContent = "Could not load."; return 0; }
+    const j = await r.json();
+    const nums = j.columns.map((_, i) => i).filter((i) => j.rows.length && j.rows.every((row) => row[i] == null || row[i] === "" || typeof row[i] === "number"));
+    const body = table(j.columns, j.rows.map((row) => row.map((c) => esc(c))), nums);
+    if (append) $(outSel).insertAdjacentHTML("beforeend", body); else $(outSel).innerHTML = body;
+    const shown = (offset || 0) + j.rows.length;
+    $(msgSel).textContent = `${shown.toLocaleString()} of ${j.total.toLocaleString()} rows`;
+    applyFilter();
+    return j.total;
+  } catch (e) { $(msgSel).textContent = "Could not reach the server."; return 0; }
+}
+
+let gateReady = false;
+function loadGate() {
+  if (STATIC_DATA) { $("#gateMsg").textContent = "Open from the server to browse gate passes."; return; }
+  const q = $("#gateQ").value.trim() || $("#gateType").value;
+  browseInto("gate_passes", q, "#gateOut", "#gateMsg");
+  if (!gateReady) {                                      // fill the type dropdown once, from the summary
+    gateReady = true;
+    fetch("api/report?name=gate-summary&fmt=json").then((r) => r.json()).then((j) => {
+      [...new Set(j.rows.map((r) => r[0]))].filter(Boolean).sort().forEach((t) =>
+        $("#gateType").insertAdjacentHTML("beforeend", `<option>${esc(t)}</option>`));
+    }).catch(() => {});
+  }
+}
+let gt; $("#gateQ").addEventListener("input", () => { clearTimeout(gt); gt = setTimeout(loadGate, 300); });
+$("#gateType").onchange = () => { $("#gateQ").value = ""; loadGate(); };
+
+let browseTotal = 0, browseInit = false;
+function loadBrowseInit() {
+  if (browseInit) return;
+  browseInit = true;
+  if (STATIC_DATA) { $("#browseMsg").textContent = "Open from the server to browse data."; return; }
+  fetch("api/entities").then((r) => r.json()).then((j) => {
+    $("#browseEntity").innerHTML = j.entities.map((e) => `<option value="${e.name}">${esc(e.label)} (${e.rows.toLocaleString()})</option>`).join("");
+    browseRun();
+  }).catch(() => { $("#browseMsg").textContent = "Could not load data sets."; });
+}
+async function browseRun() {
+  browseTotal = await browseInto($("#browseEntity").value, $("#browseQ").value.trim(), "#browseOut", "#browseMsg", 0, false);
+  $("#browseMore").style.display = browseTotal > 200 ? "" : "none";
+}
+$("#browseEntity").onchange = browseRun;
+let bq; $("#browseQ").addEventListener("input", () => { clearTimeout(bq); bq = setTimeout(browseRun, 300); });
+$("#browseMore").onclick = async () => {
+  const shown = $("#browseOut").querySelectorAll("tbody tr").length;
+  await browseInto($("#browseEntity").value, $("#browseQ").value.trim(), "#browseOut", "#browseMsg", shown, true);
+  if ($("#browseOut").querySelectorAll("tbody tr").length >= browseTotal) $("#browseMore").style.display = "none";
+};
 
 // ---------- chat ----------
 let session = null; try { session = sessionStorage.getItem("sl-session"); } catch (e) {}

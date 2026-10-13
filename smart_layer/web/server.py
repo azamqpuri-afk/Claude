@@ -19,12 +19,22 @@ import threading
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import unquote_plus as _unquote
 
 from .. import store
 from . import data
 
 PAGE = Path(__file__).with_name("dashboard.html")
 MAX_SESSIONS = 50
+
+ENTITY_LABELS = {
+    "items": "Store items", "stock_balances": "Stock balances", "store_receipts": "Store receipts (GRN)",
+    "store_issues": "Store issues", "parties": "Parties", "accounts": "Accounts", "ledger_entries": "Ledger entries",
+    "account_balances": "Account balances", "looms": "Looms", "loom_production": "Loom production",
+    "contracts": "Contracts", "yarn_movements": "Yarn movements", "fabric_dispatches": "Fabric dispatches",
+    "beams": "Beams", "beam_movements": "Beam movements", "loom_monitor": "Loom monitor",
+    "employees": "Employees", "payroll": "Payroll", "employee_loans": "Employee loans", "gate_passes": "Gate passes",
+}
 
 
 class App:
@@ -47,6 +57,51 @@ class App:
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
             return report_registry.build(con, self.cfg, name, day), report_registry.report_day(name, day)
+        finally:
+            con.close()
+
+    def entities(self):
+        """Every data set in the local copy, with a friendly label and its row count, for the Browse tab."""
+        from .. import schema
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            out = []
+            for e in schema.ENTITIES:
+                try:
+                    n = con.execute(f"SELECT COUNT(*) FROM {e.name}").fetchone()[0]
+                except Exception:
+                    n = 0
+                out.append({"name": e.name, "label": ENTITY_LABELS.get(e.name, e.name.replace("_", " ").title()),
+                            "rows": n, "columns": e.column_names})
+            return out
+        finally:
+            con.close()
+
+    def browse(self, entity, q="", sort="", direction="desc", limit=200, offset=0):
+        """Rows of one canonical data set, filtered by a search term across its text columns. Read-only."""
+        from .. import schema
+        if entity not in schema.BY_NAME:
+            return None
+        e = schema.BY_NAME[entity]
+        cols = e.column_names
+        where, params = "", []
+        if q:
+            text_cols = [c.name for c in e.columns if c.type in ("TEXT", "DATE", "DATETIME")] or cols
+            where = "WHERE " + " OR ".join(f"CAST({c} AS TEXT) LIKE ?" for c in text_cols)
+            params = [f"%{q}%"] * len(text_cols)
+        order = ""
+        if sort in cols:
+            order = f"ORDER BY {sort} {'ASC' if str(direction).lower() == 'asc' else 'DESC'}"
+        elif e.date_column:
+            order = f"ORDER BY {e.date_column} DESC"
+        limit = max(1, min(int(limit), 1000))
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            total = con.execute(f"SELECT COUNT(*) FROM {entity} {where}", params).fetchone()[0]
+            rows = con.execute(f"SELECT {', '.join(cols)} FROM {entity} {where} {order} LIMIT ? OFFSET ?",
+                               [*params, limit, int(offset)]).fetchall()
+            return {"entity": entity, "columns": cols, "rows": [list(r) for r in rows],
+                    "total": total, "limit": limit, "offset": int(offset)}
         finally:
             con.close()
 
@@ -119,12 +174,18 @@ def handler(app):
             if path == "/api/reports":
                 from .. import report_registry
                 return self._send(200, {"reports": [{"name": n, "label": label} for n, label in report_registry.menu()]})
-            if path in ("/api/data", "/api/report"):
+            if path in ("/api/data", "/api/report", "/api/entities", "/api/browse"):
                 from .. import licence
                 st = licence.status(app.cfg)
                 if not st.allowed:
                     return self._send(403, {"licence": st.message, "machine": licence.machine_id()})
-                params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
+                params = {k: _unquote(v) for p in query.split("&") if "=" in p for k, v in [p.split("=", 1)]}
+                if path == "/api/entities":
+                    return self._send(200, {"entities": app.entities()})
+                if path == "/api/browse":
+                    data = app.browse(params.get("entity", ""), params.get("q", ""), params.get("sort", ""),
+                                      params.get("dir", "desc"), params.get("limit", 200), params.get("offset", 0))
+                    return self._send(200, data) if data else self._send(404, {"error": "unknown data set"})
                 try:
                     day = date.fromisoformat(params["date"]) if params.get("date") else None
                 except ValueError:

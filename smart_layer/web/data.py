@@ -115,7 +115,16 @@ def build(con, cfg, as_of=None):
                    for s in sorted(sizing, key=lambda s: -s["loss_pct"])],
         "sizing_limit": float(t["sizing_loss_pct"]),
         "beams": beam_rows, "beam_warn_days": float(bt["warn_days"]),
+        "beam_stock": _beam_stock(con),
     }
+
+
+def _beam_stock(con):
+    """Counts of beams by where they are now - for the Weaving tab's beam-stock panel."""
+    counts = dict(con.execute("SELECT status, COUNT(*) FROM beams GROUP BY status"))
+    return {"on_loom": counts.get("on_loom", 0), "sized_waiting": counts.get("sized_waiting", 0),
+            "empty_in_mill": counts.get("empty_in_mill", 0), "at_sizer": counts.get("at_sizer", 0),
+            "sent_out": counts.get("sent_out", 0)}
 
 
 def t_look(cfg):
