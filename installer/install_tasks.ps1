@@ -11,6 +11,15 @@ Register-ScheduledTask -TaskName "Smart Layer Daily" -Action $daily -Principal $
     -Trigger (New-ScheduledTaskTrigger -Daily -At $at) `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 3)) | Out-Null
 
+# Live sync: a light pull of the fast-changing weaving data every 5 minutes, so the dashboard stays current.
+$live = New-ScheduledTaskAction -Execute "$AppDir\run_live.cmd" -WorkingDirectory $AppDir
+$liveTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
+$liveSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 4) `
+    -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName "Smart Layer Live" -Action $live -Principal $principal -Force `
+    -Trigger $liveTrigger -Settings $liveSettings | Out-Null
+
 $dash = New-ScheduledTaskAction -Execute "$AppDir\run_dashboard.cmd" -WorkingDirectory $AppDir
 Register-ScheduledTask -TaskName "Smart Layer Dashboard" -Action $dash -Principal $principal -Force `
     -Trigger (New-ScheduledTaskTrigger -AtStartup) `

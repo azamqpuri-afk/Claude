@@ -216,7 +216,7 @@ def cmd_status(cfg, args):
     chat = bool(os.environ.get("ANTHROPIC_API_KEY"))
     print(f"  Chat        : {'ready' if chat else 'not set up (no ANTHROPIC_API_KEY in .env)'}")
     if os.name == "nt":
-        for task in ("Smart Layer Daily", "Smart Layer Dashboard"):
+        for task in ("Smart Layer Daily", "Smart Layer Live", "Smart Layer Dashboard"):
             r = subprocess.run(["schtasks", "/query", "/tn", task, "/fo", "list"], capture_output=True, text=True)
             state = next((ln.split(":", 1)[1].strip() for ln in r.stdout.splitlines() if ln.startswith("Status")), "not installed")
             print(f"  Task        : {task} - {state}")

@@ -436,18 +436,26 @@ $("#licSave").onclick = async () => {
   if (j.allowed) { await licenceInfo(); load(); }
 };
 
-async function load(day) {
+async function load(day, silent) {
   if (STATIC_DATA) { D = STATIC_DATA; render(); return; }
-  $("#subtitle").textContent = "Loading…";
-  const r = await fetch("api/data" + (day ? `?date=${day}` : ""));
-  if (r.status === 403) {
-    await licenceInfo();
-    $("#subtitle").textContent = "Licence needed"; $("#licMsg").textContent = ""; $("#licDlg").showModal(); return;
-  }
-  if (!r.ok) { $("#subtitle").textContent = "Could not load data"; return; }
-  D = await r.json(); render();
+  if (!silent) $("#subtitle").textContent = "Loading…";
+  try {
+    const r = await fetch("api/data" + (day ? `?date=${day}` : ""));
+    if (r.status === 403) {
+      await licenceInfo();
+      $("#subtitle").textContent = "Licence needed"; $("#licMsg").textContent = ""; $("#licDlg").showModal(); return;
+    }
+    if (!r.ok) { if (!silent) $("#subtitle").textContent = "Could not load data"; return; }
+    D = await r.json(); render();
+  } catch (e) { if (!silent) $("#subtitle").textContent = "Could not reach the server"; }
 }
 $("#day").onchange = (e) => load(e.target.value);
+
+// Keep the screen current on its own: re-read the local copy every minute (silent, no flicker), and the
+// moment the owner returns to the tab. A scheduled sync refreshes that local copy from the ERP every 5 minutes,
+// so the dashboard is never more than a few minutes behind the mill - without anyone touching a button.
+setInterval(() => { if (!STATIC_DATA && !document.hidden) load($("#day").value || undefined, true); }, 60000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden && !STATIC_DATA) load($("#day").value || undefined, true); });
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => D && renderCharts(), 150); });
 
 // ---------- reports (server builds them; download as PDF or CSV) ----------

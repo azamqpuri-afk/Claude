@@ -27,6 +27,7 @@ UninstallDisplayName=Smart Layer
 Source: "..\build\app_main.dist\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; Scripts that the scheduled tasks run (they call SmartLayer.exe, not python).
 Source: "..\installer\run_daily.cmd";     DestDir: "{app}"; Flags: ignoreversion
+Source: "..\installer\run_live.cmd";      DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\run_dashboard.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\install_tasks.ps1"; DestDir: "{app}"; Flags: ignoreversion
 

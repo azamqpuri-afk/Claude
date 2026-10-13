@@ -23,14 +23,16 @@ SQL_TYPES = {"TEXT": "TEXT", "REAL": "REAL", "DATE": "TEXT", "DATETIME": "TEXT"}
 def open_store(path):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path)
+    con = sqlite3.connect(path, timeout=30)            # wait, don't error, if another process is writing
+    con.execute("PRAGMA journal_mode=WAL")             # readers (the dashboard) never block the 5-minute sync
+    con.execute("PRAGMA busy_timeout=30000")
     create(con)
     return con
 
 
 def open_read_only(path):
     """Read-only connection that also refuses anything except reading (for Claude's SQL)."""
-    con = sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True)
+    con = sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True, timeout=30)
     allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
 
     def authorizer(action, *_):
