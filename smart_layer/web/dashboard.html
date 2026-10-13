@@ -691,9 +691,18 @@ $("#askForm").onsubmit = async (e) => {
     say(j.answer || j.error || "No answer.", "bot", j.queries);
   } catch (err) { wait.remove(); say("Could not reach the server.", "bot"); }
 };
+// open a record from a phone-alert deep link (e.g. .../#q=BM-05A): pre-fill the search and highlight
+function openHash() {
+  const m = (location.hash || "").match(/q=([^&]+)/);
+  if (m) { $("#search").value = decodeURIComponent(m[1]); applyFilter();
+    const hit = document.querySelector("tr.hit"); if (hit) hit.scrollIntoView({block: "center"}); }
+}
+addEventListener("hashchange", openHash);
+
 licenceInfo();
 load();
 loadReports();
+setTimeout(openHash, 400);
 </script>
 </body>
 </html>

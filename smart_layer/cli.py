@@ -100,14 +100,29 @@ def cmd_audit(cfg, args):
         print("\nSaved", rep.write_csv(cfg.path(cfg["reports"]["output_dir"]), f"audit_{d0}_{d1}.csv"))
     if args.pdf:
         print("Saved", rep.write_pdf(cfg.path(cfg["reports"]["output_dir"]), f"audit_{d0}_{d1}.pdf", cfg["company"]["name"], PRODUCT))
-    if args.push:
+    if args.push and args.urgent:                    # the 5-minute task: each urgent finding, once, with a tap-to-open link
+        for f in a.new_alerts(urgent_only=True):
+            notify.send(cfg, f"{f.section}: {f.title[:80]}", (f.title + ("\n" + f.detail if f.detail else "")),
+                        priority="urgent", click=_dashboard_link(cfg, f))
+    elif args.push:                                  # the daily summary: everything else new, batched
         fresh = a.new_alerts()
         if fresh:
             body = "\n".join(f"[{f.severity}] {f.title}" for f in fresh[:25])
             if len(fresh) > 25:
                 body += f"\n... and {len(fresh) - 25} more in the report"
-            notify.send(cfg, f"ERP audit {d1:%d-%b}: {len(fresh)} new", body, priority="high")
+            notify.send(cfg, f"ERP audit {d1:%d-%b}: {len(fresh)} new", body, priority="high",
+                        click=(cfg["notify"].get("dashboard_url") or cfg["serve"].get("url") or None))
     return 0
+
+
+def _dashboard_link(cfg, f):
+    """Dashboard URL that opens the record a finding is about (needs [notify] dashboard_url or [serve] url)."""
+    import re
+    base = (cfg["notify"].get("dashboard_url") or cfg["serve"].get("url") or "").rstrip("/")
+    if not base:
+        return None
+    m = re.search(r"\b([A-Z][A-Z0-9]*-[A-Z0-9]+|LOOM[-\s]?\w+)\b", f.title)
+    return base + ("/#q=" + m.group(1) if m else "/")
 
 
 def cmd_ask(cfg, args):
@@ -249,6 +264,7 @@ def main(argv=None):
     a.add_argument("--csv", action="store_true")
     a.add_argument("--pdf", action="store_true")
     a.add_argument("--push", action="store_true")
+    a.add_argument("--urgent", action="store_true", help="push only the urgent send-once alerts (for the 5-minute task)")
     q = sub.add_parser("ask")
     q.add_argument("question", nargs="*")
     q.add_argument("--show-sql", action="store_true")

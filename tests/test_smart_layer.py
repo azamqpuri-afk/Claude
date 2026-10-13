@@ -296,6 +296,20 @@ def test_server_requires_password(env):
         cfg.data["serve"] = {}
 
 
+def test_urgent_alerts_are_a_subset_and_pushed_once(env):
+    cfg, con = env
+    store.set_state(con, "audit_pushed", [])
+    try:
+        a = audit.run(con, cfg, END)
+        urgent = a.new_alerts(urgent_only=True)
+        assert urgent, "the demo should raise some urgent findings"
+        assert all(audit.is_urgent(f, cfg["audit"]) for f in urgent)
+        assert all(f.severity in ("ACTION", "CONFIRMED") for f in urgent)
+        assert audit.run(con, cfg, END).new_alerts(urgent_only=True) == []     # each pushed once
+    finally:
+        store.set_state(con, "audit_pushed", [])
+
+
 def test_report_registry_builds_every_report(env):
     cfg, con = env
     for name in report_registry.NAMES:

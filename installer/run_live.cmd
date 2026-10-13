@@ -9,3 +9,5 @@ set LOG=output\live_run_log.txt
 echo ==== %date% %time% ==== >> "%LOG%"
 SmartLayer.exe licence check >nul 2>&1 || (echo no valid licence - live sync skipped >> "%LOG%" & exit /b 1)
 SmartLayer.exe sync --live >> "%LOG%" 2>&1
+rem Urgent, send-once alerts (loom silent, beam out with no backup, confirmed error, negative stock) - each pushed once.
+SmartLayer.exe audit --push --urgent >> "%LOG%" 2>&1

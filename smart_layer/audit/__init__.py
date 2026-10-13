@@ -98,13 +98,28 @@ class Audit:
                       [f"{n['ACTION']} action, {n['CONFIRMED']} confirmed errors, {n['WATCH']} to watch, "
                        f"{n['INFO']} dismissed as normal practice.", *self.summary])
 
-    def new_alerts(self, remember=True):
-        """ACTION / CONFIRMED findings not pushed before."""
+    def new_alerts(self, remember=True, urgent_only=False):
+        """ACTION / CONFIRMED findings not pushed before (optionally only the urgent ones)."""
         seen = set(get_state(self.con, "audit_pushed", []))
-        fresh = [f for f in self.findings if f.severity in ("ACTION", "CONFIRMED") and f.key not in seen]
+        fresh = [f for f in self.findings if f.severity in ("ACTION", "CONFIRMED") and f.key not in seen
+                 and (not urgent_only or is_urgent(f, self.t))]
         if remember:
             set_state(self.con, "audit_pushed", sorted(seen | {f.key for f in fresh})[-20000:])
         return fresh
+
+
+def is_urgent(f, audit_cfg=None):
+    """The few findings worth a send-once phone alert the moment they appear (the rest wait for the daily summary):
+    a confirmed data error, a beam about to run out with no backup, a loom silent too long, negative stock."""
+    if f.severity == "CONFIRMED":                    # confirmed errors incl. negative stock, unbalanced vouchers
+        return True
+    if f.key.startswith("beamend-"):                 # a beam finishing with no sized beam waiting
+        return True
+    if f.key.startswith("idle-"):                    # a loom with nothing entered for a long time
+        m = re.search(r"entered for (\d+) days", f.title)
+        days = int(m.group(1)) if m else 0
+        return days >= int((audit_cfg or {}).get("loom_silent_days", 10))
+    return "negative" in f.title.lower()
 
 
 def run(con, cfg, d0, d1=None):

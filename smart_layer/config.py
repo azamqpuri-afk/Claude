@@ -27,6 +27,7 @@ DEFAULTS = {
         "rejection_pct": 15,
         "rejection_min_meters": 200,
         "idle_loom_min_days": 5,
+        "loom_silent_days": 10,           # a loom silent this many days is an urgent (send-once) phone alert
         "trial_balance_tolerance": 10,    # rounding differences below this are not an error
         "dismiss": [],                    # [{match = "regex", why = "normal practice ..."}]
     },
