@@ -24,8 +24,6 @@ import sys
 from datetime import date, timedelta
 
 from . import PRODUCT, config, erp, notify, schema, store
-from .reports import finance, production, reconcile, stock
-from .textile import beams, closing, pilferage, stock_position
 
 
 def _open_erp(cfg):
@@ -67,18 +65,12 @@ def cmd_sync(cfg, args):
 
 
 def cmd_report(cfg, args):
+    from . import report_registry
     con = _store(cfg)
     day = date.fromisoformat(args.date) if args.date else None
-    builders = {"stock": stock.stock_status, "zero": stock.new_zero, "reorder": stock.reorder_list,
-                "production": production.daily_production, "closing": closing.contract_closing,
-                "pilferage": pilferage.pilferage, "beams": beams.beam_report, "sizers": beams.sizer_ledger,
-                "pnl": finance.pnl, "balances": finance.balances, "parties": finance.parties,
-                "store-recon": reconcile.store_consumption, "yarn-stock": stock_position.yarn_stock,
-                "fabric-stock": stock_position.fabric_stock, "value": production.production_value}
-    rep = builders[args.name](con, cfg, day)
+    rep = report_registry.build(con, cfg, args.name, day)
     print(rep.text())
-    default = date.today() - timedelta(days=1) if args.name in ("production", "pilferage", "value") else date.today()
-    tag = (day or default).isoformat()
+    tag = report_registry.report_day(args.name, day).isoformat()
     out_dir = cfg.path(cfg["reports"]["output_dir"])
     if args.csv:
         print("\nSaved", rep.write_csv(out_dir, f"{args.name}_{tag}.csv"))
@@ -238,9 +230,9 @@ def main(argv=None):
     sub.add_parser("check")
     s = sub.add_parser("sync")
     s.add_argument("--entities", nargs="*")
+    from . import report_registry
     r = sub.add_parser("report")
-    r.add_argument("name", choices=["stock", "zero", "reorder", "production", "closing", "pilferage", "beams", "sizers", "pnl", "balances",
-                                      "parties", "store-recon", "yarn-stock", "fabric-stock", "value"])
+    r.add_argument("name", choices=report_registry.NAMES)
     r.add_argument("--date")
     r.add_argument("--csv", action="store_true")
     r.add_argument("--pdf", action="store_true")

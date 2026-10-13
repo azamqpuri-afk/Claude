@@ -102,6 +102,8 @@ td.nowrap { white-space: nowrap; }
 <body>
 <header>
   <h1 id="title">Mill Dashboard<span class="sub" id="subtitle">Loading…</span></h1>
+  <input type="search" id="search" placeholder="Search item, quality, loom, party, contract…" aria-label="Search the page"
+         style="flex:1 1 220px;min-width:160px;max-width:420px">
   <label class="sub" for="day" style="display:inline">Day</label>
   <input type="date" id="day" aria-label="Day to show">
   <button id="theme" type="button" aria-label="Switch light or dark">◐</button>
@@ -128,6 +130,19 @@ td.nowrap { white-space: nowrap; }
     <p class="hint">The day's audit across finance, store, weaving and yarn. ACTION = do something today, CONFIRMED = a definite error in the data.</p>
     <div class="tabs" id="attTabs" role="tablist"></div>
     <div class="table-wrap" id="findings"></div>
+  </section>
+
+  <section class="card" id="reportsCard" aria-labelledby="rep-h" style="display:none">
+    <h2 id="rep-h">Reports</h2>
+    <p class="hint">Pick a report to see it on screen, or download it as PDF (to print / WhatsApp) or Excel (CSV). Uses the day above where it applies.</p>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <select id="repName" aria-label="Report" style="font:inherit;font-size:14px;color:var(--text-primary);background:var(--surface-2);border:1px solid var(--line);border-radius:8px;padding:6px 10px;max-width:100%"></select>
+      <button class="btn" id="repView" type="button">View</button>
+      <button class="btn" id="repPdf" type="button">Download PDF</button>
+      <button class="btn" id="repCsv" type="button">Download Excel (CSV)</button>
+    </div>
+    <div id="repMsg" class="detail" style="margin-top:8px"></div>
+    <div class="table-wrap" id="repOut" style="margin-top:10px"></div>
   </section>
 
   <section class="grid2">
@@ -377,15 +392,29 @@ function render() {
     [chip(r.status === "OUT OF STOCK" ? "ACTION" : "WATCH").replace(/ACTION|WATCH/, r.status === "OUT OF STOCK" ? "OUT" : "LOW"),
      `${esc(r.item)}<div class="detail">${esc(r.code)} · ${esc(r.unit)}</div>`, num(r.stock, 1), num(r.avg_month, 1)]), [2, 3]);
   $("#beamHint").textContent = `Days left = fabric still to come on the beam ÷ the loom's meters a day. Red: finishes within ${num(D.beam_warn_days)} days with no sized beam waiting.`;
-  $("#beams").innerHTML = table(["", "Loom", "Beam", "Contract", "Days left", "Fabric to come m", "m / day", "Backup beam"],
+  $("#beams").innerHTML = table(["", "Loom", "Beam", "Contract", "Quality", "Days left", "Fabric to come m", "m / day", "Backup beam"],
     (D.beams || []).map((b) => [b.alert ? chip("ACTION").replace("ACTION", "NO BACKUP") : (b.over ? chip("CONFIRMED").replace("CONFIRMED", "CHECK") : ""),
-      esc(b.loom), esc(b.beam), esc(b.contract || ""), num(b.days, 1), num(b.to_come), num(b.rate),
-      b.backup ? esc(b.backup) : (b.over ? "woven more than the beam holds" : "–")]), [4, 5, 6]);
-  $("#looms").innerHTML = table(["Loom", "Meters", "Eff %", "Rej %"], D.looms.map((r) =>
-    [esc(r.loom), num(r.meters), num(r.eff, 1), num(r.rej, 1)]), [1, 2, 3]);
+      esc(b.loom), esc(b.beam), esc(b.contract || ""), esc(b.quality || ""), num(b.days, 1), num(b.to_come), num(b.rate),
+      b.backup ? esc(b.backup) : (b.over ? "woven more than the beam holds" : "–")]), [5, 6, 7]);
+  $("#looms").innerHTML = table(["Loom", "Quality", "Meters", "Eff %", "Rej %"], D.looms.map((r) =>
+    [esc(r.loom), esc(r.quality || ""), num(r.meters), num(r.eff, 1), num(r.rej, 1)]), [2, 3, 4]);
   $("#foot").textContent = `${D.product} · figures from the mill's ERP, read-only`;
   renderCharts();
+  applyFilter();
 }
+
+// ---------- search: filter every table row and list item on the page ----------
+function applyFilter() {
+  const q = ($("#search").value || "").trim().toLowerCase();
+  document.querySelectorAll("main tbody tr, main .item").forEach((el) => {
+    const hit = !q || el.textContent.toLowerCase().includes(q);
+    el.style.display = hit ? "" : "none";
+    if (hit && q) {                                    // open any collapsed "Show as table" / details holding a match
+      for (let d = el.closest("details"); d; d = d.parentElement.closest("details")) d.open = true;
+    }
+  });
+}
+$("#search").addEventListener("input", applyFilter);
 
 async function licenceInfo() {
   if (STATIC_DATA) { $("#licBtn").style.display = "none"; return null; }
@@ -421,6 +450,34 @@ async function load(day) {
 $("#day").onchange = (e) => load(e.target.value);
 let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => D && renderCharts(), 150); });
 
+// ---------- reports (server builds them; download as PDF or CSV) ----------
+async function loadReports() {
+  if (STATIC_DATA) return;                             // reports are generated live by the server
+  try {
+    const j = await (await fetch("api/reports")).json();
+    $("#repName").innerHTML = j.reports.map((r) => `<option value="${esc(r.name)}">${esc(r.label)}</option>`).join("");
+    $("#reportsCard").style.display = "";
+  } catch (e) {}
+}
+function repUrl(fmt) {
+  const day = $("#day").value;
+  return `api/report?name=${encodeURIComponent($("#repName").value)}&fmt=${fmt}` + (day ? `&date=${day}` : "");
+}
+$("#repView").onclick = async () => {
+  $("#repMsg").textContent = "Loading…"; $("#repOut").innerHTML = "";
+  try {
+    const r = await fetch(repUrl("json"));
+    if (!r.ok) { $("#repMsg").textContent = "Could not build this report (licence or data)."; return; }
+    const j = await r.json();
+    const nums = j.columns.map((_, i) => i).filter((i) => j.rows.length && j.rows.every((row) => row[i] === "" || /^[-+\d.,%\s]+$/.test(String(row[i]))));
+    $("#repMsg").textContent = j.title + (j.summary && j.summary.length ? " — " + j.summary.join("  ·  ") : "");
+    $("#repOut").innerHTML = table(j.columns, j.rows.map((row) => row.map((c) => esc(c))), nums);
+    applyFilter();
+  } catch (e) { $("#repMsg").textContent = "Could not reach the server."; }
+};
+$("#repPdf").onclick = () => { location.href = repUrl("pdf"); };
+$("#repCsv").onclick = () => { location.href = repUrl("csv"); };
+
 // ---------- chat ----------
 let session = null; try { session = sessionStorage.getItem("sl-session"); } catch (e) {}
 if (!session) { session = Math.random().toString(36).slice(2) + Date.now().toString(36); try { sessionStorage.setItem("sl-session", session); } catch (e) {} }
@@ -450,6 +507,7 @@ $("#askForm").onsubmit = async (e) => {
 };
 licenceInfo();
 load();
+loadReports();
 </script>
 </body>
 </html>

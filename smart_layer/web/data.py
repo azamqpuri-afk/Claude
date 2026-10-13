@@ -80,7 +80,9 @@ def build(con, cfg, as_of=None):
     flags, weekly, sizing, t = pilferage.analyse(con, cfg, as_of - timedelta(days=int(t_look(cfg))), as_of)
 
     bt = beams_mod.settings(cfg)
+    quality = {c: q for c, q in con.execute("SELECT contract_no, quality FROM contracts")}
     beam_rows = [{"loom": r["loom_name"], "beam": r["beam"], "contract": r["contract"],
+                  "quality": quality.get(r["contract"]),
                   "days": round(r["days"], 1) if r["days"] is not None else None,
                   "to_come": round(r["to_come"]) if r["to_come"] is not None else None, "rate": round(r["rate"]),
                   "backup": (r["backup"] or {}).get("beam"), "over": r["over"],

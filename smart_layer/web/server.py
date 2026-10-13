@@ -41,6 +41,15 @@ class App:
         finally:
             con.close()
 
+    def report(self, name, day):
+        """A built report plus the day it is actually for (so the file name and on-screen title agree)."""
+        from .. import report_registry
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return report_registry.build(con, self.cfg, name, day), report_registry.report_day(name, day)
+        finally:
+            con.close()
+
     def ask(self, session, question):
         import os
         try:
@@ -107,7 +116,10 @@ def handler(app):
                 st = licence.status(app.cfg)
                 return self._send(200, {"state": st.state, "message": st.message, "allowed": st.allowed,
                                         "warning": st.warning, "machine": licence.machine_id()})
-            if path == "/api/data":
+            if path == "/api/reports":
+                from .. import report_registry
+                return self._send(200, {"reports": [{"name": n, "label": label} for n, label in report_registry.menu()]})
+            if path in ("/api/data", "/api/report"):
                 from .. import licence
                 st = licence.status(app.cfg)
                 if not st.allowed:
@@ -115,10 +127,47 @@ def handler(app):
                 params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
                 try:
                     day = date.fromisoformat(params["date"]) if params.get("date") else None
-                    return self._send(200, app.data(day))
                 except ValueError:
                     return self._send(400, {"error": "date must be YYYY-MM-DD"})
+                if path == "/api/data":
+                    return self._send(200, app.data(day))
+                return self._report(app, params.get("name", ""), params.get("fmt", "json"), day)
             self._send(404, {"error": "not found"})
+
+        def _report(self, app, name, fmt, day):
+            from .. import PRODUCT, report_registry
+            from ..reports import fmt as cell
+            if name not in report_registry.REPORTS:
+                return self._send(404, {"error": "unknown report"})
+            rep, on = app.report(name, day)
+            tag = on.isoformat()
+            if fmt == "csv":
+                import csv
+                import io
+                buf = io.StringIO()
+                w = csv.writer(buf)
+                w.writerow(rep.columns)
+                w.writerows(rep.rows)
+                body = buf.getvalue().encode("utf-8-sig")       # BOM so Excel opens Urdu text correctly
+                return self._download(body, f"{name}_{tag}.csv", "text/csv; charset=utf-8")
+            if fmt == "pdf":
+                import tempfile
+                from pathlib import Path
+                with tempfile.TemporaryDirectory() as tmp:
+                    p = rep.write_pdf(tmp, f"{name}_{tag}.pdf", app.cfg["company"]["name"], PRODUCT)
+                    body = Path(p).read_bytes()
+                return self._download(body, f"{name}_{tag}.pdf", "application/pdf")
+            return self._send(200, {"title": rep.title, "columns": rep.columns, "summary": rep.summary,
+                                    "rows": [[cell(v) for v in r] for r in rep.rows], "date": tag})
+
+        def _download(self, body, filename, ctype):
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(body)
 
         def do_POST(self):
             if not self._authorised():

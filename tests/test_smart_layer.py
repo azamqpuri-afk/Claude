@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "demo"))
 
 import build_demo_erp  # noqa: E402
-from smart_layer import audit, config, erp, store  # noqa: E402
+from smart_layer import audit, config, erp, report_registry, store  # noqa: E402
 from smart_layer.ask import Assistant  # noqa: E402
 from smart_layer.reports import production, stock  # noqa: E402
 
@@ -291,6 +291,42 @@ def test_server_requires_password(env):
         req = urllib.request.Request(url + "/api/data?date=2026-10-02",
                                      headers={"Authorization": "Basic " + base64.b64encode(b"owner:s3cret-pass").decode()})
         assert json.loads(urllib.request.urlopen(req).read())["as_of"] == "2026-10-02"
+    finally:
+        httpd.shutdown()
+        cfg.data["serve"] = {}
+
+
+def test_report_registry_builds_every_report(env):
+    cfg, con = env
+    for name in report_registry.NAMES:
+        rep = report_registry.build(con, cfg, name)
+        assert rep.columns, name                              # every report has headers
+        for row in rep.rows:
+            assert len(row) == len(rep.columns), name          # rows match the header width
+
+
+def test_server_reports_menu_and_download(env):
+    cfg, _ = env
+    cfg.data["serve"] = {"password": "s3cret-pass"}
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), web_server.handler(web_server.App(cfg)))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    auth = {"Authorization": "Basic " + base64.b64encode(b"owner:s3cret-pass").decode()}
+
+    def get(path):
+        return urllib.request.urlopen(urllib.request.Request(url + path, headers=auth))
+
+    try:
+        menu = json.loads(get("/api/reports").read())["reports"]
+        assert {r["name"] for r in menu} == set(report_registry.NAMES)
+        j = json.loads(get("/api/report?name=stock&fmt=json&date=2026-10-02").read())
+        assert j["columns"] and all(len(r) == len(j["columns"]) for r in j["rows"])
+        r = get("/api/report?name=stock&fmt=csv&date=2026-10-02")
+        assert r.headers["Content-Disposition"].endswith('stock_2026-10-02.csv"')
+        assert r.read().decode("utf-8-sig").splitlines()[0]    # a header line
+        with pytest.raises(urllib.error.HTTPError) as e:        # unknown report name is refused
+            get("/api/report?name=nonsense&fmt=json")
+        assert e.value.code == 404
     finally:
         httpd.shutdown()
         cfg.data["serve"] = {}
