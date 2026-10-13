@@ -372,7 +372,8 @@ function render() {
     : `<p class="empty">Nothing found for this day.</p>`;
 
   const byParty = {};
-  D.closing.forEach((r) => { const p = (byParty[r.party] ||= [0, 0]); p[0] += r.balance_bags; p[1] += r.value || 0; });
+  D.closing.forEach((r) => { if (r.pre_go_live) return;            // started in the old ERP: not counted in the totals
+    const p = (byParty[r.party] ||= [0, 0]); p[0] += r.balance_bags; p[1] += r.value || 0; });
   $("#closing").innerHTML = table(["Party", "Balance bags", `Value ${cur}`],
       Object.entries(byParty).map(([p, [b, v]]) => [esc(p), `<span class="${b < 0 ? "neg" : "pos"}">${b > 0 ? "+" : ""}${num(b, 1)}</span>`, v ? money(v) : "–"]), [1, 2]) +
     `<details class="data"><summary>Per contract and yarn</summary>` +

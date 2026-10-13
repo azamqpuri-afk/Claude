@@ -18,9 +18,10 @@ from .method import KG_PER_LB, Method
 
 def contract_rows(con, method, as_of):
     d = as_of.isoformat()
+    go_live = (method.cfg.get("erp_start_date") or "").strip() or None   # contracts older than this live in the old ERP
     contracts = con.execute("""SELECT contract_no, party_code, COALESCE(c.party_name, p.party_name, c.party_code), quality,
                                       ends_per_inch, picks_per_inch, width_in, warp_yarn, warp_count, weft_yarn, weft_count,
-                                      ordered_meters, COALESCE(yarn_owner, 'party')
+                                      ordered_meters, COALESCE(yarn_owner, 'party'), c.contract_date
                                FROM contracts c LEFT JOIN parties p USING (party_code)""").fetchall()
     names = {code: name for code, name in con.execute(
         "SELECT yarn_code, MAX(yarn_name) FROM yarn_movements WHERE yarn_name IS NOT NULL GROUP BY yarn_code")}
@@ -39,9 +40,10 @@ def contract_rows(con, method, as_of):
             FROM loom_production WHERE prod_date <= ? GROUP BY contract_no""", (d,))}
 
     rows = []
-    for (cno, pcode, party, quality, epi, ppi, width, wy, wc, fy, fc, ordered, owner) in contracts:
+    for (cno, pcode, party, quality, epi, ppi, width, wy, wc, fy, fc, ordered, owner, cdate) in contracts:
         if owner == "mill":
             continue
+        pre_go_live = bool(go_live and cdate and str(cdate) < go_live)   # started in the previous ERP: history incomplete
         fix = method.contract_overrides(cno)
         epi, ppi, width = fix.get("ends_per_inch", epi), fix.get("picks_per_inch", ppi), fix.get("width_in", width)
         wy, fy = fix.get("warp_yarn", wy), fix.get("weft_yarn", fy)
@@ -68,11 +70,13 @@ def contract_rows(con, method, as_of):
                 continue                            # nothing received or used: an empty / old contract
             rate = method.rate(ycode, s)
             bag = float(s["bag_lb"])
+            note = "construction missing for " + " and ".join(missing) if missing else ""
+            if pre_go_live:
+                note = ("started in the previous ERP - balance incomplete" + ("; " + note if note else ""))
             rows.append(dict(contract=cno, party=party or pcode or "?", quality=quality, status=status, yarn=ycode,
                              yarn_name=_yarn_label(method, ycode, names), meters=meters, received_bags=rec_lb / bag,
                              used_bags=used_lb / bag, balance_bags=bal_lb / bag, balance_lb=bal_lb,
-                             value=bal_lb * rate if rate else None,
-                             note=("construction missing for " + " and ".join(missing)) if missing else ""))
+                             value=bal_lb * rate if rate else None, pre_go_live=pre_go_live, note=note))
     return rows
 
 
@@ -90,11 +94,17 @@ def contract_closing(con, cfg, as_of=None, party=None):
     if party:
         rows = [r for r in rows if party.lower() in (r["party"] or "").lower()]
     cur = cfg["company"]["currency"]
+    incomplete = [r for r in rows if r.get("pre_go_live")]
     by_party = defaultdict(lambda: [0.0, 0.0])
     for r in rows:
+        if r.get("pre_go_live"):
+            continue                                # started in the old ERP: history incomplete, keep out of the totals
         by_party[r["party"]][0] += r["balance_bags"]
         by_party[r["party"]][1] += r["value"] or 0
     summary = [f"Party yarn balances as at {as_of:%d-%b-%Y} (+ = we hold the party's yarn, - = party is short):"]
+    if incomplete:
+        summary.append(f"{len({r['contract'] for r in incomplete})} contract(s) started in the previous ERP are listed "
+                       "but NOT counted in the totals above - their yarn/fabric history is incomplete here.")
     summary += [f"  {p}: {b:+,.1f} bags" + (f" ({cur} {v:+,.0f})" if v else "") for p, (b, v) in sorted(by_party.items())]
     s = method.settings()
     summary.append(f"Method: {s['basis']} meters, rejection charged to {s['rejection_charged_to']}, divisor {s['divisor']:g}, "

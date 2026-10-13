@@ -31,6 +31,8 @@ DEFAULT_CLOSING = {
     "basis": "dispatched",           # dispatched (net of returns) | woven
     "rejection_charged_to": "mill",  # mill: party is charged yarn for fresh meters only | party: for all meters
     "wastage_allowance_pct": 0,      # extra yarn allowed to the mill on top of the calculated consumption
+    "erp_start_date": "",            # this ERP's go-live date (YYYY-MM-DD); contracts that started earlier are
+                                     # incomplete here (their yarn / fabric history is in the previous ERP)
     "warp_crimp_pct": 0,
     "weft_crimp_pct": 0,
     "yarns": {},                     # {"Y40": {closing_count = 39, rate_per_lb = 550}}
