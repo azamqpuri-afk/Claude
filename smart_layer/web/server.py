@@ -105,6 +105,30 @@ class App:
         finally:
             con.close()
 
+    def ledger(self, account):
+        from . import finance
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return finance.ledger(con, account)
+        finally:
+            con.close()
+
+    def fin_parties(self, chip, q):
+        from . import finance
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return {"parties": finance.parties(con, chip or "all", q or "")}
+        finally:
+            con.close()
+
+    def fin_daily(self, day):
+        from . import finance
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return finance.daily(con, day or date.today())
+        finally:
+            con.close()
+
     def ask(self, session, question):
         import os
         try:
@@ -166,6 +190,8 @@ def handler(app):
             path, _, query = self.path.partition("?")
             if path in ("/", "/index.html"):
                 return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
+            if path.startswith("/static/"):
+                return self._static(path[len("/static/"):])
             if path == "/api/licence":
                 from .. import licence
                 st = licence.status(app.cfg)
@@ -174,7 +200,8 @@ def handler(app):
             if path == "/api/reports":
                 from .. import report_registry
                 return self._send(200, {"reports": [{"name": n, "label": label} for n, label in report_registry.menu()]})
-            if path in ("/api/data", "/api/report", "/api/entities", "/api/browse"):
+            if path in ("/api/data", "/api/report", "/api/entities", "/api/browse",
+                        "/api/ledger", "/api/finance/parties", "/api/finance/daily"):
                 from .. import licence
                 st = licence.status(app.cfg)
                 if not st.allowed:
@@ -186,14 +213,39 @@ def handler(app):
                     data = app.browse(params.get("entity", ""), params.get("q", ""), params.get("sort", ""),
                                       params.get("dir", "desc"), params.get("limit", 200), params.get("offset", 0))
                     return self._send(200, data) if data else self._send(404, {"error": "unknown data set"})
+                if path == "/api/ledger":
+                    led = app.ledger(params.get("account", ""))
+                    return self._send(200, led) if led else self._send(404, {"error": "unknown account"})
+                if path == "/api/finance/parties":
+                    return self._send(200, app.fin_parties(params.get("group", "all"), params.get("q", "")))
                 try:
                     day = date.fromisoformat(params["date"]) if params.get("date") else None
                 except ValueError:
                     return self._send(400, {"error": "date must be YYYY-MM-DD"})
+                if path == "/api/finance/daily":
+                    return self._send(200, app.fin_daily(day))
                 if path == "/api/data":
                     return self._send(200, app.data(day))
                 return self._report(app, params.get("name", ""), params.get("fmt", "json"), day)
             self._send(404, {"error": "not found"})
+
+        def _static(self, name):
+            """Serve a bundled static file (Chart.js etc.) from web/static - offline, no CDN."""
+            name = name.replace("\\", "/").lstrip("/")
+            if "/" in name or ".." in name:
+                return self._send(404, {"error": "not found"})
+            p = Path(__file__).with_name("static") / name
+            if not p.is_file():
+                return self._send(404, {"error": "not found"})
+            ctype = {"js": "application/javascript; charset=utf-8", "css": "text/css; charset=utf-8",
+                     "woff2": "font/woff2", "svg": "image/svg+xml"}.get(name.rsplit(".", 1)[-1], "application/octet-stream")
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            body = p.read_bytes()
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "max-age=86400")
+            self.end_headers()
+            self.wfile.write(body)
 
         def _report(self, app, name, fmt, day):
             from .. import PRODUCT, report_registry

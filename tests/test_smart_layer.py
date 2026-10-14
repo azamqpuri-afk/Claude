@@ -518,3 +518,73 @@ def test_csv_source(tmp_path):
     (tmp_path / "exp" / "scb_2026-10-02.csv").write_bytes("LOOM NO,DATE,TOTAL METERS\n7,2026-10-02,205\n".encode("utf-8-sig"))
     con = erp.csv_connection({"files": "exp/*.csv", "table": "readings"}, tmp_path)
     assert con.execute("SELECT COUNT(*), SUM(TOTAL_METERS) FROM readings").fetchone() == (3, 605.5)
+
+
+# --- Finance (ledger desk): classification, party ledger, KPIs, daily summary ---
+from smart_layer.web import finance as web_finance  # noqa: E402
+
+
+def test_finance_kpis_match_balances(env):
+    _, con = env
+    k = web_finance.kpis(con)
+    # cash and bank KPIs equal the summed balances of those account groups
+    for grp in ("cash", "bank"):
+        want = con.execute("""SELECT COALESCE(SUM(b.balance),0) FROM account_balances b
+                              JOIN accounts a USING (account_code) WHERE a.account_group = ?""", (grp,)).fetchone()[0]
+        assert round(k[grp]) == round(want), grp
+    # receivable_net is the signed sum over customers; gross and advances split it by sign
+    assert k["receivable_gross"] >= 0 and k["advances_from_parties"] >= 0
+    assert round(k["receivable_net"]) == round(k["receivable_gross"] - k["advances_from_parties"])
+
+
+def test_finance_party_ledger_runs_to_balance(env):
+    _, con = env
+    parties = web_finance.parties(con, "conversion")
+    assert parties and parties[0]["side"] in ("Owes us", "Advance received", "Settled")
+    led = web_finance.ledger(con, parties[0]["code"])
+    assert led["rows"], "ledger has rows"
+    # running balance of the last row equals the account's stored balance and the header balance
+    stored = con.execute("SELECT balance FROM account_balances WHERE account_code = ?", (led["code"],)).fetchone()[0]
+    assert round(led["rows"][-1]["balance"]) == round(stored) == round(led["balance"])
+    # an opening (old-ERP) line, when present, sorts first
+    kinds = [r["kind"] for r in led["rows"]]
+    if "opening" in kinds:
+        assert kinds[0] == "opening"
+
+
+def test_finance_daily_balances(env):
+    _, con = env
+    # the demo's last ledger day
+    day = con.execute("SELECT MAX(voucher_date) FROM ledger_entries WHERE voucher_kind <> 'opening'").fetchone()[0]
+    d = web_finance.daily(con, date.fromisoformat(day))
+    assert d["summary"], "has voucher-type lines"
+    # vouchers balance, so the day's debit and credit totals agree bar the odd planted error
+    assert d["totals"]["debit"] > 0 and abs(d["totals"]["debit"] - d["totals"]["credit"]) <= 0.02 * d["totals"]["debit"]
+    assert all(s["kind"] in ("receipt", "payment", "journal", "sale", "purchase", "other") for s in d["summary"])
+
+
+def test_dashboard_has_finance_weaving_charts(env):
+    cfg, con = env
+    d = web_data.build(con, cfg, END)
+    assert set(d["fin"]["kpis"]) >= {"receivable_net", "cash", "bank", "accrued_payables"}
+    assert d["fin"]["chips"] and d["fin"]["parties"]
+    assert len(d["charts"]["cash_bank"]) == 30 and len(d["charts"]["receivables"]) == 12
+    assert d["weaving"]["looms"] and "scoreboard_available" in d["weaving"]
+    # scoreboard efficiency is a percentage, not multiplied by 100
+    effs = [l["scb_eff"] for l in d["weaving"]["looms"] if l["scb_eff"] is not None]
+    assert effs and all(0 <= e <= 100 for e in effs)
+    assert d["yarn_fabric"]["yarn_hand_bags"] >= 0 and d["yarn_fabric"]["fabric_m"] >= 0
+    json.dumps(d)
+
+
+def test_finance_endpoints(env):
+    cfg, con = env
+    app = web_server.App(cfg)
+    code = web_finance.parties(con, "conversion")[0]["code"]
+    led = app.ledger(code)
+    assert led and led["code"] == code and led["rows"]
+    pl = app.fin_parties("conversion", "")
+    assert pl["parties"] and all(p["group"] == "customer" for p in pl["parties"])
+    day = con.execute("SELECT MAX(voucher_date) FROM ledger_entries WHERE voucher_kind <> 'opening'").fetchone()[0]
+    dd = app.fin_daily(date.fromisoformat(day))
+    assert dd["totals"]["debit"] > 0 and dd["totals"]["credit"] > 0

@@ -67,7 +67,8 @@ def create(con):
     con.commit()
 
 
-FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements")     # contract closing needs each contract's whole life
+FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # contract closing needs each contract's whole life
+                "ledger_entries")                                            # party ledgers show the opening (old-ERP) balance and full running balance
 
 
 def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HISTORY):

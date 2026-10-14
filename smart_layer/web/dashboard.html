@@ -1,708 +1,815 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
-<link rel="icon" href="data:,">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Mill Dashboard</title>
+<title>Smart Layer</title>
+<meta name="description" content="Project Smart Layer by Azam Puri — the mill at a glance. Reads your ERP, changes nothing.">
+<script defer src="static/chart.min.js"></script>
 <style>
-:root {
-  color-scheme: light;
-  --bg: #f4f4f1; --surface-1: #fcfcfb; --surface-2: #f0efec; --line: #e2e1dc;
-  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #7a7974;
-  --series-1: #2a78d6; --series-2: #eb6834;
-  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
-  --accent: #2a78d6; --radius: 10px;
-}
-@media (prefers-color-scheme: dark) {
-  :root:where(:not([data-theme="light"])) {
-    color-scheme: dark;
-    --bg: #111110; --surface-1: #1a1a19; --surface-2: #242422; --line: #33332f;
-    --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
-    --series-1: #3987e5; --series-2: #d95926; --accent: #3987e5;
+  :root{
+    --bg:#f4f6f5; --panel:#ffffff; --ink:#0f1a17; --muted:#5e6b66; --line:#e4e9e7;
+    --teal:#0f6f5c; --teal-soft:#e7f2ef; --teal-deep:#0b4f42; --amber:#c77f17; --amber-soft:#fbf1df;
+    --red:#c0392b; --red-soft:#fbe9e7; --green:#1f8a4c; --blue:#2b6cb0; --field:#ffffff;
+    --shadow:0 1px 2px rgba(15,26,23,.05),0 8px 24px rgba(15,26,23,.06); --radius:16px;
   }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #111110; --surface-1: #1a1a19; --surface-2: #242422; --line: #33332f;
-  --text-primary: #ffffff; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
-  --series-1: #3987e5; --series-2: #d95926; --accent: #3987e5;
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; }
-body { background: var(--bg); color: var(--text-primary);
-  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif; }
-header { position: sticky; top: 0; z-index: 5; background: var(--surface-1); border-bottom: 1px solid var(--line);
-  padding: 10px 16px; display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-header h1 { font-size: 17px; margin: 0; flex: 1 1 auto; }
-header .sub { color: var(--text-secondary); font-size: 12.5px; font-weight: 400; display: block; }
-header input, header button, .btn { font: inherit; font-size: 14px; color: var(--text-primary); background: var(--surface-2);
-  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
-button { cursor: pointer; }
-main { max-width: 1240px; margin: 0 auto; padding: 16px; display: grid; gap: 16px; }
-.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 10px; }
-.kpi { background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px 14px; }
-.kpi .label { color: var(--text-secondary); font-size: 12.5px; }
-.kpi .value { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.kpi .note { color: var(--text-muted); font-size: 12px; }
-.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); gap: 16px; }
-.card { background: var(--surface-1); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; min-width: 0; }
-.card h2 { font-size: 15px; margin: 0 0 2px; }
-.card .hint { color: var(--text-muted); font-size: 12.5px; margin: 0 0 10px; }
-.chart { position: relative; width: 100%; }
-.chart svg { display: block; width: 100%; height: auto; overflow: visible; }
-.axis text { fill: var(--text-muted); font-size: 11px; }
-.grid line { stroke: var(--line); }
-.legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-secondary); margin: 0 0 6px; }
-.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
-.tip { position: absolute; pointer-events: none; background: var(--surface-1); border: 1px solid var(--line); border-radius: 8px;
-  padding: 6px 9px; font-size: 12.5px; box-shadow: 0 4px 14px rgba(0,0,0,.14); white-space: nowrap; display: none; z-index: 3; }
-.tip b { font-variant-numeric: tabular-nums; }
-.table-wrap { overflow-x: auto; }
-table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
-th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { color: var(--text-secondary); font-weight: 600; font-size: 12.5px; white-space: nowrap; }
-td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.chip { display: inline-flex; gap: 5px; align-items: center; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px;
-  border: 1px solid var(--line); white-space: nowrap; color: var(--text-primary); }
-.chip .dot { width: 8px; height: 8px; border-radius: 50%; }
-.detail { color: var(--text-secondary); font-size: 12.5px; }
-.pos { color: var(--text-primary); } .neg { color: var(--critical); }
-details.data summary { cursor: pointer; color: var(--text-secondary); font-size: 12.5px; margin-top: 8px; }
-.empty { color: var(--text-muted); font-size: 13.5px; padding: 8px 0; }
-.maintabs { position: sticky; top: 49px; z-index: 4; background: var(--bg); display: flex; gap: 4px; flex-wrap: wrap;
-  padding: 8px 16px; border-bottom: 1px solid var(--line); max-width: 1240px; margin: 0 auto; }
-.maintabs button { background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 6px 13px; font: inherit;
-  font-size: 14px; font-weight: 600; color: var(--text-secondary); cursor: pointer; }
-.maintabs button[aria-selected="true"] { background: var(--surface-1); border-color: var(--line); color: var(--text-primary); }
-.pane { display: grid; gap: 16px; }
-.pane[hidden] { display: none; }
-.sel { font: inherit; font-size: 14px; color: var(--text-primary); background: var(--surface-2);
-  border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; max-width: 100%; }
-tr.hit td { background: color-mix(in srgb, var(--accent) 16%, transparent); }
-.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-.tabs button { background: var(--surface-2); border: 1px solid var(--line); border-radius: 99px; padding: 4px 12px; font: inherit;
-  font-size: 13px; color: var(--text-secondary); }
-.tabs button[aria-selected="true"] { background: var(--text-primary); color: var(--surface-1); border-color: var(--text-primary); }
-#askBtn { position: fixed; right: 16px; bottom: 16px; z-index: 9; background: var(--accent); color: #fff; border: 0; border-radius: 99px;
-  padding: 12px 18px; font: inherit; font-weight: 600; box-shadow: 0 6px 18px rgba(0,0,0,.25); }
-#chat { position: fixed; right: 16px; bottom: 76px; z-index: 10; width: min(420px, calc(100vw - 32px)); height: min(560px, calc(100vh - 110px));
-  background: var(--surface-1); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.25);
-  display: none; flex-direction: column; overflow: hidden; }
-#chat.open { display: flex; }
-#chat .head { padding: 10px 14px; border-bottom: 1px solid var(--line); font-weight: 600; display: flex; justify-content: space-between; }
-#msgs { flex: 1; overflow-y: auto; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; }
-.msg { max-width: 92%; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; font-size: 14px; }
-.msg.me { align-self: flex-end; background: var(--accent); color: #fff; }
-.msg.bot { align-self: flex-start; background: var(--surface-2); }
-.msg details { margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
-.msg code { font-size: 11.5px; white-space: pre-wrap; word-break: break-word; }
-#chat form { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); }
-#chat input { flex: 1; font: inherit; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--line);
-  background: var(--surface-2); color: var(--text-primary); }
-footer { text-align: center; color: var(--text-muted); font-size: 12px; padding: 10px 16px 90px; }
-td.nowrap { white-space: nowrap; }
-.items { display: flex; flex-direction: column; }
-.item { padding: 9px 0; border-bottom: 1px solid var(--line); }
-.item .meta { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; color: var(--text-secondary); font-size: 12.5px; margin-bottom: 3px; }
-.item .what { font-size: 14px; }
-@media (max-width: 520px) { .kpis { grid-template-columns: 1fr 1fr; } .kpi .value { font-size: 18px; } .grid2 { grid-template-columns: 1fr; } }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+    --bg:#0d1513; --panel:#132019; --ink:#eaf1ee; --muted:#9fb0aa; --line:#223029;
+    --teal:#2fab90; --teal-soft:#15241e; --teal-deep:#9fe8d6; --amber:#e0a94a; --amber-soft:#2a2213;
+    --red:#e8796b; --red-soft:#2c1714; --green:#4cc27e; --blue:#6fa8dc; --field:#0e1815;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }}
+  :root[data-theme="dark"]{
+    --bg:#0d1513; --panel:#132019; --ink:#eaf1ee; --muted:#9fb0aa; --line:#223029;
+    --teal:#2fab90; --teal-soft:#15241e; --teal-deep:#9fe8d6; --amber:#e0a94a; --amber-soft:#2a2213;
+    --red:#e8796b; --red-soft:#2c1714; --green:#4cc27e; --blue:#6fa8dc; --field:#0e1815;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1200px;margin:0 auto;padding:0 16px 48px}
+  a{color:var(--teal)}
+  /* header */
+  header{display:flex;align-items:center;gap:14px;padding:16px 0 10px;flex-wrap:wrap}
+  .brand{display:flex;align-items:center;gap:12px;min-width:0}
+  .logo{position:relative;width:42px;height:42px;flex:0 0 auto}
+  .bubble{position:absolute;left:50%;top:14px;width:5px;height:5px;border-radius:50%;background:#9fe8d6;opacity:0;pointer-events:none}
+  .logo:hover .bubble{animation:rise 1.2s ease-out infinite}
+  .logo:hover .b2{animation-delay:.25s;left:42%} .logo:hover .b3{animation-delay:.5s;left:58%} .logo:hover .b4{animation-delay:.75s;left:46%}
+  @keyframes rise{0%{opacity:0;transform:translateY(0) scale(.6)}20%{opacity:.95}100%{opacity:0;transform:translateY(-16px) scale(1.15)}}
+  .brand h1{font-size:18px;margin:0;font-weight:700;letter-spacing:-.2px}
+  .brand .sub{font-size:12px;color:var(--muted);margin-top:1px}
+  .spacer{flex:1 1 auto}
+  .mill{font-size:13px;color:var(--muted);text-align:right}
+  .mill b{color:var(--ink);display:block;font-size:14px}
+  .hbtn{border:1px solid var(--line);background:var(--panel);color:var(--ink);border-radius:999px;padding:7px 12px;font-size:13px;cursor:pointer;display:inline-flex;gap:7px;align-items:center}
+  .hbtn:hover{border-color:var(--teal)}
+  input[type=date]{border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:10px;padding:7px 10px;font:inherit;font-size:13px}
+  .banner{background:var(--amber-soft);color:var(--amber);border-radius:10px;padding:9px 13px;font-size:13px;font-weight:600;margin:6px 0;display:none}
+  /* tabs */
+  .tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid var(--line);margin:6px 0 18px;-webkit-overflow-scrolling:touch}
+  .tabs button{border:0;background:none;color:var(--muted);padding:10px 14px;font-size:14px;font-weight:600;cursor:pointer;white-space:nowrap;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tabs button[aria-selected=true]{color:var(--teal);border-bottom-color:var(--teal)}
+  .subtabs{display:flex;gap:20px;border-bottom:1px solid var(--line);margin-bottom:16px;overflow-x:auto}
+  .subtabs button{border:0;background:none;color:var(--muted);padding:6px 2px 11px;font-size:15px;font-weight:700;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+  .subtabs button[aria-selected=true]{color:var(--ink);border-bottom-color:var(--teal)}
+  .sec{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);font-weight:700;margin:4px 2px 10px}
+  .asof{font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center;margin:-4px 2px 14px}
+  /* tiles */
+  .grid{display:grid;gap:14px}
+  .g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)} .g4{grid-template-columns:repeat(4,1fr)} .g5{grid-template-columns:repeat(5,1fr)}
+  .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);overflow:hidden}
+  .tile .lbl{font-size:12.5px;color:var(--muted);font-weight:600;display:flex;gap:7px;align-items:center}
+  .tile .val{font-size:23px;font-weight:750;letter-spacing:-.5px;margin-top:9px}
+  .tile .val .cur{font-size:13px;color:var(--muted);font-weight:600}
+  .tile .meta{font-size:12.5px;color:var(--muted);margin-top:6px} .tile .meta b{color:var(--ink)}
+  .tile.accent{background:linear-gradient(160deg,var(--teal-deep),var(--teal));color:#fff;border:none}
+  .tile.accent .lbl,.tile.accent .meta,.tile.accent .val .cur{color:rgba(255,255,255,.85)} .tile.accent .meta b{color:#fff}
+  .tile.warn{border-color:var(--amber)} .tile.warn .val{color:var(--amber)}
+  .tile.bad{border-color:var(--red)} .tile.bad .val{color:var(--red)}
+  .asof-tile{font-size:11px;color:var(--muted);margin-top:9px;padding-top:8px;border-top:1px dashed var(--line);display:flex;gap:5px;align-items:center}
+  /* attention */
+  .strip{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
+  .alert{display:flex;align-items:center;gap:11px;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:12px;padding:11px 14px;box-shadow:var(--shadow);cursor:pointer}
+  .alert.ACTION{border-left-color:var(--red)} .alert.CONFIRMED{border-left-color:var(--amber)} .alert.WATCH{border-left-color:var(--blue)}
+  .alert .t{font-weight:600;font-size:14px} .alert .d{color:var(--muted);font-size:13px} .alert .go{margin-left:auto;color:var(--teal);font-weight:600;font-size:13px;white-space:nowrap}
+  .ok-strip{background:var(--teal-soft);color:var(--teal-deep);border-radius:12px;padding:12px 14px;font-weight:600;font-size:14px;margin-bottom:20px}
+  /* cards & charts */
+  .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;align-items:start}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden;margin-bottom:16px}
+  .cols .card{margin-bottom:0}
+  .card .hd{padding:14px 16px 10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  .card .hd h3{margin:0;font-size:14.5px;font-weight:700}
+  .card .hd .count{font-size:12px;color:var(--muted)}
+  .card .hd .tools{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .cwrap{position:relative;height:230px;padding:4px 10px 12px}
+  .cnote{color:var(--muted);font-size:13px;padding:30px 16px;text-align:center}
+  .pad{padding:4px 12px 14px}
+  /* tables */
+  .tscroll{overflow-x:auto}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;min-width:520px}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);font-weight:700;text-align:left;padding:10px 14px;background:var(--teal-soft);position:sticky;top:0}
+  th.num,td.num{text-align:right;white-space:nowrap}
+  td{padding:10px 14px;border-top:1px solid var(--line);vertical-align:top}
+  tr:hover td{background:var(--teal-soft)}
+  tr.hit td{background:var(--amber-soft)}
+  td b{font-weight:700} .muted{color:var(--muted)}
+  .tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .tag.ok,.tag.run{background:var(--teal-soft);color:var(--teal-deep)} .tag.low,.tag.stop,.tag.OUT.OF.STOCK{background:var(--red-soft);color:var(--red)}
+  .tag.mid,.tag.idle{background:var(--amber-soft);color:var(--amber)} .tag.dr{background:var(--teal-soft);color:var(--teal-deep)} .tag.cr{background:var(--amber-soft);color:var(--amber)} .tag.out{background:var(--red);color:#fff}
+  /* loom floor */
+  .floor{display:grid;grid-template-columns:repeat(auto-fill,minmax(116px,1fr));gap:8px}
+  .loom{border-radius:10px;padding:9px 11px;min-height:80px;display:flex;flex-direction:column;gap:1px;color:#0b1210}
+  .loom .nm{font-size:11px;font-weight:700;opacity:.85} .loom .ef{font-size:22px;font-weight:800;line-height:1.15}
+  .loom .er{font-size:11px;opacity:.8} .loom .dt{font-size:11px;opacity:.78}
+  .loom.good{background:var(--green)} .loom.warn{background:var(--amber)} .loom.crit{background:var(--red)} .loom.old{background:var(--line);color:var(--muted)}
+  .legend2{display:flex;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)} .legend2 i{width:11px;height:11px;border-radius:3px;display:inline-block;margin-right:5px;vertical-align:-1px}
+  .cmp2{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:0 4px}
+  .cmpbox{background:var(--teal-soft);border-radius:12px;padding:12px 14px}
+  .cmpbox .t{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
+  .cmpbox .v{font-size:24px;font-weight:800;margin-top:3px}
+  /* finance master-detail */
+  .ledger{display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start}
+  .plist{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
+  .plist .s2{padding:12px 12px 8px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 10px}
+  .chips button{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:4px 10px;background:var(--field);color:var(--muted);cursor:pointer}
+  .chips button[aria-selected=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+  .plhdr{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);padding:8px 12px;border-top:1px solid var(--line)}
+  .pl{display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--line);background:none;color:inherit;padding:10px 12px;cursor:pointer;font:inherit}
+  .pl:hover{background:var(--teal-soft)} .pl[aria-selected=true]{background:var(--teal-soft);box-shadow:inset 3px 0 0 var(--teal)}
+  .pl .pn{font-weight:700;display:flex;justify-content:space-between;gap:8px}
+  .pl .ps{font-size:12px;color:var(--muted);margin-top:2px}
+  .plist .list{max-height:620px;overflow:auto}
+  .lkpi{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:0 0 6px}
+  .lkpi>div{padding:11px 14px;border-right:1px solid var(--line)} .lkpi>div:last-child{border-right:0}
+  .lkpi .t{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:700}
+  .lkpi .v{font-size:18px;font-weight:800;margin-top:3px}
+  /* controls */
+  .fld{display:inline-flex;align-items:center;gap:8px;background:var(--field);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13.5px}
+  .fld input,.fld select{border:0;background:none;outline:none;color:var(--ink);font:inherit;font-size:13.5px;min-width:0}
+  .fld input{width:220px;max-width:46vw}
+  .tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .btn{border:1px solid var(--teal);background:var(--teal);color:#fff;border-radius:10px;padding:8px 13px;font-size:13px;font-weight:700;cursor:pointer}
+  .btn.ghost{background:none;color:var(--teal)}
+  .countline{font-size:13px;color:var(--muted);margin:2px 2px 12px} .countline b{color:var(--ink)}
+  .legend{display:flex;gap:14px;font-size:12px;color:var(--muted);padding:0 16px 4px} .legend span{display:flex;align-items:center;gap:6px} .sw{width:10px;height:10px;border-radius:3px;display:inline-block}
+  .rep-sum{font-size:12.5px;color:var(--muted);padding:0 16px 10px}
+  /* chat */
+  #chat{position:fixed;right:16px;bottom:16px;width:min(380px,92vw);max-height:70vh;background:var(--panel);border:1px solid var(--line);border-radius:16px;box-shadow:0 20px 50px rgba(0,0,0,.35);display:none;flex-direction:column;z-index:30}
+  #chat.open{display:flex}
+  #chat .top{display:flex;align-items:center;gap:8px;padding:12px 14px;border-bottom:1px solid var(--line);font-weight:700}
+  #msgs{padding:12px;overflow:auto;display:flex;flex-direction:column;gap:8px}
+  .msg{padding:9px 12px;border-radius:12px;font-size:14px;max-width:85%;white-space:pre-wrap}
+  .msg.me{align-self:flex-end;background:var(--teal);color:#fff} .msg.bot{align-self:flex-start;background:var(--teal-soft);color:var(--ink)}
+  .msg details{margin-top:6px;font-size:12px} .msg code{display:block;color:var(--muted);white-space:pre-wrap}
+  #askForm{display:flex;gap:8px;padding:10px;border-top:1px solid var(--line)}
+  #q{flex:1;border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:10px;padding:9px 12px;font:inherit}
+  dialog{border:1px solid var(--line);border-radius:16px;background:var(--panel);color:var(--ink);max-width:520px;width:92vw;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+  dialog::backdrop{background:rgba(0,0,0,.45)}
+  textarea{width:100%;min-height:90px;border:1px solid var(--line);background:var(--field);color:var(--ink);border-radius:10px;padding:10px;font:inherit}
+  .foot{color:var(--muted);font-size:12px;text-align:center;margin-top:26px;line-height:1.6}
+  [hidden]{display:none!important}
+  @media(max-width:900px){ .cols{grid-template-columns:1fr} .g3,.g4,.g5{grid-template-columns:repeat(2,1fr)} .ledger{grid-template-columns:1fr} .lkpi{grid-template-columns:repeat(2,1fr)} }
+  @media(max-width:460px){ .g2,.g3,.g4,.g5{grid-template-columns:1fr} }
+  @media print{
+    :root,:root[data-theme=dark]{--bg:#fff;--panel:#fff;--ink:#000;--muted:#444;--line:#999;--teal-soft:#eee;--shadow:none}
+    header,.tabs,.subtabs,.banner,#chat,.hbtn,.tools .btn,.foot,.cwrap{display:none!important}
+    .pane[hidden]{display:none!important} .card{break-inside:avoid;border:1px solid #999}
+    th{background:#eee!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  }
 </style>
 </head>
 <body>
-<header>
-  <h1 id="title">Mill Dashboard<span class="sub" id="subtitle">Loading…</span></h1>
-  <input type="search" id="search" placeholder="Search item, quality, loom, party, contract…" aria-label="Search the page"
-         style="flex:1 1 220px;min-width:160px;max-width:420px">
-  <label class="sub" for="day" style="display:inline">Day</label>
-  <input type="date" id="day" aria-label="Day to show">
-  <button id="theme" type="button" aria-label="Switch light or dark">◐</button>
-  <button id="licBtn" type="button">Licence</button>
-</header>
-<div id="licBanner" role="status" style="display:none;background:#fff4d6;color:#5a4300;border-bottom:1px solid #e8d38f;padding:8px 16px;font-size:14px"></div>
-<dialog id="licDlg" style="max-width:520px;width:calc(100vw - 32px);border:1px solid var(--line);border-radius:12px;background:var(--surface-1);color:var(--text-primary)">
-  <h2 style="margin:0 0 6px;font-size:16px">Licence</h2>
-  <p id="licState" class="detail" style="margin:0 0 6px"></p>
-  <p class="detail" style="margin:0 0 10px">This server's ID: <b id="licMachine"></b> - send it to get or renew a licence.</p>
-  <label class="detail" for="licText">Paste the licence code, or choose the licence file:</label>
-  <textarea id="licText" rows="4" style="width:100%;margin:6px 0;font:12px monospace;background:var(--surface-2);color:var(--text-primary);border:1px solid var(--line);border-radius:8px;padding:6px"></textarea>
-  <input type="file" id="licFile" accept=".key,.txt">
-  <p id="licMsg" class="detail"></p>
-  <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn" id="licClose" type="button">Close</button>
-    <button class="btn" id="licSave" type="button">Install licence</button></div>
-</dialog>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="logo" aria-hidden="true">
+        <svg width="42" height="42" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs><linearGradient id="slg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1b8a74"/><stop offset="1" stop-color="#0b3d33"/></linearGradient></defs>
+          <rect x="1" y="1" width="46" height="46" rx="13" fill="url(#slg)"/>
+          <rect x="1" y="1" width="46" height="46" rx="13" stroke="var(--teal)" stroke-width="1.5"/>
+          <g stroke-linejoin="round" stroke-linecap="round">
+            <path d="M24 33 L11 27 L24 21 L37 27 Z" fill="#ffffff" opacity=".28"/>
+            <path d="M24 27 L11 21 L24 15 L37 21 Z" fill="#9fe8d6" opacity=".55"/>
+            <path d="M24 21 L11 15 L24 9 L37 15 Z" fill="#ffffff"/>
+            <g stroke="#2fab90" stroke-width="1.6" opacity=".95"><path d="M24 9 L18.5 4.5"/><path d="M24 9 L29.5 4.5"/><path d="M24 9 L24 2.6"/></g>
+            <circle cx="18.5" cy="4.3" r="1.7" fill="#9fe8d6"/><circle cx="29.5" cy="4.3" r="1.7" fill="#9fe8d6"/>
+            <circle cx="24" cy="2.4" r="1.7" fill="#ffffff"/><circle cx="24" cy="9" r="2.6" fill="#0b3d33" stroke="#ffffff" stroke-width="1.8"/>
+          </g>
+        </svg>
+        <span class="bubble b1"></span><span class="bubble b2"></span><span class="bubble b3"></span><span class="bubble b4"></span>
+      </span>
+      <div><h1>Smart Layer</h1><div class="sub" id="subtitle">by Azam Puri</div></div>
+    </div>
+    <div class="spacer"></div>
+    <div class="mill"><b id="millName">—</b><span id="asof">loading…</span></div>
+    <input type="date" id="day" title="View the mill as of this date">
+    <button class="hbtn" id="askBtn" aria-expanded="false">💬 Ask</button>
+    <button class="hbtn" id="licBtn" title="Licence">🔑</button>
+    <button class="hbtn" id="themeBtn">🌙 <span>Dark</span></button>
+  </header>
+  <div class="banner" id="licBanner"></div>
 
-<nav class="maintabs" id="mainTabs" role="tablist" aria-label="Sections">
-  <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
-  <button role="tab" data-tab="weaving" aria-selected="false">Weaving</button>
-  <button role="tab" data-tab="store" aria-selected="false">Store</button>
-  <button role="tab" data-tab="finance" aria-selected="false">Finance</button>
-  <button role="tab" data-tab="payroll" aria-selected="false">Payroll</button>
-  <button role="tab" data-tab="gate" aria-selected="false">Gate Passes</button>
-  <button role="tab" data-tab="browse" aria-selected="false">Browse</button>
-</nav>
+  <nav class="tabs" id="tabs">
+    <button data-tab="overview" aria-selected="true">Overview</button>
+    <button data-tab="weaving">Weaving</button>
+    <button data-tab="store">Store Room</button>
+    <button data-tab="yf">Yarn &amp; Fabric</button>
+    <button data-tab="finance">Finance</button>
+    <button data-tab="payroll">Payroll</button>
+    <button data-tab="gate">Gate Passes</button>
+    <button data-tab="reports">Reports</button>
+  </nav>
 
-<main>
   <!-- OVERVIEW -->
-  <div class="pane" data-pane="overview">
-    <section class="kpis" id="kpis" aria-label="Key figures"></section>
-    <section class="card" aria-labelledby="att-h">
-      <h2 id="att-h">Needs attention</h2>
-      <p class="hint">The day's audit across finance, store, weaving and yarn. ACTION = do something today, CONFIRMED = a definite error in the data. Click an item to open it.</p>
-      <div class="tabs" id="attTabs" role="tablist"></div>
-      <div class="table-wrap" id="findings"></div>
-    </section>
-    <section class="card"><h2>Meters woven per day</h2><p class="hint">Last 30 days, all looms</p>
-      <div class="chart" id="cMeters"></div></section>
-    <section class="card" id="reportsCard" aria-labelledby="rep-h" style="display:none">
-      <h2 id="rep-h">Reports</h2>
-      <p class="hint">Pick a report to see it on screen, or download it as PDF (to print / WhatsApp) or Excel (CSV).</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <select id="repName" aria-label="Report" class="sel"></select>
-        <button class="btn" id="repView" type="button">View</button>
-        <button class="btn" id="repPdf" type="button">Download PDF</button>
-        <button class="btn" id="repCsv" type="button">Download Excel (CSV)</button>
-      </div>
-      <div id="repMsg" class="detail" style="margin-top:8px"></div>
-      <div class="table-wrap" id="repOut" style="margin-top:10px"></div>
-    </section>
-  </div>
+  <section class="pane" data-pane="overview">
+    <div class="sec">Needs attention</div>
+    <div class="strip" id="ov-attention"></div>
+    <div class="sec">Money</div>
+    <div class="grid g4" id="ov-money" style="margin-bottom:22px"></div>
+    <div class="sec">The mill today</div>
+    <div class="grid g5" id="ov-mill" style="margin-bottom:22px"></div>
+    <div class="sec">Trends</div>
+    <div class="cols">
+      <div class="card"><div class="hd"><h3>Sales vs Expenses</h3><span class="count">monthly · Rs lac</span></div><div class="cwrap"><canvas id="ov1"></canvas></div></div>
+      <div class="card"><div class="hd"><h3>Receivables</h3><span class="count">month-end · Rs lac</span></div><div class="cwrap"><canvas id="ov2"></canvas></div></div>
+    </div>
+    <div class="cols">
+      <div class="card"><div class="hd"><h3>Cash in hand &amp; Bank</h3><span class="count">30 days · Rs lac</span></div><div class="cwrap"><canvas id="ov3"></canvas></div></div>
+      <div class="card"><div class="hd"><h3>Fabric stock</h3><span class="count">month-end · meters</span></div><div class="cwrap"><canvas id="ov4"></canvas></div></div>
+    </div>
+  </section>
 
   <!-- WEAVING -->
-  <div class="pane" data-pane="weaving" hidden>
-    <section class="card"><h2>Beam stock</h2><p class="hint">Where every beam is right now</p>
-      <div class="kpis" id="beamStock"></div></section>
-    <section class="card"><h2>Beams on looms</h2>
-      <p class="hint" id="beamHint">Days left = fabric still to come on the beam ÷ the loom's meters a day</p>
-      <div class="table-wrap" id="beams"></div></section>
-    <section class="card"><h2>Weaving efficiency %</h2><p class="hint">Meters ÷ meters at 100%, last 30 days</p>
-      <div class="chart" id="cEff"></div></section>
-    <section class="grid2">
-      <div class="card"><h2>Contract closing: party yarn</h2>
-        <p class="hint">+ = mill holds the party's yarn · − = party is short. Method set by the mill.</p>
-        <div class="table-wrap" id="closing"></div></div>
-      <div class="card"><h2>Yarn: pilferage check</h2>
-        <p class="hint">Weft issued vs needed, suspicious entries, sizing loss</p>
-        <div class="table-wrap" id="pilferage"></div></div>
-    </section>
-    <section class="card"><h2>Looms on the day</h2><p class="hint">Meters, efficiency and rejection per loom</p>
-      <div class="table-wrap" id="looms"></div></section>
-  </div>
+  <section class="pane" data-pane="weaving" hidden>
+    <div class="asof" id="wv-asof"></div>
+    <div class="grid g5" id="wv-tiles" style="margin-bottom:16px"></div>
+    <div class="card">
+      <div class="hd"><h3>Looms — efficiency, last 30 days</h3><span class="count" id="wv-floor-note"></span></div>
+      <div class="pad">
+        <div class="legend2" style="margin:0 4px 12px" id="wv-legend"></div>
+        <div class="floor" id="wv-floor"></div>
+      </div>
+    </div>
+    <div class="card" id="wv-cmp-card"><div class="hd"><h3>Last 30 days — ERP vs scoreboard</h3><span class="count">whole shed average</span></div>
+      <div class="pad"><div class="cmp2" id="wv-cmp"></div></div></div>
+    <div class="cols">
+      <div class="card" id="wv-trend-card"><div class="hd"><h3>Scoreboard vs ERP efficiency</h3><span class="count">last 30 days</span></div><div class="cwrap"><canvas id="wv1"></canvas></div></div>
+      <div class="card"><div class="hd"><h3>Monthly efficiency &amp; A-grade</h3><span class="count">ERP · last 12 months</span></div><div class="cwrap"><canvas id="wv2"></canvas></div></div>
+    </div>
+    <div class="card"><div class="hd"><h3>Loom by loom</h3><span class="count" id="wv-loomcount"></span></div><div class="tscroll"><table id="wv-looms"></table></div></div>
+  </section>
 
-  <!-- STORE -->
-  <div class="pane" data-pane="store" hidden>
-    <section class="card"><h2>Store: out of stock and low</h2><p class="hint">Items used in the last 60 days</p>
-      <div class="table-wrap" id="stock"></div></section>
-    <p class="hint">Use <b>Browse</b> to search every store item, receipt and issue.</p>
-  </div>
+  <!-- STORE ROOM -->
+  <section class="pane" data-pane="store" hidden>
+    <div class="subtabs" id="store-sub">
+      <button data-v="stock" aria-selected="true">Stock status</button>
+      <button data-v="reorder">Store demand</button>
+    </div>
+    <div class="tools" id="store-tools"></div>
+    <div id="store-out"></div>
+    <div class="rep-sum" id="store-msg"></div>
+  </section>
+
+  <!-- YARN & FABRIC -->
+  <section class="pane" data-pane="yf" hidden>
+    <div class="subtabs" id="yf-sub">
+      <button data-v="yarn" aria-selected="true">🧶 Yarn</button>
+      <button data-v="fabric">📦 Fabric</button>
+    </div>
+    <div class="grid g4" id="yf-tiles" style="margin-bottom:16px"></div>
+    <div class="tools" id="yf-tools"></div>
+    <div id="yf-out"></div>
+    <div class="rep-sum" id="yf-msg"></div>
+  </section>
 
   <!-- FINANCE -->
-  <div class="pane" data-pane="finance" hidden>
-    <section class="card"><h2>Sales and expenses by month</h2><p class="hint">Last 12 months, from the ledger</p>
-      <div class="chart" id="cFin"></div></section>
-    <p class="hint">Use <b>Browse</b> to search parties, accounts and ledger entries.</p>
-  </div>
+  <section class="pane" data-pane="finance" hidden>
+    <div class="grid g3" id="fin-tiles" style="margin-bottom:16px"></div>
+    <div class="subtabs" id="fin-sub">
+      <button data-v="led" aria-selected="true">Ledgers</button>
+      <button data-v="daily">Daily</button>
+    </div>
+    <div id="fin-led">
+      <div class="ledger">
+        <div class="plist">
+          <div class="s2"><label class="fld" style="width:100%">🔎 <input id="fin-q" placeholder="Search party or account no."></label></div>
+          <div class="chips" id="fin-chips"></div>
+          <div class="plhdr"><span id="fin-count"></span><span>Largest balance first</span></div>
+          <div class="list" id="fin-parties"></div>
+        </div>
+        <div class="card" style="margin:0" id="fin-ledger"><div class="pad cnote">Pick a party on the left to see its ledger.</div></div>
+      </div>
+    </div>
+    <div id="fin-daily" hidden>
+      <div class="tools"><label class="fld">Day <input type="date" id="fin-date"></label></div>
+      <div class="grid g4" id="fin-daily-tiles" style="margin-bottom:16px"></div>
+      <div class="card"><div class="hd"><h3>By voucher type</h3><span class="count" id="fin-daily-note"></span></div><div class="tscroll"><table id="fin-daily-sum"></table></div></div>
+      <div class="card"><div class="hd"><h3>Entries</h3></div><div class="tscroll"><table id="fin-daily-entries"></table></div></div>
+    </div>
+  </section>
 
   <!-- PAYROLL -->
-  <div class="pane" data-pane="payroll" hidden>
-    <section class="card"><h2>Payroll</h2>
-      <p class="hint">Wage bill, payslips and loans from the payroll system. Salaries are shown only here.</p>
-      <div class="tabs" id="payTabs" role="tablist"></div>
-      <div id="payMsg" class="detail"></div>
-      <div class="table-wrap" id="payOut"></div>
-    </section>
-  </div>
+  <section class="pane" data-pane="payroll" hidden>
+    <div class="subtabs" id="pay-sub"></div>
+    <div class="tools" id="pay-tools"></div>
+    <div id="pay-out"></div>
+    <div class="rep-sum" id="pay-msg"></div>
+  </section>
 
   <!-- GATE PASSES -->
-  <div class="pane" data-pane="gate" hidden>
-    <section class="card"><h2>Gate passes</h2>
-      <p class="hint">Every gate pass in and out - fabric, yarn, beams, store. Same number can repeat across types, so each shows its type.</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-        <select id="gateType" class="sel" aria-label="Type"><option value="">All types</option></select>
-        <input type="search" id="gateQ" class="sel" placeholder="Search GP no, party, item, vehicle…" style="flex:1 1 200px">
-      </div>
-      <div id="gateMsg" class="detail"></div>
-      <div class="table-wrap" id="gateOut"></div>
-    </section>
-  </div>
+  <section class="pane" data-pane="gate" hidden>
+    <div class="grid g4" id="gate-tiles" style="margin-bottom:16px"></div>
+    <div class="tools">
+      <label class="fld">🔎 <input id="gate-q" placeholder="Search gate pass, party, item, vehicle"></label>
+      <label class="fld">Type <select id="gate-type"><option value="">All types</option></select></label>
+    </div>
+    <div id="gate-out"></div>
+    <div class="rep-sum" id="gate-msg"></div>
+  </section>
 
-  <!-- BROWSE -->
-  <div class="pane" data-pane="browse" hidden>
-    <section class="card"><h2>Browse the data</h2>
-      <p class="hint">Open any data set in the mill's records and search it. Read-only - nothing here changes the ERP.</p>
-      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
-        <select id="browseEntity" class="sel" aria-label="Data set"></select>
-        <input type="search" id="browseQ" class="sel" placeholder="Search…" style="flex:1 1 220px">
-        <button class="btn" id="browseMore" type="button" style="display:none">Load more</button>
-      </div>
-      <div id="browseMsg" class="detail"></div>
-      <div class="table-wrap" id="browseOut"></div>
-    </section>
-  </div>
-</main>
-<footer id="foot"></footer>
+  <!-- REPORTS -->
+  <section class="pane" data-pane="reports" hidden>
+    <div class="card"><div class="hd"><h3>Reports</h3>
+      <div class="tools" style="margin:0">
+        <label class="fld">Report <select id="rep-name"></select></label>
+        <button class="btn" id="rep-view">View</button>
+        <button class="btn ghost" id="rep-pdf">⤓ PDF</button>
+        <button class="btn ghost" id="rep-csv">⤓ CSV</button>
+        <button class="btn ghost" id="rep-print">🖨 Print</button>
+      </div></div>
+      <div class="rep-sum" id="rep-msg"></div>
+      <div class="tscroll" id="rep-out" style="padding:0 2px 8px"></div>
+    </div>
+    <div class="card"><div class="hd"><h3>Browse data</h3>
+      <div class="tools" style="margin:0">
+        <label class="fld">Data set <select id="br-entity"></select></label>
+        <label class="fld">🔎 <input id="br-q" placeholder="Search"></label>
+      </div></div>
+      <div class="rep-sum" id="br-msg"></div>
+      <div class="tscroll" id="br-out"></div>
+      <div style="padding:10px 16px"><button class="btn ghost" id="br-more" style="display:none">Load more</button></div>
+    </div>
+  </section>
 
-<button id="askBtn" type="button" aria-controls="chat" aria-expanded="false">Ask the ERP</button>
-<section id="chat" aria-label="Ask the ERP">
-  <div class="head"><span>Ask the ERP</span><button class="btn" id="chatClose" type="button" aria-label="Close">✕</button></div>
-  <div id="msgs" aria-live="polite"></div>
-  <form id="askForm"><input id="q" autocomplete="off" placeholder="e.g. kal sab se kam efficiency kis loom ki thi?" aria-label="Question">
-    <button class="btn" type="submit">Send</button></form>
-</section>
+  <div class="foot">Project Smart Layer by Azam Puri — reads your ERP, changes nothing.</div>
+</div>
+
+<!-- chat -->
+<div id="chat"><div class="top">💬 Ask the ERP <span class="spacer" style="flex:1"></span><button class="hbtn" id="chatClose">✕</button></div>
+  <div id="msgs"></div>
+  <form id="askForm"><input id="q" placeholder="e.g. cash in hand? yarn at sizers?" autocomplete="off"><button class="btn" type="submit">Ask</button></form>
+</div>
+
+<!-- licence dialog -->
+<dialog id="licDlg"><div style="padding:18px">
+  <h3 style="margin:0 0 8px">Licence</h3>
+  <p class="muted" id="licState" style="font-size:13px"></p>
+  <p style="font-size:13px">This server's ID: <b id="licMachine"></b> — send it to get or renew a licence.</p>
+  <label class="muted" style="font-size:13px" for="licText">Paste the licence code, or choose the file:</label>
+  <textarea id="licText"></textarea>
+  <input type="file" id="licFile" style="margin:8px 0;font-size:13px">
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px">
+    <button class="btn ghost" id="licClose" type="button">Close</button>
+    <button class="btn" id="licSave" type="button">Install licence</button></div>
+  <p id="licMsg" class="muted" style="font-size:13px"></p>
+</div></dialog>
 
 <script>
 const STATIC_DATA = /*__DATA__*/null;
 const $ = (s) => document.querySelector(s);
-const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
-const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-let D = null;
-
-function num(v, d = 0) { return v == null ? "–" : Number(v).toLocaleString("en-US", {maximumFractionDigits: d, minimumFractionDigits: d}); }
-function money(v) {
-  if (v == null) return "–";
-  const a = Math.abs(v), s = v < 0 ? "−" : "";
-  if (a >= 1e7) return `${s}${(a / 1e7).toFixed(2)} cr`;
-  if (a >= 1e5) return `${s}${(a / 1e5).toFixed(1)} lakh`;
-  return s + num(a);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+function rs(v){ if(v==null||isNaN(v)) return "–"; var a=Math.abs(v), s=v<0?"−":""; if(a>=1e7) return s+(a/1e7).toFixed(2)+" cr"; if(a>=1e5) return s+(a/1e5).toFixed(2)+" lac"; return s+Math.round(a).toLocaleString("en-PK"); }
+function num(v){ return v==null||isNaN(v)?"–":Math.round(v).toLocaleString("en-PK"); }
+function dshort(d){ if(!d) return "–"; var p=String(d).slice(0,10).split("-"); if(p.length<3) return d; var M=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; return (+p[2])+" "+M[+p[1]-1]+" "+p[0].slice(2); }
+function mlabel(m){ var M=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]; var p=String(m).split("-"); return M[+p[1]-1]+" "+p[0].slice(2); }
+function table(cols, rows, nums){
+  nums = nums || [];
+  var h = "<thead><tr>" + cols.map((c,i)=>`<th class="${nums.indexOf(i)>=0?"num":""}">${esc(c)}</th>`).join("") + "</tr></thead>";
+  var b = "<tbody>" + rows.map((r)=>"<tr>"+r.map((c,i)=>`<td class="${nums.indexOf(i)>=0?"num":""}">${c}</td>`).join("")+"</tr>").join("") + "</tbody>";
+  return `<table>${h}${b}</table>`;
 }
-function shortDate(iso) { const d = new Date(iso + "T00:00:00"); return d.toLocaleDateString("en-GB", {day: "2-digit", month: "short"}); }
+let D = null;
+var activeChip = null, curLedger = null, curLedgerData = null;
 
-// ---------- theme ----------
-(function () {
-  let t = null; try { t = localStorage.getItem("sl-theme"); } catch (e) {}
-  if (t) document.documentElement.dataset.theme = t;
-  $("#theme").onclick = () => {
-    const dark = document.documentElement.dataset.theme
-      ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-    document.documentElement.dataset.theme = dark ? "light" : "dark";
-    try { localStorage.setItem("sl-theme", document.documentElement.dataset.theme); } catch (e) {}
-    if (D) renderCharts();
-  };
+/* ---------- theme + logo ---------- */
+(function(){
+  var root=document.documentElement, btn=$("#themeBtn");
+  function sysDark(){try{return matchMedia("(prefers-color-scheme: dark)").matches}catch(e){return false}}
+  function cur(){var t=root.getAttribute("data-theme");return t?t:(sysDark()?"dark":"light");}
+  function paint(){var d=cur()==="dark";btn.firstChild.nodeValue=d?"☀️ ":"🌙 ";btn.querySelector("span").textContent=d?"Light":"Dark";}
+  try{var s=localStorage.getItem("sl-theme");if(s)root.setAttribute("data-theme",s);}catch(e){}
+  paint();
+  btn.onclick=function(){var n=cur()==="dark"?"light":"dark";root.setAttribute("data-theme",n);try{localStorage.setItem("sl-theme",n);}catch(e){}paint();rebuildCharts();};
 })();
 
-// ---------- charts (inline SVG; one axis each; hover tooltips) ----------
-function frame(el, w, h) {
-  el.innerHTML = "";
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", `0 0 ${w} ${h}`); svg.setAttribute("role", "img");
-  el.appendChild(svg);
-  const tip = document.createElement("div"); tip.className = "tip"; el.appendChild(tip);
-  return {svg, tip};
-}
-function niceMax(v) { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const n = v / p;
-  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p; }
-function axes(svg, x0, x1, y0, y1, max, fmt, min = 0) {
-  let g = `<g class="grid">`, a = `<g class="axis">`;
-  for (let i = 0; i <= 4; i++) {
-    const v = min + (max - min) * i / 4, y = y1 - (y1 - y0) * i / 4;
-    g += `<line x1="${x0}" x2="${x1}" y1="${y}" y2="${y}" stroke-width="1"/>`;
-    a += `<text x="${x0 - 6}" y="${y + 4}" text-anchor="end">${esc(fmt(v))}</text>`;
+/* ---------- charts ---------- */
+var charts={}, builtTabs={};
+function cssv(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
+function palette(){return {ink:cssv("--ink"),muted:cssv("--muted"),line:cssv("--line"),teal:cssv("--teal"),amber:cssv("--amber"),red:cssv("--red"),green:cssv("--green"),blue:cssv("--blue"),panel:cssv("--panel")};}
+function tip(c){return {backgroundColor:c.panel,titleColor:c.ink,bodyColor:c.ink,borderColor:c.line,borderWidth:1,padding:10,cornerRadius:8,boxPadding:4,titleFont:{weight:"700"}};}
+function grid(c){return {grid:{color:c.line,drawBorder:false},ticks:{color:c.muted}};}
+function haveChart(){return typeof window.Chart!=="undefined";}
+function mk(id,cfg){ var el=$("#"+id); if(!el) return; if(!haveChart()){ var w=el.closest(".cwrap"); if(w) w.innerHTML='<div class="cnote">Charts load from the mill server. Open the dashboard there to see them.</div>'; return; } charts[id]=new Chart(el,cfg); }
+function lac(v){return (v||0)/1e5;}
+
+function buildCharts(tab){
+  if(builtTabs[tab] || !D) return;
+  var c=palette();
+  if(tab==="overview"){
+    var f=D.finance||[];
+    mk("ov1",{type:"bar",data:{labels:f.map(x=>mlabel(x.month)),datasets:[
+      {label:"Sales",data:f.map(x=>lac(x.sales)),backgroundColor:c.teal,borderRadius:4,maxBarThickness:20},
+      {label:"Expenses",data:f.map(x=>lac(x.expenses)),backgroundColor:c.amber,borderRadius:4,maxBarThickness:20}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({beginAtZero:true},grid(c))}}});
+    var rv=(D.charts&&D.charts.receivables)||[];
+    mk("ov2",{type:"line",data:{labels:rv.map(x=>mlabel(x.month)),datasets:[{label:"Receivable",data:rv.map(x=>lac(x.amount)),borderColor:c.blue,tension:.35,pointRadius:2,borderWidth:2.6}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:tip(c)},scales:{x:grid(c),y:grid(c)}}});
+    var cb=(D.charts&&D.charts.cash_bank)||[];
+    mk("ov3",{type:"line",data:{labels:cb.map(x=>dshort(x.date)),datasets:[
+      {label:"Cash",data:cb.map(x=>lac(x.cash)),borderColor:c.teal,tension:.3,pointRadius:0,borderWidth:2.6},
+      {label:"Bank",data:cb.map(x=>lac(x.bank)),borderColor:c.amber,tension:.3,pointRadius:0,borderWidth:2.6}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:grid(c)}}});
+    var fs=(D.charts&&D.charts.fabric_stock)||[];
+    mk("ov4",{type:"line",data:{labels:fs.map(x=>mlabel(x.month)),datasets:[{label:"Fabric stock (m)",data:fs.map(x=>x.meters),borderColor:c.green,tension:.35,pointRadius:2,borderWidth:2.6,fill:false}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({beginAtZero:true},grid(c))}}});
   }
-  svg.insertAdjacentHTML("beforeend", g + "</g>" + a + "</g>");
+  if(tab==="weaving"){
+    var w=D.weaving||{};
+    var tr=w.trend||[];
+    var ds=[{label:"ERP",data:tr.map(x=>x.erp),borderColor:c.blue,tension:.3,pointRadius:0,borderWidth:2.6,spanGaps:true}];
+    if(w.scoreboard_available) ds.unshift({label:"Scoreboard",data:tr.map(x=>x.scb),borderColor:c.amber,tension:.3,pointRadius:0,borderWidth:2.6,spanGaps:true});
+    mk("wv1",{type:"line",data:{labels:tr.map(x=>dshort(x.date)),datasets:ds},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({min:50,max:100},grid(c))}}});
+    var mo=w.monthly||[];
+    mk("wv2",{data:{labels:mo.map(x=>mlabel(x.month)),datasets:[
+      {type:"bar",label:"A-grade %",data:mo.map(x=>x.a_grade),backgroundColor:c.green,borderRadius:3,maxBarThickness:18},
+      {type:"line",label:"Efficiency %",data:mo.map(x=>x.eff),borderColor:c.blue,tension:.3,pointRadius:2,borderWidth:2.6}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({min:50,max:100},grid(c))}}});
+  }
+  builtTabs[tab]=true;
 }
-function showTip(el, tip, html, px, py) {
-  tip.innerHTML = html; tip.style.display = "block";
-  const r = el.getBoundingClientRect(), tw = tip.offsetWidth;
-  tip.style.left = Math.min(Math.max(px - tw / 2, 0), r.width - tw) + "px";
-  tip.style.top = Math.max(py - tip.offsetHeight - 10, 0) + "px";
-}
-function barPath(x, y, w, h, r) {           // rounded data end, square at the baseline
-  r = Math.min(r, w / 2, h); return `M${x},${y + h}V${y + r}Q${x},${y} ${x + r},${y}H${x + w - r}Q${x + w},${y} ${x + w},${y + r}V${y + h}Z`;
-}
-function bars(el, rows, series, labelOf, tipOf, fmtAxis) {
-  const W = Math.max(el.clientWidth, 300), H = 230, L = 52, R = 8, T = 10, B = 26;
-  const {svg, tip} = frame(el, W, H);
-  const max = niceMax(Math.max(1, ...rows.flatMap((r) => series.map((s) => r[s.key] || 0))));
-  axes(svg, L, W - R, T, H - B, max, fmtAxis);
-  const band = (W - L - R) / rows.length, gap = 2, inner = Math.max(band - Math.max(band * 0.28, 4), 2);
-  const bw = Math.max((inner - gap * (series.length - 1)) / series.length, 1);
-  let html = "", labels = `<g class="axis">`;
-  const every = Math.ceil(rows.length / Math.max(Math.floor((W - L) / 70), 1));
-  rows.forEach((r, i) => {
-    const x0 = L + i * band + (band - inner) / 2;
-    series.forEach((s, j) => {
-      const v = r[s.key] || 0, h = (H - B - T) * v / max;
-      if (h > 0) html += `<path d="${barPath(x0 + j * (bw + gap), H - B - h, bw, h, 4)}" fill="${css(s.color)}"/>`;
-    });
-    if (i % every === 0 || i === rows.length - 1)
-      labels += `<text x="${L + i * band + band / 2}" y="${H - 8}" text-anchor="middle">${esc(labelOf(r))}</text>`;
-  });
-  svg.insertAdjacentHTML("beforeend", html + labels + `</g><line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="${css("--text-muted")}"/>`);
-  const hit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  Object.entries({x: L, y: T, width: W - L - R, height: H - B - T, fill: "transparent"}).forEach(([k, v]) => hit.setAttribute(k, v));
-  svg.appendChild(hit);
-  const move = (ev) => {
-    const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width;
-    const i = Math.min(rows.length - 1, Math.max(0, Math.floor((sx - L) / band)));
-    showTip(el, tip, tipOf(rows[i]), (L + i * band + band / 2) * r.width / W, (T + 20) * r.height / H);
-  };
-  hit.addEventListener("pointermove", move); hit.addEventListener("pointerdown", move);
-  hit.addEventListener("pointerleave", () => (tip.style.display = "none"));
-}
-function line(el, rows, key, labelOf, tipOf, fmtAxis) {
-  const W = Math.max(el.clientWidth, 300), H = 230, L = 52, R = 10, T = 10, B = 26;
-  const {svg, tip} = frame(el, W, H);
-  const vals = rows.map((r) => r[key]).filter((v) => v != null);
-  if (!vals.length) { el.innerHTML = `<p class="empty">No data for this period.</p>`; return; }
-  const lo = Math.max(0, Math.floor((Math.min(...vals) - 5) / 5) * 5), hi = Math.min(Math.ceil((Math.max(...vals) + 3) / 5) * 5, 120);
-  axes(svg, L, W - R, T, H - B, hi, fmtAxis, lo);
-  const X = (i) => L + (W - L - R) * (rows.length === 1 ? 0.5 : i / (rows.length - 1));
-  const Y = (v) => H - B - (H - B - T) * (v - lo) / (hi - lo);
-  let d = "", pen = false, labels = `<g class="axis">`;
-  const every = Math.ceil(rows.length / Math.max(Math.floor((W - L) / 70), 1));
-  rows.forEach((r, i) => {
-    if (r[key] == null) { pen = false; } else { d += `${pen ? "L" : "M"}${X(i)},${Y(r[key])}`; pen = true; }
-    if (i % every === 0 || i === rows.length - 1) labels += `<text x="${X(i)}" y="${H - 8}" text-anchor="middle">${esc(labelOf(r))}</text>`;
-  });
-  svg.insertAdjacentHTML("beforeend", `<path d="${d}" fill="none" stroke="${css("--series-1")}" stroke-width="2" stroke-linejoin="round"/>` + labels + "</g>");
-  const g = document.createElementNS("http://www.w3.org/2000/svg", "g"); g.style.display = "none";
-  g.innerHTML = `<line y1="${T}" y2="${H - B}" stroke="${css("--text-muted")}" stroke-dasharray="3 3"/>` +
-    `<circle r="5" fill="${css("--series-1")}" stroke="${css("--surface-1")}" stroke-width="2"/>`;
-  svg.appendChild(g);
-  const hit = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-  Object.entries({x: L, y: T, width: W - L - R, height: H - B - T, fill: "transparent"}).forEach(([k, v]) => hit.setAttribute(k, v));
-  svg.appendChild(hit);
-  const move = (ev) => {
-    const r = svg.getBoundingClientRect(), sx = (ev.clientX - r.left) * W / r.width;
-    const i = Math.min(rows.length - 1, Math.max(0, Math.round((sx - L) / (W - L - R) * (rows.length - 1))));
-    if (rows[i][key] == null) { g.style.display = "none"; tip.style.display = "none"; return; }
-    g.style.display = ""; g.firstChild.setAttribute("x1", X(i)); g.firstChild.setAttribute("x2", X(i));
-    g.lastChild.setAttribute("cx", X(i)); g.lastChild.setAttribute("cy", Y(rows[i][key]));
-    showTip(el, tip, tipOf(rows[i]), X(i) * r.width / W, Y(rows[i][key]) * r.height / H);
-  };
-  hit.addEventListener("pointermove", move); hit.addEventListener("pointerdown", move);
-  hit.addEventListener("pointerleave", () => { g.style.display = "none"; tip.style.display = "none"; });
-}
-function dataTable(el, head, rows) {
-  const d = document.createElement("details"); d.className = "data";
-  d.innerHTML = `<summary>Show as table</summary>` + table(head, rows); el.appendChild(d);
-}
-function table(head, rows, numCols = []) {
-  if (!rows.length) return `<p class="empty">Nothing to show.</p>`;
-  return `<table><thead><tr>${head.map((h, i) => `<th class="${numCols.includes(i) ? "num" : ""}">${esc(h)}</th>`).join("")}</tr></thead><tbody>` +
-    rows.map((r) => `<tr>${r.map((c, i) => `<td class="${numCols.includes(i) ? "num" : ""}">${c}</td>`).join("")}</tr>`).join("") + `</tbody></table>`;
-}
+function rebuildCharts(){ Object.keys(charts).forEach(k=>charts[k].destroy()); charts={}; builtTabs={}; buildCharts(curTab); if(curTab==="finance"&&curLedger) ledgerChart(curLedger); }
+var rzt; addEventListener("resize",()=>{clearTimeout(rzt);rzt=setTimeout(()=>{Object.values(charts).forEach(ch=>ch.resize());},150);});
 
-function renderCharts() {
-  const P = D.production, F = D.finance, cur = D.currency;
-  bars($("#cMeters"), P, [{key: "meters", color: "--series-1"}], (r) => shortDate(r.date),
-       (r) => `${shortDate(r.date)}<br><b>${num(r.meters)} m</b>${r.eff != null ? ` · ${num(r.eff, 1)}%` : ""}`, (v) => num(v));
-  dataTable($("#cMeters"), ["Date", "Meters", "Efficiency %"], P.map((r) => [esc(r.date), num(r.meters), num(r.eff, 1)]));
-  line($("#cEff"), P, "eff", (r) => shortDate(r.date), (r) => `${shortDate(r.date)}<br><b>${num(r.eff, 1)}%</b>`, (v) => num(v) + "%");
-  const fe = $("#cFin");
-  fe.innerHTML = "";
-  const lg = document.createElement("div"); lg.className = "legend";
-  lg.innerHTML = `<span><i style="background:${css("--series-1")}"></i>Sales</span><span><i style="background:${css("--series-2")}"></i>Expenses</span>`;
-  fe.appendChild(lg);
-  const box = document.createElement("div"); box.className = "chart"; fe.appendChild(box);
-  const mlabel = (m) => new Date(m + "-01T00:00:00").toLocaleDateString("en-GB", {month: "short", year: "2-digit"});
-  bars(box, F, [{key: "sales", color: "--series-1"}, {key: "expenses", color: "--series-2"}], (r) => mlabel(r.month),
-       (r) => `${mlabel(r.month)}<br>Sales <b>${cur} ${money(r.sales)}</b><br>Expenses <b>${cur} ${money(r.expenses)}</b>`, (v) => money(v));
-  dataTable(fe, ["Month", "Sales", "Expenses"], F.map((r) => [esc(r.month), num(r.sales), num(r.expenses)]));
+/* ---------- render on data ---------- */
+function tile(lbl, val, meta, cls, asof){
+  return `<div class="tile ${cls||""}"><div class="lbl">${lbl}</div><div class="val">${val}</div>${meta?`<div class="meta">${meta}</div>`:""}${asof?`<div class="asof-tile">🕒 ${esc(asof)}</div>`:""}</div>`;
 }
-
-// ---------- page ----------
-const SEV = {ACTION: ["--critical", "▲ ACTION"], CONFIRMED: ["--serious", "● CONFIRMED"], WATCH: ["--warning", "◆ WATCH"], INFO: ["--text-muted", "INFO"]};
-function chip(sev) { const [c, t] = SEV[sev] || SEV.INFO; return `<span class="chip"><span class="dot" style="background:var(${c})"></span>${esc(t)}</span>`; }
-let attFilter = "important";
-
-function render() {
-  const k = D.kpis, cur = D.currency;
-  document.title = `${D.company} – Dashboard`;
-  $("#title").firstChild.nodeValue = D.company;
-  $("#subtitle").textContent = `${D.product} · ${new Date(D.as_of + "T00:00:00").toDateString()} · data synced ${D.synced_at || "never"}`;
-  $("#day").value = D.as_of;
-  const tiles = [
-    ["Meters woven", num(k.meters), `${k.looms} looms`],
-    ["Efficiency", k.eff == null ? "–" : num(k.eff, 1) + "%", "meters ÷ meters at 100%"],
-    ["Rejection", k.rej == null ? "–" : num(k.rej, 1) + "%", "of meters woven"],
-    ["Needs action", num(k.action), `${num(k.confirmed)} confirmed errors`],
-    ["Yarn flags", num(k.yarn_flags), "issue days to check"],
-    ["Beams running out", num(k.beam_alerts || 0), `within ${num(D.beam_warn_days)} days, no backup`],
-    ["Cash in hand", `${cur} ${money(k.cash)}`, `bank ${money(k.bank)}`],
-    ["Receivable", `${cur} ${money(k.receivable)}`, "from customers"],
-    ["Payable", `${cur} ${money(k.payable)}`, "to suppliers"],
-    ["Sales this month", `${cur} ${money(k.sales_month)}`, `expenses ${money(k.expenses_month)}`],
-    ["Store", `${num(k.out_of_stock)} out`, `${num(k.low_stock)} low`],
-  ];
-  $("#kpis").innerHTML = tiles.map(([l, v, n]) => `<div class="kpi"><div class="label">${esc(l)}</div><div class="value">${esc(v)}</div><div class="note">${esc(n)}</div></div>`).join("");
-
-  const counts = (s) => D.findings.filter((f) => f.severity === s).length;
-  const tabs = [["important", `Action & confirmed (${counts("ACTION") + counts("CONFIRMED")})`], ["WATCH", `Watch (${counts("WATCH")})`], ["all", `All (${D.findings.length})`]];
-  $("#attTabs").innerHTML = tabs.map(([v, t]) => `<button role="tab" aria-selected="${v === attFilter}" data-v="${v}">${esc(t)}</button>`).join("");
-  $("#attTabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { attFilter = b.dataset.v; render(); }));
-  const fs = D.findings.filter((f) => attFilter === "all" || (attFilter === "important" ? ["ACTION", "CONFIRMED"].includes(f.severity) : f.severity === attFilter));
-  $("#findings").innerHTML = fs.length ? `<div class="items">` + fs.map((f, i) => `<div class="item" data-f="${i}" style="cursor:pointer"><div class="meta">${chip(f.severity)}<span>${esc(f.section)}</span></div>` +
-    `<div class="what">${esc(f.title)}</div>${f.detail ? `<div class="detail">${esc(f.detail)}</div>` : ""}</div>`).join("") + `</div>`
-    : `<p class="empty">Nothing found for this day.</p>`;
-  $("#findings").querySelectorAll(".item[data-f]").forEach((el) => (el.onclick = () => openFinding(fs[+el.dataset.f])));
-
-  const byParty = {};
-  D.closing.forEach((r) => { if (r.pre_go_live) return;            // started in the old ERP: not counted in the totals
-    const p = (byParty[r.party] ||= [0, 0]); p[0] += r.balance_bags; p[1] += r.value || 0; });
-  $("#closing").innerHTML = table(["Party", "Balance bags", `Value ${cur}`],
-      Object.entries(byParty).map(([p, [b, v]]) => [esc(p), `<span class="${b < 0 ? "neg" : "pos"}">${b > 0 ? "+" : ""}${num(b, 1)}</span>`, v ? money(v) : "–"]), [1, 2]) +
-    `<details class="data"><summary>Per contract and yarn</summary>` +
-    table(["Contract", "Party", "Status", "Yarn", "Received", "Used", "Balance"], D.closing.map((r) =>
-      [esc(r.contract), esc(r.party), esc(r.status), esc(r.yarn_name), num(r.received_bags, 1), num(r.used_bags, 1),
-       `<span class="${r.balance_bags < 0 ? "neg" : "pos"}">${num(r.balance_bags, 1)}</span>${r.note ? `<div class="detail">${esc(r.note)}</div>` : ""}`]), [4, 5, 6]) + `</details>`;
-
-  const sz = D.sizing.filter((s) => s.loss_pct > D.sizing_limit);
-  $("#pilferage").innerHTML = (D.pilferage.length ? `<div class="items">` + D.pilferage.map((f) => `<div class="item"><div class="meta">` +
-      `${chip(f.reasons.length >= 2 ? "ACTION" : "WATCH")}<span>${esc(f.date)} · contract ${esc(f.contract)} · ${esc(f.party || "")} · ${num(f.kg)} kg</span></div>` +
-      f.reasons.map((r) => `<div class="detail">• ${esc(r)}</div>`).join("") + `</div>`).join("") + `</div>` : `<p class="empty">No suspicious yarn issues.</p>`) +
-    (D.sizing.length ? `<h2 style="margin-top:14px">Sizing loss</h2>` + table(["Sizer", "Contract", "Sent kg", "Back kg", "Loss"],
-      D.sizing.map((s) => [esc(s.sizer), esc(s.contract), num(s.sent), num(s.back),
-        `${s.loss_pct > D.sizing_limit ? chip("WATCH") + " " : ""}${num(s.loss_pct, 1)}%`]), [2, 3, 4]) : "");
-
-  $("#stock").innerHTML = table(["Status", "Item", "Stock", "Use / month"], D.stock.map((r) =>
-    [chip(r.status === "OUT OF STOCK" ? "ACTION" : "WATCH").replace(/ACTION|WATCH/, r.status === "OUT OF STOCK" ? "OUT" : "LOW"),
-     `${esc(r.item)}<div class="detail">${esc(r.code)} · ${esc(r.unit)}</div>`, num(r.stock, 1), num(r.avg_month, 1)]), [2, 3]);
-  $("#beamHint").textContent = `Days left = fabric still to come on the beam ÷ the loom's meters a day. Red: finishes within ${num(D.beam_warn_days)} days with no sized beam waiting.`;
-  $("#beams").innerHTML = table(["", "Loom", "Beam", "Contract", "Quality", "Days left", "Fabric to come m", "m / day", "Backup beam"],
-    (D.beams || []).map((b) => [b.alert ? chip("ACTION").replace("ACTION", "NO BACKUP") : (b.over ? chip("CONFIRMED").replace("CONFIRMED", "CHECK") : ""),
-      esc(b.loom), esc(b.beam), esc(b.contract || ""), esc(b.quality || ""), num(b.days, 1), num(b.to_come), num(b.rate),
-      b.backup ? esc(b.backup) : (b.over ? "woven more than the beam holds" : "–")]), [5, 6, 7]);
-  $("#looms").innerHTML = table(["Loom", "Quality", "Meters", "Eff %", "Rej %"], D.looms.map((r) =>
-    [esc(r.loom), esc(r.quality || ""), num(r.meters), num(r.eff, 1), num(r.rej, 1)]), [2, 3, 4]);
-  const bs = D.beam_stock || {};
-  $("#beamStock").innerHTML = [["On looms", "on_loom"], ["Sized waiting", "sized_waiting"], ["Empty in mill", "empty_in_mill"],
-    ["At sizers", "at_sizer"], ["Sent out", "sent_out"]]
-    .map(([l, k]) => `<div class="kpi"><div class="label">${l}</div><div class="value">${num(bs[k] || 0)}</div></div>`).join("");
-  $("#foot").textContent = `${D.product} · figures from the mill's ERP, read-only`;
-  renderCharts();
-  applyFilter();
+function render(){
+  if(!D) return;
+  $("#millName").textContent = D.company || "Mill";
+  $("#subtitle").textContent = "by Azam Puri";
+  $("#asof").textContent = "as of " + dshort(D.as_of) + (D.synced_at? " · synced "+String(D.synced_at).slice(11,16) : "");
+  if($("#day") && !$("#day").value && D.as_of) $("#day").value = D.as_of;
+  var k=D.kpis||{};
+  // attention
+  var fs=D.findings||[];
+  if(!fs.length){ $("#ov-attention").outerHTML='<div class="ok-strip" id="ov-attention">✓ Nothing needs attention today.</div>'; }
+  else {
+    $("#ov-attention").innerHTML = fs.slice(0,8).map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">— ${esc(f.detail)}</span>`:""}<span class="go">Open ›</span></div>`).join("");
+    $("#ov-attention").querySelectorAll(".alert").forEach(a=>a.onclick=()=>openFinding(fs[+a.dataset.fi]));
+  }
+  // money
+  $("#ov-money").innerHTML =
+    tile("💵 Cash in hand", "Rs "+num(k.cash), "", "", "live") +
+    tile("🏦 Bank", "Rs "+num(k.bank), "", "", "live") +
+    tile("📥 Receivable", "Rs "+rs(k.receivable), (k.beam_alerts!=null?"":"") , "") +
+    tile("📤 Payable", "Rs "+rs(k.payable), "");
+  // mill
+  var yf=D.yarn_fabric||{};
+  $("#ov-mill").innerHTML =
+    tile("🧵 Meters woven", num(k.meters)+' <span class="cur">m</span>', "today · <b>"+num((D.production||[]).reduce((a,b)=>a+(b.meters||0),0))+" m</b> 30d","accent") +
+    tile("⚙️ Efficiency", (k.eff!=null?k.eff+"%":"–"), "today") +
+    tile("📦 Fabric in stock", num(yf.fabric_m)+' <span class="cur">m</span>', "<b>"+num(yf.fabric_lots)+"</b> lots") +
+    tile("🧶 Yarn in godown", num(yf.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(yf.yarn_hand_kg)+" kg</b> · "+num(yf.yarn_counts)+" counts") +
+    tile("🚚 Dispatched", num(dispatchedMonth())+' <span class="cur">m</span>', "this month");
+  renderWeaving(); renderFinanceTiles(); renderYFTiles();
+  buildCharts(curTab);
 }
+function dispatchedMonth(){ return 0; }  // reserved; dispatch total shown in reports
 
-// ---------- search: filter every table row and list item on the page ----------
-function applyFilter() {
-  const q = ($("#search").value || "").trim().toLowerCase();
-  document.querySelectorAll("main tbody tr, main .item").forEach((el) => {
-    const hit = !q || el.textContent.toLowerCase().includes(q);
-    el.style.display = hit ? "" : "none";
-    if (el.tagName === "TR") el.classList.toggle("hit", !!q && hit);   // highlight a jumped-to row
-    if (hit && q) {                                    // open any collapsed "Show as table" / details holding a match
-      for (let d = el.closest("details"); d; d = d.parentElement.closest("details")) d.open = true;
+/* ---------- weaving ---------- */
+function renderWeaving(){
+  var w=D.weaving||{}, s=w.shed||{};
+  $("#wv-asof").textContent = (w.scoreboard_available?"🕒 scoreboard live · ":"🕒 ") + "ERP as of " + dshort(D.as_of);
+  var running=(w.looms||[]).filter(l=>l.status==="running").length, idle=(w.looms||[]).filter(l=>l.status==="idle").length, stop=(w.looms||[]).filter(l=>l.status==="stopped").length;
+  $("#wv-tiles").innerHTML =
+    tile("🟢 Running", running+' <span class="cur">looms</span>', "of <b>"+(w.looms||[]).length+"</b>","accent") +
+    tile("🟡 Idle", idle+' <span class="cur">looms</span>', "beam change / no weft","warn") +
+    tile("🔴 Stopped", stop+' <span class="cur">looms</span>', "7+ days silent","bad") +
+    tile("⚙️ Efficiency", (s.erp_eff!=null?s.erp_eff+"%":"–"), "ERP · 30-day avg") +
+    tile("🧵 Woven today", num((D.kpis||{}).meters)+' <span class="cur">m</span>', "");
+  $("#wv-legend").innerHTML = '<span><i style="background:var(--green)"></i>80%+</span><span><i style="background:var(--amber)"></i>70–80%</span><span><i style="background:var(--red)"></i>below 70%</span><span><i style="background:var(--line)"></i>no entry 7+ days</span>';
+  $("#wv-floor-note").textContent = w.scoreboard_available? "big = scoreboard · small = ERP · colour by scoreboard" : "ERP efficiency (scoreboard not connected)";
+  $("#wv-floor").innerHTML = (w.looms||[]).map(function(l){
+    var e = w.scoreboard_available && l.scb_eff!=null ? l.scb_eff : l.erp_eff;
+    var cls, big, small, dt;
+    if(l.status==="stopped"){ cls="old"; big="—"; small="stopped"; dt=l.last_date?("since "+dshort(l.last_date)):""; }
+    else if(l.status==="idle"){ cls="warn"; big="idle"; small=""; dt=""; }
+    else if(e==null){ cls="old"; big="—"; small="no reading"; dt=""; }
+    else { cls = e>=80?"good":e>=70?"warn":"crit"; big=Math.round(e)+"%"; small=(w.scoreboard_available&&l.erp_eff!=null)?("ERP "+Math.round(l.erp_eff)+"%"):""; dt=num(l.meters_today)+" m today"; }
+    return `<div class="loom ${cls}"><div class="nm">${esc(l.loom)}</div><div class="ef">${big}</div><div class="er">${small}</div><div class="dt">${dt}</div></div>`;
+  }).join("");
+  // comparison boxes (scoreboard only)
+  $("#wv-cmp-card").hidden = !w.scoreboard_available;
+  $("#wv-trend-card").querySelector(".count").textContent = w.scoreboard_available? "scoreboard vs ERP · last 30 days" : "ERP · last 30 days";
+  if(w.scoreboard_available){
+    $("#wv-cmp").innerHTML =
+      `<div class="cmpbox"><div class="t">Efficiency</div><div class="v" style="color:var(--amber)">${s.scb_eff!=null?s.scb_eff+"%":"–"}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${s.erp_eff!=null?s.erp_eff+"%":"–"}</b></div></div>`+
+      `<div class="cmpbox"><div class="t">Meters / day</div><div class="v" style="color:var(--amber)">${num(s.scb_meters_day)}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${num(s.erp_meters_day)}</b></div></div>`;
+  }
+  // loom table
+  var cols = w.scoreboard_available ? ["Loom","Status","Scb %","ERP %","Gap","Meters today"] : ["Loom","Status","ERP %","Meters today"];
+  var numc = w.scoreboard_available ? [2,3,4,5] : [2,3];
+  var rows = (w.looms||[]).map(function(l){
+    var st = l.status==="running"?'<span class="tag run">Running</span>':l.status==="idle"?'<span class="tag idle">Idle</span>':'<span class="tag stop">Stopped</span>';
+    if(w.scoreboard_available){
+      var gap = (l.scb_eff!=null&&l.erp_eff!=null)? Math.round(l.scb_eff-l.erp_eff) : null;
+      return [`<b>${esc(l.loom)}</b>`, st, l.scb_eff!=null?Math.round(l.scb_eff):"–", l.erp_eff!=null?Math.round(l.erp_eff):"–",
+              gap==null?"–":(gap>0?"+":"")+gap, num(l.meters_today)];
     }
+    return [`<b>${esc(l.loom)}</b>`, st, l.erp_eff!=null?Math.round(l.erp_eff):"–", num(l.meters_today)];
   });
+  $("#wv-loomcount").textContent = (w.looms||[]).length + " looms";
+  $("#wv-looms").outerHTML = table(cols, rows, numc).replace("<table", '<table id="wv-looms"');
 }
-$("#search").addEventListener("input", applyFilter);
 
-async function licenceInfo() {
-  if (STATIC_DATA) { $("#licBtn").style.display = "none"; return null; }
-  try {
-    const L = await (await fetch("api/licence")).json();
-    $("#licState").textContent = L.message; $("#licMachine").textContent = L.machine;
-    const b = $("#licBanner");
-    if (L.warning || !L.allowed) { b.textContent = "Licence: " + L.message; b.style.display = "block"; } else b.style.display = "none";
-    return L;
-  } catch (e) { return null; }
+/* ---------- yarn & fabric tiles ---------- */
+function renderYFTiles(){
+  var y=D.yarn_fabric||{};
+  $("#yf-tiles").innerHTML =
+    tile("🧶 Yarn in godown", num(y.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(y.yarn_hand_kg)+" kg</b> · "+num(y.yarn_counts)+" counts","accent") +
+    tile("🧵 Yarn at sizer", num(y.yarn_sizer_bags)+' <span class="cur">bags</span>', "<b>"+num(y.yarn_sizer_kg)+" kg</b> out for sizing") +
+    tile("📦 Fabric in stock", num(y.fabric_m)+' <span class="cur">m</span>', "<b>"+num(y.fabric_lots)+"</b> lots") +
+    tile("🚚 Fabric this month", "see detail", "greige / finished below");
 }
-$("#licBtn").onclick = async () => { await licenceInfo(); $("#licMsg").textContent = ""; $("#licDlg").showModal(); };
-$("#licClose").onclick = () => $("#licDlg").close();
-$("#licFile").onchange = async (e) => { const f = e.target.files[0]; if (f) $("#licText").value = (await f.text()).trim(); };
-$("#licSave").onclick = async () => {
-  const r = await fetch("api/licence", {method: "POST", headers: {"Content-Type": "application/json"},
-                                        body: JSON.stringify({text: $("#licText").value})});
-  const j = await r.json(); $("#licMsg").textContent = j.message;
-  if (j.allowed) { await licenceInfo(); load(); }
-};
 
-async function load(day, silent) {
-  if (STATIC_DATA) { D = STATIC_DATA; render(); return; }
-  if (!silent) $("#subtitle").textContent = "Loading…";
-  try {
-    const r = await fetch("api/data" + (day ? `?date=${day}` : ""));
-    if (r.status === 403) {
-      await licenceInfo();
-      $("#subtitle").textContent = "Licence needed"; $("#licMsg").textContent = ""; $("#licDlg").showModal(); return;
-    }
-    if (!r.ok) { if (!silent) $("#subtitle").textContent = "Could not load data"; return; }
-    D = await r.json(); render();
-  } catch (e) { if (!silent) $("#subtitle").textContent = "Could not reach the server"; }
+/* ---------- finance ---------- */
+function renderFinanceTiles(){
+  var f=(D.fin&&D.fin.kpis)||{};
+  $("#fin-tiles").innerHTML =
+    tile("📥 Receivable (net)", "Rs "+rs(f.receivable_net), "conversion parties") +
+    tile("🤝 Advances from parties", "Rs "+rs(f.advances_from_parties), "received ahead") +
+    tile("🧾 We owe store &amp; suppliers", "Rs "+rs(f.owe_store_suppliers), "payable") +
+    tile("📊 Accrued payables", "Rs "+rs(f.accrued_payables), "wages, utilities, markup") +
+    tile("💵 Cash in hand", "Rs "+num(f.cash), "", "", "live") +
+    tile("🏦 Bank", "Rs "+num(f.bank), "", "", "live");
+  // chips
+  var chips=(D.fin&&D.fin.chips)||[];
+  activeChip = activeChip || (chips[0]&&chips[0].key) || "all";
+  $("#fin-chips").innerHTML = chips.map(c=>`<button data-k="${esc(c.key)}" aria-selected="${c.key===activeChip}">${esc(c.label)}</button>`).join("");
+  $("#fin-chips").querySelectorAll("button").forEach(b=>b.onclick=()=>{activeChip=b.dataset.k;loadParties();});
+  renderParties((D.fin&&D.fin.parties)||[]);
 }
-$("#day").onchange = (e) => load(e.target.value);
+function renderParties(list){
+  $("#fin-count").textContent = list.length + " ledgers";
+  $("#fin-parties").innerHTML = list.map((p,i)=>`<button class="pl" data-code="${esc(p.code)}" aria-selected="${p.code===curLedger}">
+    <div class="pn"><span>${esc(p.name)}</span><span>${rs(p.balance)}</span></div>
+    <div class="ps">${esc(p.side)}${p.last_date?" · last "+dshort(p.last_date):""}</div></button>`).join("") || '<div class="pad cnote">No accounts.</div>';
+  $("#fin-parties").querySelectorAll(".pl").forEach(b=>b.onclick=()=>loadLedger(b.dataset.code));
+}
+async function loadParties(){
+  $("#fin-chips").querySelectorAll("button").forEach(b=>b.setAttribute("aria-selected", b.dataset.k===activeChip));
+  if(STATIC_DATA){ renderParties(((D.fin&&D.fin.parties)||[])); return; }
+  try{
+    var r=await fetch(`api/finance/parties?group=${encodeURIComponent(activeChip)}&q=${encodeURIComponent($("#fin-q").value.trim())}`);
+    var j=await r.json(); renderParties(j.parties||[]);
+  }catch(e){}
+}
+var finqT; $("#fin-q").addEventListener("input",()=>{clearTimeout(finqT);finqT=setTimeout(loadParties,300);});
 
-// Keep the screen current on its own: re-read the local copy every minute (silent, no flicker), and the
-// moment the owner returns to the tab. A scheduled sync refreshes that local copy from the ERP every 5 minutes,
-// so the dashboard is never more than a few minutes behind the mill - without anyone touching a button.
-setInterval(() => { if (!STATIC_DATA && !document.hidden) load($("#day").value || undefined, true); }, 60000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden && !STATIC_DATA) load($("#day").value || undefined, true); });
-let rt; addEventListener("resize", () => { clearTimeout(rt); rt = setTimeout(() => D && renderCharts(), 150); });
+var curLedger=null, curLedgerData=null;
+async function loadLedger(code){
+  curLedger=code;
+  $("#fin-parties").querySelectorAll(".pl").forEach(b=>b.setAttribute("aria-selected", b.dataset.code===code));
+  if(STATIC_DATA){ $("#fin-ledger").innerHTML='<div class="pad cnote">Open from the server to see ledgers.</div>'; return; }
+  $("#fin-ledger").innerHTML='<div class="pad cnote">Loading…</div>';
+  try{
+    var j=await (await fetch("api/ledger?account="+encodeURIComponent(code))).json();
+    curLedgerData=j;
+    var rows=j.rows.map(r=>[dshort(r.date), esc(r.voucher_type||""), esc(r.narration||""), r.debit?num(r.debit):"—", r.credit?num(r.credit):"—", num(r.balance)]);
+    $("#fin-ledger").innerHTML =
+      `<div class="hd" style="padding:16px 16px 6px"><h3 style="font-size:20px">${esc(j.name)}</h3><span class="count">${esc(j.code)} · ${esc(j.group)}</span></div>
+       <div class="pad">
+         <div class="lkpi">
+           <div><div class="t">Balance today</div><div class="v">${rs(j.balance)}</div></div>
+           <div><div class="t">Debits</div><div class="v">${rs(j.debits)}</div></div>
+           <div><div class="t">Credits</div><div class="v">${rs(j.credits)}</div></div>
+           <div><div class="t">Entries</div><div class="v">${num(j.entries)}</div></div>
+         </div>
+         <div class="cwrap" style="height:190px"><canvas id="fnbal"></canvas></div>
+       </div>
+       <div class="tscroll">${table(["Date","Voucher","Narration","Debit","Credit","Balance"], rows, [3,4,5])}</div>`;
+    ledgerChart(code);
+  }catch(e){ $("#fin-ledger").innerHTML='<div class="pad cnote">Could not load this ledger.</div>'; }
+}
+function ledgerChart(){
+  if(!curLedgerData) return;
+  if(charts.fnbal){charts.fnbal.destroy();delete charts.fnbal;}
+  var c=palette(), s=curLedgerData.series||[];
+  mk("fnbal",{type:"line",data:{labels:s.map(x=>dshort(x.date)),datasets:[{label:"Balance",data:s.map(x=>x.balance),borderColor:c.teal,stepped:true,pointRadius:0,borderWidth:2.4}]},
+    options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:tip(c)},scales:{x:grid(c),y:grid(c)}}});
+}
+async function loadDaily(){
+  var day=$("#fin-date").value||D.as_of;
+  if(STATIC_DATA){ $("#fin-daily-sum").innerHTML=""; return; }
+  try{
+    var j=await (await fetch("api/finance/daily?date="+day)).json();
+    $("#fin-daily-tiles").innerHTML =
+      tile("📥 Receipts", "Rs "+rs(sumKind(j,"receipt")), nvouch(j,"receipt")) +
+      tile("📤 Payments", "Rs "+rs(sumKind(j,"payment")), nvouch(j,"payment")) +
+      tile("💵 Cash moved", "Rs "+num(j.cash_move), "net today") +
+      tile("🏦 Bank moved", "Rs "+num(j.bank_move), "net today");
+    $("#fin-daily-note").textContent = j.date + " · " + j.totals.vouchers + " vouchers";
+    var rows=j.summary.map(s=>[`<span class="tag ${s.kind==='receipt'?'cr':s.kind==='payment'?'dr':'ok'}">${esc(s.voucher_type)}</span>`, esc(s.label), s.vouchers, num(s.debit), num(s.credit)]);
+    rows.push([`<b>Total</b>`,"", `<b>${j.totals.vouchers}</b>`, `<b>${num(j.totals.debit)}</b>`, `<b>${num(j.totals.credit)}</b>`]);
+    $("#fin-daily-sum").outerHTML = table(["Type","Voucher","Count","Debit","Credit"], rows, [2,3,4]).replace("<table",'<table id="fin-daily-sum"');
+    var erows=j.entries.map(e=>[esc(e.voucher_type+" "+(e.voucher_no||"")), esc(e.account||""), esc(e.narration||""), num(e.amount), `<span class="tag ${e.side==='Dr'?'dr':'cr'}">${e.side}</span>`]);
+    $("#fin-daily-entries").outerHTML = table(["Voucher","Account","Narration","Amount","Dr/Cr"], erows, [3]).replace("<table",'<table id="fin-daily-entries"');
+  }catch(e){}
+}
+function sumKind(j,k){ return (j.summary||[]).filter(s=>s.kind===k).reduce((a,s)=>a+(k==="receipt"?s.credit:s.debit),0); }
+function nvouch(j,k){ var n=(j.summary||[]).filter(s=>s.kind===k).reduce((a,s)=>a+s.vouchers,0); return n+" voucher"+(n===1?"":"s"); }
 
-// ---------- reports (server builds them; download as PDF or CSV) ----------
-async function loadReports() {
-  if (STATIC_DATA) return;                             // reports are generated live by the server
-  try {
-    const j = await (await fetch("api/reports")).json();
-    $("#repName").innerHTML = j.reports.map((r) => `<option value="${esc(r.name)}">${esc(r.label)}</option>`).join("");
-    $("#reportsCard").style.display = "";
-  } catch (e) {}
-}
-function repUrl(fmt) {
-  const day = $("#day").value;
-  return `api/report?name=${encodeURIComponent($("#repName").value)}&fmt=${fmt}` + (day ? `&date=${day}` : "");
-}
-$("#repView").onclick = async () => {
-  $("#repMsg").textContent = "Loading…"; $("#repOut").innerHTML = "";
-  try {
-    const r = await fetch(repUrl("json"));
-    if (!r.ok) { $("#repMsg").textContent = "Could not build this report (licence or data)."; return; }
-    const j = await r.json();
-    const nums = j.columns.map((_, i) => i).filter((i) => j.rows.length && j.rows.every((row) => row[i] === "" || /^[-+\d.,%\s]+$/.test(String(row[i]))));
-    $("#repMsg").textContent = j.title + (j.summary && j.summary.length ? " — " + j.summary.join("  ·  ") : "");
-    $("#repOut").innerHTML = table(j.columns, j.rows.map((row) => row.map((c) => esc(c))), nums);
+/* finance sub-tabs */
+$("#fin-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{
+  $("#fin-sub").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected", x===b));
+  $("#fin-led").hidden = b.dataset.v!=="led"; $("#fin-daily").hidden = b.dataset.v!=="daily";
+  if(b.dataset.v==="daily"){ if(!$("#fin-date").value) $("#fin-date").value=D.as_of; loadDaily(); }
+});
+$("#fin-date").onchange=loadDaily;
+
+/* ---------- generic report renderer ---------- */
+async function loadReport(name, outSel, msgSel){
+  if(STATIC_DATA){ $(msgSel).textContent="Open from the server to see this."; $(outSel).innerHTML=""; return; }
+  $(msgSel).textContent="Loading…"; $(outSel).innerHTML="";
+  try{
+    var day=$("#day").value;
+    var r=await fetch(`api/report?name=${name}&fmt=json`+(day?`&date=${day}`:""));
+    if(!r.ok){ $(msgSel).textContent="Could not load (licence or data)."; return; }
+    var j=await r.json();
+    var nums=j.columns.map((_,i)=>i).filter(i=>j.rows.length && j.rows.every(row=>row[i]===""||/^[-+\d.,%\s]+$/.test(String(row[i]))));
+    $(msgSel).textContent = (j.summary&&j.summary.length? j.summary.join("  ·  ") : j.title);
+    $(outSel).innerHTML = `<div class="card"><div class="tscroll">`+table(j.columns, j.rows.map(row=>row.map(c=>statusCell(c))), nums)+`</div></div>`;
     applyFilter();
-  } catch (e) { $("#repMsg").textContent = "Could not reach the server."; }
-};
-$("#repPdf").onclick = () => { location.href = repUrl("pdf"); };
-$("#repCsv").onclick = () => { location.href = repUrl("csv"); };
-
-// ---------- tabs ----------
-let curTab = "overview";
-function setTab(name) {
-  curTab = name;
-  document.querySelectorAll("#mainTabs button").forEach((b) => b.setAttribute("aria-selected", b.dataset.tab === name));
-  document.querySelectorAll(".pane").forEach((p) => (p.hidden = p.dataset.pane !== name));
-  if (D) renderCharts();                                 // size charts now that their pane is visible
-  if (name === "payroll") loadPayroll();
-  if (name === "gate") loadGate();
-  if (name === "browse") loadBrowseInit();
-  applyFilter();
+  }catch(e){ $(msgSel).textContent="Could not reach the server."; }
 }
-document.querySelectorAll("#mainTabs button").forEach((b) => (b.onclick = () => setTab(b.dataset.tab)));
+function statusCell(v){ var s=String(v==null?"":v); var map={"OUT OF STOCK":"out","LOW STOCK":"low","ACTION":"out","CONFIRMED":"mid","WATCH":"ok"}; return map[s]?`<span class="tag ${map[s]}">${esc(s)}</span>`:esc(s); }
 
-// ---------- click a finding -> open where it is ----------
-const SECTION_TAB = {Weaving: "weaving", Yarn: "weaving", Store: "store", Finance: "finance", Payroll: "payroll"};
-function openFinding(f) {
-  if (!f) return;
-  setTab(SECTION_TAB[f.section] || "overview");
-  const m = ((f.title || "") + " " + (f.detail || "")).match(/\b([A-Z][A-Z0-9]*-[A-Z0-9]+|LOOM[-\s]?\w+)\b/);
-  $("#search").value = m ? m[1] : "";
-  applyFilter();
-  const first = document.querySelector(".pane:not([hidden]) tr.hit, .pane:not([hidden]) .item");
-  if (first) first.scrollIntoView({behavior: "smooth", block: "center"});
+/* ---------- store ---------- */
+var storeView="stock";
+$("#store-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{storeView=b.dataset.v;$("#store-sub").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x===b));loadStore();});
+function loadStore(){
+  $("#store-tools").innerHTML = storeView==="reorder"
+    ? `<span class="countline">Items that ran out or fell below one month's use (90-day window). Order qty brings stock to one month.</span><span class="spacer" style="flex:1"></span><button class="btn" onclick="window.print()">🖨 Print</button><a class="btn ghost" href="api/report?name=reorder&fmt=pdf${dayq()}">⤓ PDF</a>`
+    : `<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=stock&fmt=pdf${dayq()}">⤓ PDF</a>`;
+  loadReport(storeView, "#store-out", "#store-msg");
+}
+function dayq(){ var d=$("#day").value; return d?("&date="+d):""; }
+
+/* ---------- yarn & fabric ---------- */
+var yfView="yarn";
+$("#yf-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{yfView=b.dataset.v;$("#yf-sub").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x===b));loadYF();});
+function loadYF(){
+  var name = yfView==="yarn"?"yarn-stock":"fabric-stock";
+  $("#yf-tools").innerHTML = `<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=${name}&fmt=pdf${dayq()}">⤓ PDF</a>`;
+  loadReport(name, "#yf-out", "#yf-msg");
 }
 
-// ---------- a report rendered into a table (Payroll tab) ----------
-async function reportInto(outSel, msgSel, name) {
-  if (STATIC_DATA) { $(msgSel).textContent = "Open from the server to see this."; return; }
-  $(msgSel).textContent = "Loading…"; $(outSel).innerHTML = "";
-  try {
-    const day = $("#day").value;
-    const r = await fetch(`api/report?name=${name}&fmt=json` + (day ? `&date=${day}` : ""));
-    if (!r.ok) { $(msgSel).textContent = "Could not load (licence or data)."; return; }
-    const j = await r.json();
-    const nums = j.columns.map((_, i) => i).filter((i) => j.rows.length && j.rows.every((row) => row[i] === "" || /^[-+\d.,%\s]+$/.test(String(row[i]))));
-    $(msgSel).textContent = j.title + (j.summary && j.summary.length ? " — " + j.summary.join("  ·  ") : "");
-    $(outSel).innerHTML = table(j.columns, j.rows.map((row) => row.map((c) => esc(c))), nums);
-    applyFilter();
-  } catch (e) { $(msgSel).textContent = "Could not reach the server."; }
-}
+/* ---------- payroll ---------- */
+var payView="wage-bill";
+const PAY=[["wage-bill","Wage bill"],["payslips","Payslips"],["staff","Employees"],["emp-loans","Loans & advances"]];
+function initPay(){ $("#pay-sub").innerHTML = PAY.map(([v,t])=>`<button data-v="${v}" aria-selected="${v===payView}">${esc(t)}</button>`).join("");
+  $("#pay-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{payView=b.dataset.v;$("#pay-sub").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x===b));loadPay();}); }
+function loadPay(){ $("#pay-tools").innerHTML=`<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=${payView}&fmt=pdf${dayq()}">⤓ PDF</a>`; loadReport(payView,"#pay-out","#pay-msg"); }
 
-let payView = "wage-bill";
-const PAY_REPORTS = [["wage-bill", "Wage bill"], ["payslips", "Payslips"], ["staff", "Employees"], ["emp-loans", "Loans"]];
-function loadPayroll() {
-  $("#payTabs").innerHTML = PAY_REPORTS.map(([v, t]) => `<button role="tab" aria-selected="${v === payView}" data-v="${v}">${esc(t)}</button>`).join("");
-  $("#payTabs").querySelectorAll("button").forEach((b) => (b.onclick = () => { payView = b.dataset.v; loadPayroll(); }));
-  reportInto("#payOut", "#payMsg", payView);
+/* ---------- gate passes ---------- */
+var gateReady=false;
+function initGate(){
+  if(STATIC_DATA){ $("#gate-msg").textContent="Open from the server to browse gate passes."; return; }
+  fetch("api/report?name=gate-summary&fmt=json").then(r=>r.json()).then(j=>{
+    var tin=j.rows.filter(r=>/in/i.test(r[1])).length, tout=j.rows.length-tin;
+    $("#gate-tiles").innerHTML =
+      tile("🚪 Gate passes", num(j.rows.reduce((a,r)=>a+(parseInt(String(r[2]).replace(/\D/g,""))||0),0)), "this period","accent")+
+      tile("↙ In", num(j.rows.filter(r=>/in/i.test(r[1])).reduce((a,r)=>a+(parseInt(String(r[2]).replace(/\D/g,""))||0),0)), "")+
+      tile("↗ Out", num(j.rows.filter(r=>/out/i.test(r[1])).reduce((a,r)=>a+(parseInt(String(r[2]).replace(/\D/g,""))||0),0)), "")+
+      tile("🏷 Types", num(new Set(j.rows.map(r=>r[0])).size), "");
+    if(!gateReady){ gateReady=true; [...new Set(j.rows.map(r=>r[0]))].filter(Boolean).sort().forEach(t=>$("#gate-type").insertAdjacentHTML("beforeend",`<option>${esc(t)}</option>`)); }
+  }).catch(()=>{});
+  loadGate();
 }
+function loadGate(){
+  var q=$("#gate-q").value.trim()||$("#gate-type").value;
+  browseInto("gate_passes", q, "#gate-out", "#gate-msg");
+}
+var gqT; $("#gate-q").addEventListener("input",()=>{clearTimeout(gqT);gqT=setTimeout(loadGate,300);});
+$("#gate-type").onchange=()=>{$("#gate-q").value="";loadGate();};
 
-// ---------- browse a data set (shared by Gate + Browse) ----------
-async function browseInto(entity, q, outSel, msgSel, offset, append) {
-  if (STATIC_DATA) { $(msgSel).textContent = "Open from the server to browse data."; return 0; }
-  $(msgSel).textContent = "Loading…";
-  try {
-    const r = await fetch(`api/browse?entity=${encodeURIComponent(entity)}&q=${encodeURIComponent(q || "")}&limit=200&offset=${offset || 0}`);
-    if (!r.ok) { $(msgSel).textContent = "Could not load."; return 0; }
-    const j = await r.json();
-    const nums = j.columns.map((_, i) => i).filter((i) => j.rows.length && j.rows.every((row) => row[i] == null || row[i] === "" || typeof row[i] === "number"));
-    const body = table(j.columns, j.rows.map((row) => row.map((c) => esc(c))), nums);
-    if (append) $(outSel).insertAdjacentHTML("beforeend", body); else $(outSel).innerHTML = body;
-    const shown = (offset || 0) + j.rows.length;
-    $(msgSel).textContent = `${shown.toLocaleString()} of ${j.total.toLocaleString()} rows`;
+async function browseInto(entity, q, outSel, msgSel, offset, append){
+  if(STATIC_DATA){ $(msgSel).textContent="Open from the server to browse data."; return 0; }
+  $(msgSel).textContent="Loading…";
+  try{
+    var r=await fetch(`api/browse?entity=${encodeURIComponent(entity)}&q=${encodeURIComponent(q||"")}&limit=200&offset=${offset||0}`);
+    if(!r.ok){ $(msgSel).textContent="Could not load."; return 0; }
+    var j=await r.json();
+    var nums=j.columns.map((_,i)=>i).filter(i=>j.rows.length && j.rows.every(row=>row[i]==null||row[i]===""||typeof row[i]==="number"));
+    var body=`<div class="card"><div class="tscroll">`+table(j.columns, j.rows.map(row=>row.map(c=>esc(c))), nums)+`</div></div>`;
+    if(append) $(outSel).insertAdjacentHTML("beforeend", body); else $(outSel).innerHTML=body;
+    $(msgSel).textContent = `${((offset||0)+j.rows.length).toLocaleString()} of ${j.total.toLocaleString()} rows`;
     applyFilter();
     return j.total;
-  } catch (e) { $(msgSel).textContent = "Could not reach the server."; return 0; }
+  }catch(e){ $(msgSel).textContent="Could not reach the server."; return 0; }
 }
 
-let gateReady = false;
-function loadGate() {
-  if (STATIC_DATA) { $("#gateMsg").textContent = "Open from the server to browse gate passes."; return; }
-  const q = $("#gateQ").value.trim() || $("#gateType").value;
-  browseInto("gate_passes", q, "#gateOut", "#gateMsg");
-  if (!gateReady) {                                      // fill the type dropdown once, from the summary
-    gateReady = true;
-    fetch("api/report?name=gate-summary&fmt=json").then((r) => r.json()).then((j) => {
-      [...new Set(j.rows.map((r) => r[0]))].filter(Boolean).sort().forEach((t) =>
-        $("#gateType").insertAdjacentHTML("beforeend", `<option>${esc(t)}</option>`));
-    }).catch(() => {});
+/* ---------- reports + browse ---------- */
+function repUrl(fmt){ var d=$("#day").value; return `api/report?name=${encodeURIComponent($("#rep-name").value)}&fmt=${fmt}`+(d?`&date=${d}`:""); }
+async function initReports(){
+  if(STATIC_DATA) return;
+  try{ var j=await (await fetch("api/reports")).json(); $("#rep-name").innerHTML=j.reports.map(r=>`<option value="${esc(r.name)}">${esc(r.label)}</option>`).join(""); }catch(e){}
+  try{ var e=await (await fetch("api/entities")).json(); $("#br-entity").innerHTML=e.entities.map(x=>`<option value="${x.name}">${esc(x.label)} (${x.rows.toLocaleString()})</option>`).join(""); }catch(e){}
+}
+$("#rep-view").onclick=()=>{ var n=$("#rep-name").value; loadReportNamed(n); };
+async function loadReportNamed(name){
+  $("#rep-msg").textContent="Loading…"; $("#rep-out").innerHTML="";
+  try{ var r=await fetch(repUrl("json")); if(!r.ok){$("#rep-msg").textContent="Could not build this report.";return;} var j=await r.json();
+    var nums=j.columns.map((_,i)=>i).filter(i=>j.rows.length && j.rows.every(row=>row[i]===""||/^[-+\d.,%\s]+$/.test(String(row[i]))));
+    $("#rep-msg").textContent=j.title+(j.summary&&j.summary.length?" — "+j.summary.join("  ·  "):"");
+    $("#rep-out").innerHTML=table(j.columns, j.rows.map(row=>row.map(c=>statusCell(c))), nums);
+  }catch(e){ $("#rep-msg").textContent="Could not reach the server."; }
+}
+$("#rep-pdf").onclick=()=>{location.href=repUrl("pdf");};
+$("#rep-csv").onclick=()=>{location.href=repUrl("csv");};
+$("#rep-print").onclick=()=>window.print();
+var brTotal=0;
+async function brRun(){ brTotal=await browseInto($("#br-entity").value,$("#br-q").value.trim(),"#br-out","#br-msg",0,false); $("#br-more").style.display=brTotal>200?"":"none"; }
+$("#br-entity").onchange=brRun;
+var brT; $("#br-q").addEventListener("input",()=>{clearTimeout(brT);brT=setTimeout(brRun,300);});
+$("#br-more").onclick=async()=>{ var shown=$("#br-out").querySelectorAll("tbody tr").length; await browseInto($("#br-entity").value,$("#br-q").value.trim(),"#br-out","#br-msg",shown,true); if($("#br-out").querySelectorAll("tbody tr").length>=brTotal)$("#br-more").style.display="none"; };
+
+/* ---------- tabs ---------- */
+var curTab="overview";
+var loaded={};
+function setTab(name){
+  curTab=name;
+  document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-selected", b.dataset.tab===name));
+  document.querySelectorAll(".pane").forEach(p=>p.hidden = p.dataset.pane!==name);
+  buildCharts(name);
+  setTimeout(()=>Object.values(charts).forEach(ch=>ch.resize()),30);
+  if(!loaded[name]){
+    loaded[name]=true;
+    if(name==="store") loadStore();
+    if(name==="yf") loadYF();
+    if(name==="payroll"){ initPay(); loadPay(); }
+    if(name==="gate") initGate();
+    if(name==="reports"){ initReports().then(()=>{ if($("#rep-name").value) loadReportNamed($("#rep-name").value); brRun(); }); }
   }
+  applyFilter();
 }
-let gt; $("#gateQ").addEventListener("input", () => { clearTimeout(gt); gt = setTimeout(loadGate, 300); });
-$("#gateType").onchange = () => { $("#gateQ").value = ""; loadGate(); };
+document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 
-let browseTotal = 0, browseInit = false;
-function loadBrowseInit() {
-  if (browseInit) return;
-  browseInit = true;
-  if (STATIC_DATA) { $("#browseMsg").textContent = "Open from the server to browse data."; return; }
-  fetch("api/entities").then((r) => r.json()).then((j) => {
-    $("#browseEntity").innerHTML = j.entities.map((e) => `<option value="${e.name}">${esc(e.label)} (${e.rows.toLocaleString()})</option>`).join("");
-    browseRun();
-  }).catch(() => { $("#browseMsg").textContent = "Could not load data sets."; });
+const SECTION_TAB={Weaving:"weaving",Yarn:"yf",Store:"store",Finance:"finance",Payroll:"payroll"};
+function openFinding(f){ if(!f) return; setTab(SECTION_TAB[f.section]||"overview"); }
+
+/* ---------- search (filters visible tables) ---------- */
+function applyFilter(){ /* reserved: per-tab search inputs handle filtering */ }
+
+/* ---------- licence ---------- */
+async function licenceInfo(){
+  if(STATIC_DATA){ $("#licBtn").style.display="none"; return null; }
+  try{ var L=await (await fetch("api/licence")).json();
+    $("#licState").textContent=L.message; $("#licMachine").textContent=L.machine;
+    var b=$("#licBanner"); if(L.warning||!L.allowed){ b.textContent="Licence: "+L.message; b.style.display="block"; } else b.style.display="none";
+    return L;
+  }catch(e){ return null; }
 }
-async function browseRun() {
-  browseTotal = await browseInto($("#browseEntity").value, $("#browseQ").value.trim(), "#browseOut", "#browseMsg", 0, false);
-  $("#browseMore").style.display = browseTotal > 200 ? "" : "none";
-}
-$("#browseEntity").onchange = browseRun;
-let bq; $("#browseQ").addEventListener("input", () => { clearTimeout(bq); bq = setTimeout(browseRun, 300); });
-$("#browseMore").onclick = async () => {
-  const shown = $("#browseOut").querySelectorAll("tbody tr").length;
-  await browseInto($("#browseEntity").value, $("#browseQ").value.trim(), "#browseOut", "#browseMsg", shown, true);
-  if ($("#browseOut").querySelectorAll("tbody tr").length >= browseTotal) $("#browseMore").style.display = "none";
+$("#licBtn").onclick=async()=>{ await licenceInfo(); $("#licMsg").textContent=""; $("#licDlg").showModal(); };
+$("#licClose").onclick=()=>$("#licDlg").close();
+$("#licFile").onchange=async(e)=>{ var f=e.target.files[0]; if(f) $("#licText").value=(await f.text()).trim(); };
+$("#licSave").onclick=async()=>{
+  var r=await fetch("api/licence",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:$("#licText").value})});
+  var j=await r.json(); $("#licMsg").textContent=j.message; if(j.allowed){ await licenceInfo(); load(); $("#licDlg").close(); }
 };
 
-// ---------- chat ----------
-let session = null; try { session = sessionStorage.getItem("sl-session"); } catch (e) {}
-if (!session) { session = Math.random().toString(36).slice(2) + Date.now().toString(36); try { sessionStorage.setItem("sl-session", session); } catch (e) {} }
-function say(text, who, queries) {
-  const m = document.createElement("div"); m.className = "msg " + who; m.textContent = text;
-  if (queries && queries.length) {
-    const d = document.createElement("details"); d.innerHTML = `<summary>${queries.length} quer${queries.length > 1 ? "ies" : "y"} used</summary>`;
-    queries.forEach((q) => { const c = document.createElement("code"); c.textContent = q + "\n\n"; d.appendChild(c); });
-    m.appendChild(d);
+/* ---------- load ---------- */
+async function load(day, silent, _retry){
+  if(STATIC_DATA){ D=STATIC_DATA; render(); return; }
+  if(!silent && !D) $("#asof").textContent="loading…";
+  try{
+    var r=await fetch("api/data"+(day?`?date=${day}`:""));
+    if(r.status===403){ await licenceInfo(); $("#licDlg").showModal(); $("#asof").textContent="licence needed"; return; }
+    if(!r.ok){ if(!silent)$("#asof").textContent="could not load"; return; }
+    D=await r.json(); builtTabs={}; render();
+  }catch(e){
+    if(!_retry){ return setTimeout(()=>load(day, silent, true), 500); }  // ride out a momentary hiccup
+    if(!silent && !D) $("#asof").textContent="could not reach server";    // keep the last good view otherwise
   }
-  $("#msgs").appendChild(m); $("#msgs").scrollTop = 1e9; return m;
 }
-function toggleChat(open) { $("#chat").classList.toggle("open", open); $("#askBtn").setAttribute("aria-expanded", open); if (open) $("#q").focus(); }
-$("#askBtn").onclick = () => toggleChat(!$("#chat").classList.contains("open"));
-$("#chatClose").onclick = () => toggleChat(false);
-say(STATIC_DATA ? "Chat works when the dashboard is opened from the mill's server (python -m smart_layer serve)."
-               : "Ask anything about the mill – production, stock, yarn, parties, cash. English, Urdu or Roman Urdu.", "bot");
-$("#askForm").onsubmit = async (e) => {
-  e.preventDefault();
-  const q = $("#q").value.trim(); if (!q || STATIC_DATA) return;
-  $("#q").value = ""; say(q, "me"); const wait = say("…", "bot");
-  try {
-    const r = await fetch("api/ask", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({question: q, session})});
-    const j = await r.json(); wait.remove();
-    say(j.answer || j.error || "No answer.", "bot", j.queries);
-  } catch (err) { wait.remove(); say("Could not reach the server.", "bot"); }
+$("#day").onchange=(e)=>{ loaded={}; load(e.target.value); if(curTab!=="overview"){ var t=curTab; curTab="overview"; setTab(t); } };
+setInterval(()=>{ if(!STATIC_DATA && !document.hidden && curTab==="overview") load($("#day").value||undefined, true); }, 60000);
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden && !STATIC_DATA && curTab==="overview") load($("#day").value||undefined, true); });
+
+/* ---------- chat ---------- */
+var session=null; try{session=sessionStorage.getItem("sl-session");}catch(e){}
+if(!session){ session=Math.random().toString(36).slice(2)+Date.now().toString(36); try{sessionStorage.setItem("sl-session",session);}catch(e){} }
+function say(text,who,queries){
+  var m=document.createElement("div"); m.className="msg "+who; m.textContent=text;
+  if(queries&&queries.length){ var d=document.createElement("details"); d.innerHTML=`<summary>${queries.length} quer${queries.length>1?"ies":"y"} used</summary>`; queries.forEach(q=>{var c=document.createElement("code");c.textContent=q+"\n\n";d.appendChild(c);}); m.appendChild(d); }
+  $("#msgs").appendChild(m); $("#msgs").scrollTop=1e9; return m;
+}
+$("#askBtn").onclick=()=>{ var o=!$("#chat").classList.contains("open"); $("#chat").classList.toggle("open",o); $("#askBtn").setAttribute("aria-expanded",o); if(o)$("#q").focus(); };
+$("#chatClose").onclick=()=>$("#chat").classList.remove("open");
+say(STATIC_DATA?"Chat works when the dashboard is opened from the mill's server.":"Ask anything about the mill — production, stock, yarn, parties, cash. English, Urdu or Roman Urdu.","bot");
+$("#askForm").onsubmit=async(e)=>{
+  e.preventDefault(); var q=$("#q").value.trim(); if(!q||STATIC_DATA) return;
+  $("#q").value=""; say(q,"me"); var wait=say("…","bot");
+  try{ var r=await fetch("api/ask",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({question:q,session})}); var j=await r.json(); wait.remove(); say(j.answer||j.error||"No answer.","bot",j.queries); }
+  catch(err){ wait.remove(); say("Could not reach the server.","bot"); }
 };
-// open a record from a phone-alert deep link (e.g. .../#q=BM-05A): pre-fill the search and highlight
-function openHash() {
-  const m = (location.hash || "").match(/q=([^&]+)/);
-  if (m) { $("#search").value = decodeURIComponent(m[1]); applyFilter();
-    const hit = document.querySelector("tr.hit"); if (hit) hit.scrollIntoView({block: "center"}); }
-}
-addEventListener("hashchange", openHash);
 
 licenceInfo();
 load();
-loadReports();
-setTimeout(openHash, 400);
 </script>
 </body>
 </html>

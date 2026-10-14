@@ -64,6 +64,8 @@ jobs:
             --include-data-dir=docs=docs `
             --include-data-files=config.example.toml=config.example.toml `
             --include-data-files=config.demo.toml=config.demo.toml `
+            --include-data-files=smart_layer/web/dashboard.html=smart_layer/web/dashboard.html `
+            --include-data-files=smart_layer/web/static/chart.min.js=smart_layer/web/static/chart.min.js `
             --include-package=oracledb --include-package=pyodbc --include-package=pymysql --include-package=psycopg `
             --include-package=reportlab --include-package=anthropic `
             app_main.py

@@ -15,7 +15,7 @@ DEFAULTS = {
     "store": {"path": "data/smart_layer.db"},
     "sync": {"history_days": 400, "live_days": 3},   # live_days: the short window the 5-minute live sync re-reads
     "notify": {"channels": ["console"]},
-    "reports": {"tracked_issue_days": 60, "reorder_cover_months": 2, "output_dir": "output"},
+    "reports": {"tracked_issue_days": 90, "reorder_cover_months": 1, "output_dir": "output"},
     "audit": {
         "large_payment": 500000,          # payments at or above this are listed (WATCH)
         "duplicate_payment_min": 5000,    # same party + same amount within 3 days

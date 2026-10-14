@@ -38,7 +38,7 @@ ERP, can be connected with one mapping file.
 | `report yarn-stock` / `fabric-stock` | Yarn in hand and at sizers; fabric in the mill by grade with ageing. |
 | `report pnl` / `balances` / `parties` | Monthly P&L by head, balance summary, receivable / payable per party. |
 | `report store-recon` | Store consumption in the ledger vs what the store issued, month by month. |
-| `serve` / `dashboard` | Owner dashboard on phone and PC (password-protected), with "Ask the ERP" chat. |
+| `serve` / `dashboard` | Owner dashboard on phone and PC (password-protected): a glanceable **Overview**, **Weaving** (loom floor, ERP vs scoreboard), **Store Room**, **Yarn & Fabric**, a **Finance** ledger desk (party ledgers, running balance, daily voucher summary), **Payroll**, **Gate Passes** and **Reports** — with interactive charts bundled to run offline, and "Ask the ERP" chat. |
 | `ask` | Questions in English, Urdu or Roman Urdu, answered from the data. |
 
 Add `--csv` and/or `--pdf` to any report or the audit to save it in the output folder.
@@ -101,7 +101,8 @@ smart_layer/            the product
   reports/              stock, reorder, production
   audit/                finance, store, weaving, yarn checks
   textile/              contract closing (method.py = the mill's own rules) and pilferage
-  web/                  owner dashboard page, data builder and web server
+  web/                  owner dashboard (one page, all tabs), data builder, finance ledger desk and web server
+  web/static/           Chart.js, bundled and served locally so charts work offline
   ask.py                "ask the ERP" with Claude
   setup_wizard.py       first-time setup questions
   licence.py            licence check (signed, tied to one server, expiry)

@@ -81,10 +81,12 @@ SELECT l.tbl || '/' || l.vt || '/' || l.vno || '/' || TO_CHAR(l.vd, 'YYYYMMDD') 
        TO_CHAR(l.vno) AS voucher_no, l.vt AS voucher_type,
        CASE WHEN l.vt IN ('CP', 'BP') THEN 'payment' WHEN l.vt IN ('CR', 'BR') THEN 'receipt'
             WHEN l.vt = 'JV' THEN 'journal' WHEN l.vt = 'OPN' THEN 'opening'
-            WHEN l.vt LIKE 'OGP%' THEN 'sale' WHEN l.vt IN ('SRN', 'IGP_YARN') THEN 'purchase' ELSE 'other' END AS voucher_kind,
+            -- real sales post through the fabric dispatch invoice (GPOUT / GPIN), purchases through the store GRN and sizing bill
+            WHEN l.vt IN ('GPOUT', 'GPIN', 'OGP_YARN') THEN 'sale'
+            WHEN l.vt IN ('SRN', 'IGP_YARN', 'IGP_SIZED_BEAMS') THEN 'purchase' ELSE 'other' END AS voucher_kind,
        TRUNC(l.vd) AS voucher_date, l.feedd AS entered_at, l.ac AS account_code, l.amt AS amount, l.usern AS entered_by
 FROM dostex.acl l
-WHERE l.vd >= :since AND l.ac IS NOT NULL
+WHERE (l.vt = 'OPN' OR l.vd >= :since) AND l.ac IS NOT NULL AND NVL(l.amt, 0) <> 0
 """
 
 [entities.account_balances]

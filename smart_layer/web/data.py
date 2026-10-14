@@ -3,6 +3,7 @@ Everything the owner dashboard shows, built from the local store as one JSON-rea
 Works for any mill: it reads only the standard entities.
 """
 
+import calendar
 from datetime import date, timedelta
 
 from .. import PRODUCT, audit
@@ -11,11 +12,123 @@ from ..reports.stock import _status_rows
 from ..textile import beams as beams_mod
 from ..textile import closing, pilferage
 from ..textile.method import Method
+from . import finance as fin_mod
 
 
 def _one(con, sql, *p):
     row = con.execute(sql, p).fetchone()
     return row[0] if row and row[0] is not None else 0
+
+
+def _month_ends(as_of, n=12):
+    out = []
+    for i in range(n - 1, -1, -1):
+        yy, mm = divmod(as_of.year * 12 + as_of.month - 1 - i, 12)
+        mm += 1
+        out.append(date(yy, mm, calendar.monthrange(yy, mm)[1]))
+    return out
+
+
+def _chart_series(con, as_of):
+    """Extra trend series for the Overview: receivables, cash & bank, fabric stock."""
+    mes = _month_ends(as_of, 12)
+    receivables = [{"month": me.strftime("%Y-%m"),
+                    "amount": round(_one(con, """SELECT SUM(l.amount) FROM ledger_entries l JOIN accounts a USING (account_code)
+                                                 WHERE a.account_group = 'customer' AND l.voucher_date <= ?""", me.isoformat()))}
+                   for me in mes]
+    fabric_stock = []
+    for me in mes:
+        w = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date <= ?", me.isoformat())
+        d = _one(con, """SELECT SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters)
+                         FROM fabric_dispatches WHERE dispatch_date <= ?""", me.isoformat())
+        fabric_stock.append({"month": me.strftime("%Y-%m"), "meters": round((w or 0) - (d or 0))})
+    # cash & bank: a running daily balance over the last 30 days
+    start = as_of - timedelta(days=29)
+
+    def _grp_daily(group):
+        base = _one(con, """SELECT SUM(l.amount) FROM ledger_entries l JOIN accounts a USING (account_code)
+                            WHERE a.account_group = ? AND l.voucher_date < ?""", group, start.isoformat())
+        delta = dict(con.execute("""SELECT l.voucher_date, SUM(l.amount) FROM ledger_entries l JOIN accounts a USING (account_code)
+                                    WHERE a.account_group = ? AND l.voucher_date >= ? AND l.voucher_date <= ? GROUP BY 1""",
+                                 (group, start.isoformat(), as_of.isoformat())))
+        run, out = base or 0, {}
+        for i in range(30):
+            day = (start + timedelta(days=i)).isoformat()
+            run += delta.get(day, 0) or 0
+            out[day] = round(run)
+        return out
+
+    cash_d, bank_d = _grp_daily("cash"), _grp_daily("bank")
+    cash_bank = [{"date": (start + timedelta(days=i)).isoformat(),
+                  "cash": cash_d[(start + timedelta(days=i)).isoformat()],
+                  "bank": bank_d[(start + timedelta(days=i)).isoformat()]} for i in range(30)]
+    return {"receivables": receivables, "fabric_stock": fabric_stock, "cash_bank": cash_bank}
+
+
+def _weaving(con, as_of):
+    """Loom floor: ERP vs scoreboard efficiency per loom and shed-wide, with a 30-day trend."""
+    d, start = as_of.isoformat(), (as_of - timedelta(days=29)).isoformat()
+    names = dict(con.execute("SELECT loom_code, loom_name FROM looms"))
+    erp = {r[0]: r for r in con.execute(f"""
+        SELECT p.loom_code, {EFF_AGG} AS eff, SUM(p.meters) AS m, MAX(p.prod_date) AS last
+        FROM loom_production p WHERE p.prod_date BETWEEN ? AND ? GROUP BY p.loom_code""", (start, d))}
+    today_m = dict(con.execute("SELECT loom_code, SUM(meters) FROM loom_production WHERE prod_date = ? GROUP BY loom_code", (d,)))
+    scb = {r[0]: r for r in con.execute("""
+        SELECT loom_code, SUM(efficiency_pct * meters) / NULLIF(SUM(meters), 0) AS eff,
+               SUM(meters) AS m, AVG(rpm) AS rpm
+        FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (start, d))}
+    scb_avail = bool(scb)
+    looms = []
+    for code in sorted(set(erp) | set(scb) | set(names), key=str):
+        e, s = erp.get(code), scb.get(code)
+        last = e[3] if e else None
+        gap = (as_of - date.fromisoformat(last)).days if last else None
+        status = "running" if (code in today_m and today_m[code]) else \
+                 ("stopped" if gap is not None and gap >= 7 else "idle" if gap is not None and gap >= 2 else "running")
+        looms.append({"loom": names.get(code, code), "code": code,
+                      "erp_eff": round(e[1], 1) if e and e[1] is not None else None,
+                      "scb_eff": round(s[1], 1) if s and s[1] is not None else None,
+                      "meters_today": round(today_m.get(code, 0) or 0),
+                      "last_date": last, "status": status})
+    # shed-wide 30-day averages
+    shed_erp = _one(con, f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d)
+    shed_scb = _one(con, """SELECT SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
+                            FROM loom_monitor WHERE read_date BETWEEN ? AND ?""", start, d) if scb_avail else None
+    ndays = max((as_of - date.fromisoformat(start)).days + 1, 1)
+    shed = {"erp_eff": round(shed_erp, 1) if shed_erp else None,
+            "scb_eff": round(shed_scb, 1) if shed_scb else None,
+            "erp_meters_day": round(_one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d) / ndays),
+            "scb_meters_day": round(_one(con, "SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ?", start, d) / ndays) if scb_avail else None}
+    # 30-day efficiency trend, ERP vs scoreboard
+    erp_day = dict(con.execute(f"SELECT prod_date, {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ? GROUP BY prod_date", (start, d)))
+    scb_day = dict(con.execute("""SELECT read_date, SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
+                                  FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY read_date""", (start, d))) if scb_avail else {}
+    trend = [{"date": (as_of - timedelta(days=29 - i)).isoformat(),
+              "erp": round(erp_day[x], 1) if (x := (as_of - timedelta(days=29 - i)).isoformat()) in erp_day and erp_day[x] is not None else None,
+              "scb": round(scb_day[x], 1) if x in scb_day and scb_day[x] is not None else None} for i in range(30)]
+    # monthly efficiency & A-grade (ERP), last 12 months
+    monthly = [{"month": m, "eff": round(e, 1) if e is not None else None,
+                "a_grade": round(100.0 * (a or 0) / t, 1) if t else None}
+               for m, e, a, t in con.execute(f"""
+        SELECT strftime('%Y-%m', prod_date), {EFF_AGG}, SUM(COALESCE(first_quality_m, 0)), SUM(meters)
+        FROM loom_production WHERE prod_date >= ? GROUP BY 1 ORDER BY 1""", (_month_ends(as_of, 12)[0].replace(day=1).isoformat(),))]
+    return {"scoreboard_available": scb_avail, "shed": shed, "looms": looms, "trend": trend, "monthly": monthly}
+
+
+def _yarn_fabric(con, cfg, as_of):
+    """Headline yarn and fabric stock tiles for the Yarn & Fabric tab."""
+    from ..textile.stock_position import fabric_positions, yarn_positions
+    hand, sizer, _ = yarn_positions(con, cfg, as_of)
+    bag_kg = float(Method(cfg["closing"]).cfg["bag_lb"]) * 0.45359237
+    hand_kg = sum(v for v in hand.values() if v > 0)
+    sizer_kg = sum(v for v in sizer.values() if v > 0)
+    counts = len({k[1] for k, v in hand.items() if abs(v) >= 1})
+    fab = fabric_positions(con, as_of)
+    fab_total = sum(f["total"] for f in fab if f["total"] > 0)
+    lots = sum(1 for f in fab if f["total"] > 1)
+    return {"yarn_hand_kg": round(hand_kg), "yarn_hand_bags": round(hand_kg / bag_kg) if bag_kg else 0,
+            "yarn_sizer_kg": round(sizer_kg), "yarn_sizer_bags": round(sizer_kg / bag_kg) if bag_kg else 0,
+            "yarn_counts": counts, "fabric_m": round(fab_total), "fabric_lots": lots}
 
 
 def build(con, cfg, as_of=None):
@@ -116,6 +229,10 @@ def build(con, cfg, as_of=None):
         "sizing_limit": float(t["sizing_loss_pct"]),
         "beams": beam_rows, "beam_warn_days": float(bt["warn_days"]),
         "beam_stock": _beam_stock(con),
+        "charts": _chart_series(con, as_of),
+        "fin": fin_mod.overview(con),
+        "weaving": _weaving(con, as_of),
+        "yarn_fabric": _yarn_fabric(con, cfg, as_of),
     }
 
 
