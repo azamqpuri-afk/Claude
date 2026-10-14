@@ -34,7 +34,19 @@ def build(path):
     s.append(Paragraph("Project Smart Layer by Azam Puri", H1))
     s.append(Paragraph("What the mill needs to provide to install the app (read-only on your ERP)", SUB))
 
-    s.append(Paragraph("1. A computer to run it", H2))
+    s.append(Paragraph("How it runs (read this first)", H2))
+    s.append(Paragraph("Smart Layer has two parts:", BODY))
+    s.append(bullets([
+        "<b>The engine</b> - reads the ERP, runs the dashboard, sends the alerts and does the automatic syncs. "
+        "It is installed on <b>one always-on Windows PC</b> near the ERP.",
+        "<b>The viewer</b> - the dashboard is just a web page. The owner and managers open it in <b>any browser</b> "
+        "(Windows, <b>Mac</b>, iPhone, Android). Nothing to install, and their device does <b>not</b> need to stay on.",
+    ]))
+    s.append(Paragraph("So the app is installed on the always-on PC only. The owner's MacBook, laptop or phone just opens "
+                       "the dashboard in a browser - on the mill network, or from anywhere through a secure Tailscale link. "
+                       "Do not run the engine on a personal laptop that sleeps or switches off, or it will miss syncs and alerts.", NOTE))
+
+    s.append(Paragraph("1. A computer to run it (the always-on PC)", H2))
     s.append(bullets([
         "An always-on Windows PC (not the ERP database server itself). Windows 10/11 or Server, 64-bit.",
         "Modest spec is fine: 8 GB RAM, ~20 GB free disk. It only reads the ERP and serves a dashboard.",
