@@ -42,14 +42,17 @@ Name: "{group}\Smart Layer status";    Filename: "{app}\SmartLayer.exe"; Paramet
 Name: "{group}\Uninstall Smart Layer"; Filename: "{uninstallexe}"
 
 [Run]
-; After copying files: ask the setup questions, do the first sync, schedule the daily run and the dashboard.
-Filename: "{app}\SmartLayer.exe"; Parameters: "setup"; WorkingDir: "{app}"; Flags: runascurrentuser; \
-  StatusMsg: "Setup questions (mill, database, dashboard, licence)..."
-Filename: "{app}\SmartLayer.exe"; Parameters: "sync"; WorkingDir: "{app}"; Flags: runascurrentuser runhidden; \
-  StatusMsg: "First sync from the ERP (can take a few minutes)..."
+; Only non-interactive work runs while the progress bar is up, so the bar always finishes quickly:
+; register the scheduled tasks (no questions, no input).
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\install_tasks.ps1"" -AppDir ""{app}"""; \
-  Flags: runhidden; StatusMsg: "Scheduling the daily run and the dashboard..."
-Filename: "http://localhost:8080"; Description: "Open the dashboard now"; Flags: postinstall shellexec skipifsilent
+  Flags: runhidden; StatusMsg: "Scheduling the daily run, the live sync and the dashboard..."
+; The setup wizard asks questions, so it runs AFTER the Finish page as a visible, foreground step
+; (never blocking the installer). It writes config, tests the ERP and does the first sync itself.
+Filename: "{app}\SmartLayer.exe"; Parameters: "setup"; WorkingDir: "{app}"; \
+  Description: "Set up Smart Layer now - mill, ERP database, dashboard password, licence (opens a window)"; \
+  Flags: postinstall runascurrentuser
+Filename: "http://localhost:8080"; Description: "Open the dashboard (do this after setup)"; \
+  Flags: postinstall shellexec unchecked skipifsilent
 
 [UninstallRun]
 ; Remove the scheduled tasks and the firewall rule (keeps the folder, data and licence).

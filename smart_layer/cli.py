@@ -295,8 +295,23 @@ def main(argv=None):
 
         from .setup_wizard import run
         cfg_path = run(Path(args.config).resolve().parent)
+        cfg = config.load(cfg_path)
         print("\nTesting the connection to the ERP ...")
-        return cmd_check(config.load(cfg_path), args)
+        rc = cmd_check(cfg, args)
+        if rc == 0:                                      # ERP reachable: do the first sync now so the dashboard has data
+            print("\nDoing the first sync from the ERP (this can take a few minutes) ...")
+            try:
+                from .licence import require
+                require(cfg)
+                cmd_sync(cfg, argparse.Namespace(live=False, entities=None))
+                print("\nSetup complete. Open the dashboard:  http://localhost:8080")
+            except SystemExit as e:                      # usually: licence not installed yet
+                print(f"\nFirst sync not done yet: {e}")
+                print("Open the dashboard (http://localhost:8080), install the licence, then run:  SmartLayer.exe sync")
+            except Exception as e:
+                print(f"\nFirst sync could not finish: {e}\nYou can run it later with:  SmartLayer.exe sync")
+        input("\nPress Enter to close this window.")      # keep the console open so the owner can read the result
+        return rc
     cfg = config.load(args.config)
     if args.cmd in ("sync", "report", "audit", "ask"):   # the dashboard (serve) starts regardless, so the
         from .licence import require                      # licence can be installed from its own Licence screen
