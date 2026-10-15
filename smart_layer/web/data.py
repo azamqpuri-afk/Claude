@@ -79,7 +79,7 @@ def _weaving(con, as_of):
         FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (start, d))}
     scb_avail = bool(scb)
     looms = []
-    for code in sorted(set(erp) | set(scb) | set(names), key=str):
+    for code in sorted(set(erp) | set(scb), key=str):   # only looms active in the window, not every record in the LOOMS master
         e, s = erp.get(code), scb.get(code)
         last = e[3] if e else None
         gap = (as_of - date.fromisoformat(last)).days if last else None
@@ -120,14 +120,46 @@ def _yarn_fabric(con, cfg, as_of):
     from ..textile.stock_position import fabric_positions, yarn_positions
     hand, sizer, _ = yarn_positions(con, cfg, as_of)
     bag_kg = float(Method(cfg["closing"]).cfg["bag_lb"]) * 0.45359237
-    hand_kg = sum(v for v in hand.values() if v > 0)
-    sizer_kg = sum(v for v in sizer.values() if v > 0)
-    counts = len({k[1] for k, v in hand.items() if abs(v) >= 1})
+    # net the positions (over-issued contracts net against the rest) so the godown figure matches reality,
+    # not the sum of only the positive contracts (which over-counts).
+    hand_kg = max(sum(hand.values()), 0)
+    sizer_kg = max(sum(sizer.values()), 0)
+    by_count = {}
+    for (_party, cnt), v in hand.items():
+        by_count[cnt] = by_count.get(cnt, 0) + v
+    counts = sum(1 for v in by_count.values() if v > 1)
     fab = fabric_positions(con, as_of)
-    fab_total = sum(f["total"] for f in fab if f["total"] > 0)
+    fab_total = max(sum(f["total"] for f in fab), 0)
     lots = sum(1 for f in fab if f["total"] > 1)
-    return {"yarn_hand_kg": round(hand_kg), "yarn_hand_bags": round(hand_kg / bag_kg) if bag_kg else 0,
-            "yarn_sizer_kg": round(sizer_kg), "yarn_sizer_bags": round(sizer_kg / bag_kg) if bag_kg else 0,
+
+    # Count-wise loose-yarn stock, exactly as the mill's "Weft Stock Detail" / "Yarn Stock At Sizing" report:
+    # one row per count + brand + packing, net total cones split back into bags and loose cones (sign preserved).
+    def split(qty, cpb):
+        cpb = cpb or 1
+        b = int(qty / cpb)                 # TRUNC toward zero, like the report's CF_QTYFORMULA
+        return round(b), round(qty - b * cpb)
+
+    weft, sizing = [], []
+    wb = wc = sb = sc = 0
+    for section, party, cnt, brand, cpb, qty in con.execute(
+            'SELECT section, party_name, "count" AS c, brand, cone_pbag, qty_cones FROM yarn_stock'):
+        qty = qty or 0
+        b, c = split(qty, cpb)
+        row = {"count": cnt, "brand": brand, "cone_pbag": round(cpb or 0),
+               "bags": b, "cones": c, "qty_cones": round(qty)}
+        if section == "sizing":
+            row["party"] = party or "—"
+            sizing.append(row); sb += b; sc += c
+        else:
+            weft.append(row); wb += b; wc += c
+    weft.sort(key=lambda r: (str(r["count"]), r["cone_pbag"], str(r["brand"])))
+    sizing.sort(key=lambda r: (str(r.get("party") or ""), str(r["count"]), r["cone_pbag"]))
+
+    return {"yarn_hand_kg": round(hand_kg), "yarn_hand_bags": wb,
+            "yarn_sizer_kg": round(sizer_kg), "yarn_sizer_bags": sb,
+            "yarn_hand_cones": wc, "yarn_sizer_cones": sc,
+            "weft_stock": weft, "sizing_stock": sizing,
+            "weft_total": {"bags": wb, "cones": wc}, "sizing_total": {"bags": sb, "cones": sc},
             "yarn_counts": counts, "fabric_m": round(fab_total), "fabric_lots": lots}
 
 
@@ -202,11 +234,17 @@ def build(con, cfg, as_of=None):
                   "alert": bool(r["days"] is not None and r["days"] <= float(bt["warn_days"]) and not r["backup"] and not r["over"])}
                  for r in beams_mod.beams_on_looms(con, cfg, as_of)]
 
+    m_start = date(as_of.year, as_of.month, 1).isoformat()
+    disp_month = _one(con, """SELECT SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters)
+                              FROM fabric_dispatches WHERE dispatch_date BETWEEN ? AND ?""", m_start, d)
+    woven_month = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", m_start, d)
+
     return {
         "product": PRODUCT, "company": cfg["company"]["name"], "currency": cur, "as_of": d,
         "synced_at": _one(con, "SELECT MAX(synced_at) FROM sync_log") or None,
         "kpis": {
             "meters": round(today[1] or 0) if today else 0,
+            "dispatched_month": round(disp_month or 0), "woven_month": round(woven_month or 0),
             "eff": round(today[2], 1) if today and today[2] is not None else None,
             "rej": round(100 * today[3] / today[1], 1) if today and today[1] else None,
             "looms": today[4] if today else 0,

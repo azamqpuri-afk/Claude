@@ -128,6 +128,32 @@ FROM fab_gatepass g LEFT JOIN so_order o ON o.order_ref = g.order_ref
 WHERE g.gp_dt >= :since
 """
 
+# Count-wise loose-yarn stock snapshot. The demo has no brand or loose-cone columns, so brand is a constant and
+# cone_pbag is derived from the count; weft = mill loose yarn (issues to looms / to the sizer / sales are out),
+# sizing = yarn out at a sizer (sent out minus sized beams received back), per party.
+[entities.yarn_stock]
+sql = """
+SELECT 'weft' AS section, NULL AS party_name, y.descr AS "count", 'MILL' AS brand,
+       (CASE WHEN y.cnt > 40 THEN 40 ELSE 24 END) AS cone_pbag,
+       SUM((CASE t.txn_kind WHEN 'WFI' THEN -1 WHEN 'SZO' THEN -1 WHEN 'YSALE' THEN -1 ELSE 1 END)
+           * l.bag_qty * (CASE WHEN y.cnt > 40 THEN 40 ELSE 24 END)) AS qty_cones
+FROM yrn_txn t JOIN yrn_txn_line l ON l.txn_id = t.txn_id
+LEFT JOIN yrn_master y ON y.yarn_cd = l.yarn_cd
+WHERE t.txn_dt <= :today
+GROUP BY y.descr, (CASE WHEN y.cnt > 40 THEN 40 ELSE 24 END)
+HAVING SUM((CASE t.txn_kind WHEN 'WFI' THEN -1 WHEN 'SZO' THEN -1 WHEN 'YSALE' THEN -1 ELSE 1 END) * l.bag_qty) <> 0
+UNION ALL
+SELECT 'sizing' AS section, p.bp_name AS party_name, y.descr AS "count", 'MILL' AS brand,
+       (CASE WHEN y.cnt > 40 THEN 40 ELSE 24 END) AS cone_pbag,
+       SUM((CASE t.txn_kind WHEN 'SZO' THEN 1 WHEN 'BMR' THEN -1 ELSE 0 END)
+           * l.bag_qty * (CASE WHEN y.cnt > 40 THEN 40 ELSE 24 END)) AS qty_cones
+FROM yrn_txn t JOIN yrn_txn_line l ON l.txn_id = t.txn_id
+LEFT JOIN yrn_master y ON y.yarn_cd = l.yarn_cd LEFT JOIN bp_partner p ON p.bp_id = t.bp_id
+WHERE t.txn_dt <= :today AND t.txn_kind IN ('SZO', 'BMR')
+GROUP BY p.bp_name, y.descr, (CASE WHEN y.cnt > 40 THEN 40 ELSE 24 END)
+HAVING SUM((CASE t.txn_kind WHEN 'SZO' THEN 1 WHEN 'BMR' THEN -1 ELSE 0 END) * l.bag_qty) <> 0
+"""
+
 [entities.beams]
 sql = """
 SELECT b.beam_no AS beam_no,

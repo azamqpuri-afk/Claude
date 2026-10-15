@@ -257,6 +257,19 @@ ENTITIES += (
          C("stops", "REAL", "Number of stops")),
         date_column="read_date",
     ),
+    Entity(
+        "yarn_stock",
+        "Count-wise loose-yarn stock on hand, as a snapshot at sync time. 'weft' = the mill's own loose yarn; "
+        "'sizing' = yarn out at a sizing party (sent minus received, plus the sizer's opening). Quantities are net "
+        "and can be negative. Everything is carried as total cones (qty_cones); bags and loose cones are derived "
+        "as TRUNC(qty_cones / cone_pbag) and the sign-preserving remainder.",
+        (C("section", "TEXT", "'weft' (in the mill) or 'sizing' (out at a sizer)", True),
+         C("party_name", "TEXT", "Sizing party (set only for the 'sizing' section)"),
+         C("count", "TEXT", "Yarn count / description (e.g. 52/1 CTN)", True),
+         C("brand", "TEXT", "Yarn brand (e.g. NISHAT)", True),
+         C("cone_pbag", "REAL", "Cones per bag for this packing (part of the grouping key)", True),
+         C("qty_cones", "REAL", "Net stock in total cones (bags x cone_pbag + loose cones)", True)),
+    ),
 )
 
 # Payroll and the gate register. Payroll usually lives in its own ERP schema; the gate register is one list of

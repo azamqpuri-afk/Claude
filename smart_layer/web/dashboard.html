@@ -8,18 +8,21 @@
 <script defer src="static/chart.min.js"></script>
 <style>
   :root{
+    color-scheme:light;
     --bg:#f4f6f5; --panel:#ffffff; --ink:#0f1a17; --muted:#5e6b66; --line:#e4e9e7;
     --teal:#0f6f5c; --teal-soft:#e7f2ef; --teal-deep:#0b4f42; --amber:#c77f17; --amber-soft:#fbf1df;
     --red:#c0392b; --red-soft:#fbe9e7; --green:#1f8a4c; --blue:#2b6cb0; --field:#ffffff;
     --shadow:0 1px 2px rgba(15,26,23,.05),0 8px 24px rgba(15,26,23,.06); --radius:16px;
   }
   @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
+    color-scheme:dark;
     --bg:#0d1513; --panel:#132019; --ink:#eaf1ee; --muted:#9fb0aa; --line:#223029;
     --teal:#2fab90; --teal-soft:#15241e; --teal-deep:#9fe8d6; --amber:#e0a94a; --amber-soft:#2a2213;
     --red:#e8796b; --red-soft:#2c1714; --green:#4cc27e; --blue:#6fa8dc; --field:#0e1815;
     --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
   }}
   :root[data-theme="dark"]{
+    color-scheme:dark;
     --bg:#0d1513; --panel:#132019; --ink:#eaf1ee; --muted:#9fb0aa; --line:#223029;
     --teal:#2fab90; --teal-soft:#15241e; --teal-deep:#9fe8d6; --amber:#e0a94a; --amber-soft:#2a2213;
     --red:#e8796b; --red-soft:#2c1714; --green:#4cc27e; --blue:#6fa8dc; --field:#0e1815;
@@ -128,6 +131,8 @@
   /* controls */
   .fld{display:inline-flex;align-items:center;gap:8px;background:var(--field);border:1px solid var(--line);border-radius:10px;padding:8px 12px;font-size:13.5px}
   .fld input,.fld select{border:0;background:none;outline:none;color:var(--ink);font:inherit;font-size:13.5px;min-width:0}
+  .fld select{background:var(--field);color:var(--ink)}
+  select option{background:var(--panel);color:var(--ink)}       /* so the native drop-down list is readable in dark mode */
   .fld input{width:220px;max-width:46vw}
   .tools{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
   .btn{border:1px solid var(--teal);background:var(--teal);color:#fff;border-radius:10px;padding:8px 13px;font-size:13px;font-weight:700;cursor:pointer}
@@ -239,6 +244,12 @@
       <div class="card"><div class="hd"><h3>Monthly efficiency &amp; A-grade</h3><span class="count">ERP · last 12 months</span></div><div class="cwrap"><canvas id="wv2"></canvas></div></div>
     </div>
     <div class="card"><div class="hd"><h3>Loom by loom</h3><span class="count" id="wv-loomcount"></span></div><div class="tscroll"><table id="wv-looms"></table></div></div>
+
+    <div class="sec" style="margin-top:8px">Beams</div>
+    <div class="grid g5" id="wv-beamstock" style="margin-bottom:16px"></div>
+    <div class="card"><div class="hd"><h3>Beams on looms</h3><span class="count">fabric still to come · days left · backup ready?</span>
+        <div class="tools" style="margin:0"><a class="btn ghost" href="api/report?name=beams&fmt=pdf">⤓ On looms</a> <a class="btn ghost" href="api/report?name=sizers&fmt=pdf">⤓ At sizers</a></div></div>
+      <div class="tscroll"><table id="wv-beams"></table></div></div>
   </section>
 
   <!-- STORE ROOM -->
@@ -460,15 +471,14 @@ function render(){
   // mill
   var yf=D.yarn_fabric||{};
   $("#ov-mill").innerHTML =
-    tile("🧵 Meters woven", num(k.meters)+' <span class="cur">m</span>', "today · <b>"+num((D.production||[]).reduce((a,b)=>a+(b.meters||0),0))+" m</b> 30d","accent") +
+    tile("🧵 Meters woven", num(k.meters)+' <span class="cur">m</span>', "today · <b>"+num(k.woven_month)+" m</b> this month","accent") +
     tile("⚙️ Efficiency", (k.eff!=null?k.eff+"%":"–"), "today") +
     tile("📦 Fabric in stock", num(yf.fabric_m)+' <span class="cur">m</span>', "<b>"+num(yf.fabric_lots)+"</b> lots") +
     tile("🧶 Yarn in godown", num(yf.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(yf.yarn_hand_kg)+" kg</b> · "+num(yf.yarn_counts)+" counts") +
-    tile("🚚 Dispatched", num(dispatchedMonth())+' <span class="cur">m</span>', "this month");
+    tile("🚚 Dispatched", num(k.dispatched_month)+' <span class="cur">m</span>', "this month");
   renderWeaving(); renderFinanceTiles(); renderYFTiles();
   buildCharts(curTab);
 }
-function dispatchedMonth(){ return 0; }  // reserved; dispatch total shown in reports
 
 /* ---------- weaving ---------- */
 function renderWeaving(){
@@ -514,16 +524,53 @@ function renderWeaving(){
   });
   $("#wv-loomcount").textContent = (w.looms||[]).length + " looms";
   $("#wv-looms").outerHTML = table(cols, rows, numc).replace("<table", '<table id="wv-looms"');
+  renderBeams();
+}
+function renderBeams(){
+  var bs=D.beam_stock||{};
+  $("#wv-beamstock").innerHTML =
+    tile("🧵 On looms", num(bs.on_loom), "weaving now","accent") +
+    tile("📥 Sized, waiting", num(bs.sized_waiting), "ready to mount") +
+    tile("⬜ Empty in mill", num(bs.empty_in_mill), "") +
+    tile("🏭 At sizer", num(bs.at_sizer), "out for sizing") +
+    tile("↗ Sent out", num(bs.sent_out), "");
+  var bm=(D.beams||[]);
+  var rows=bm.map(function(b){
+    var warn = b.alert ? ' class="lowrow"' : "";
+    var backup = b.backup ? ("✓ "+esc(b.backup)) : (b.over? "running over" : '<span class="tag out">none</span>');
+    return `<tr${warn}><td><b>${esc(b.loom||"")}</b></td><td>${esc(b.beam||"")}</td><td>${esc(b.quality||b.contract||"")}</td>`+
+           `<td class="num">${b.to_come!=null?num(b.to_come):"–"}</td><td class="num">${b.days!=null?b.days:"–"}</td><td>${backup}</td></tr>`;
+  }).join("");
+  $("#wv-beams").outerHTML = (`<table id="wv-beams"><thead><tr><th>Loom</th><th>Beam</th><th>Quality / contract</th>`+
+    `<th class="num">Fabric to come (m)</th><th class="num">Days left</th><th>Backup</th></tr></thead><tbody>`+
+    (rows||`<tr><td colspan="6" class="muted">No beams on looms.</td></tr>`)+`</tbody></table>`);
 }
 
 /* ---------- yarn & fabric tiles ---------- */
 function renderYFTiles(){
   var y=D.yarn_fabric||{};
   $("#yf-tiles").innerHTML =
-    tile("🧶 Yarn in godown", num(y.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(y.yarn_hand_kg)+" kg</b> · "+num(y.yarn_counts)+" counts","accent") +
-    tile("🧵 Yarn at sizer", num(y.yarn_sizer_bags)+' <span class="cur">bags</span>', "<b>"+num(y.yarn_sizer_kg)+" kg</b> out for sizing") +
+    tile("🧶 Yarn in godown", num(y.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(y.yarn_hand_cones)+" cones</b> loose · weft stock","accent") +
+    tile("🧵 Yarn at sizer", num(y.yarn_sizer_bags)+' <span class="cur">bags</span>', "<b>"+num(y.yarn_sizer_cones)+" cones</b> out for sizing") +
     tile("📦 Fabric in stock", num(y.fabric_m)+' <span class="cur">m</span>', "<b>"+num(y.fabric_lots)+"</b> lots") +
     tile("🚚 Fabric this month", "see detail", "greige / finished below");
+}
+function yarnCell(v){ return '<td class="num"'+(v<0?' style="color:#e06b6b"':'')+'>'+num(v)+'</td>'; }
+function yarnTable(title, rows, tot, withParty){
+  if(!rows||!rows.length) return '<div class="card" style="margin-bottom:16px"><h3 style="margin:0 0 6px">'+esc(title)+'</h3><p class="muted" style="margin:0">No stock on hand.</p></div>';
+  var head='<tr><th style="width:38px">#</th>'+(withParty?'<th>Party</th>':'')+'<th>Yarn</th><th>Brand</th><th class="num">Cone/Bag</th><th class="num">Bags</th><th class="num">Cones</th></tr>';
+  var body=rows.map(function(r,i){ return '<tr><td>'+(i+1)+'</td>'+(withParty?'<td>'+esc(r.party||'')+'</td>':'')+'<td>'+esc(r.count||'')+'</td><td>'+esc(r.brand||'')+'</td><td class="num">'+num(r.cone_pbag)+'</td>'+yarnCell(r.bags)+yarnCell(r.cones)+'</tr>'; }).join("");
+  var span=withParty?4:3;
+  var foot='<tr style="border-top:2px solid var(--line);font-weight:700"><td colspan="'+span+'">Total</td><td></td>'+yarnCell((tot&&tot.bags)||0)+yarnCell((tot&&tot.cones)||0)+'</tr>';
+  return '<div class="card" style="margin-bottom:16px"><h3 style="margin:0 0 8px">'+esc(title)+'</h3>'+
+         '<table class="tbl"><thead>'+head+'</thead><tbody>'+body+foot+'</tbody></table></div>';
+}
+function renderYarn(){
+  var y=D.yarn_fabric||{};
+  $("#yf-out").innerHTML =
+    yarnTable("Weft Stock Detail (mill)", y.weft_stock, y.weft_total, false) +
+    yarnTable("Yarn Stock At Sizing", y.sizing_stock, y.sizing_total, true);
+  $("#yf-msg").textContent = "Count-wise stock as of last sync — bags and loose cones, netted per count, brand and packing. Negative figures (over-issue / in transit) show in red.";
 }
 
 /* ---------- finance ---------- */
@@ -631,7 +678,7 @@ async function loadReport(name, outSel, msgSel){
     if(!r.ok){ $(msgSel).textContent="Could not load (licence or data)."; return; }
     var j=await r.json();
     var nums=j.columns.map((_,i)=>i).filter(i=>j.rows.length && j.rows.every(row=>row[i]===""||/^[-+\d.,%\s]+$/.test(String(row[i]))));
-    $(msgSel).textContent = (j.summary&&j.summary.length? j.summary.join("  ·  ") : j.title);
+    $(msgSel).textContent = j.title + (j.summary&&j.summary.length? "  —  "+j.summary.join("  ·  ") : "");
     $(outSel).innerHTML = `<div class="card"><div class="tscroll">`+table(j.columns, j.rows.map(row=>row.map(c=>statusCell(c))), nums)+`</div></div>`;
     applyFilter();
   }catch(e){ $(msgSel).textContent="Could not reach the server."; }
@@ -655,7 +702,7 @@ $("#yf-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{yfView=b.datas
 function loadYF(){
   var name = yfView==="yarn"?"yarn-stock":"fabric-stock";
   $("#yf-tools").innerHTML = `<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=${name}&fmt=pdf${dayq()}">⤓ PDF</a>`;
-  loadReport(name, "#yf-out", "#yf-msg");
+  if(yfView==="yarn"){ renderYarn(); } else { loadReport(name, "#yf-out", "#yf-msg"); }
 }
 
 /* ---------- payroll ---------- */
@@ -680,9 +727,20 @@ function initGate(){
   }).catch(()=>{});
   loadGate();
 }
+var gateData=null;
 function loadGate(){
-  var q=$("#gate-q").value.trim()||$("#gate-type").value;
-  browseInto("gate_passes", q, "#gate-out", "#gate-msg");
+  if(STATIC_DATA){ $("#gate-msg").textContent="Open from the server to see gate passes."; return; }
+  if(gateData){ renderGate(); return; }
+  fetch("api/report?name=gate-register&fmt=json"+dayq()).then(r=>r.json())
+    .then(j=>{ gateData=j; renderGate(); }).catch(()=>{ $("#gate-msg").textContent="Could not load gate passes."; });
+}
+function renderGate(){
+  if(!gateData) return;
+  var q=$("#gate-q").value.trim().toLowerCase(), t=$("#gate-type").value;
+  var rows=gateData.rows.filter(r=> (!q || r.join(" ").toLowerCase().indexOf(q)>=0) && (!t || String(r[1])===t));
+  var nums=gateData.columns.map((c,i)=>i).filter(i=>/qty|rate|amount|meter/i.test(gateData.columns[i]));
+  $("#gate-out").innerHTML=`<div class="card"><div class="tscroll">`+table(gateData.columns, rows.map(row=>row.map(c=>esc(c))), nums)+`</div></div>`;
+  $("#gate-msg").textContent = rows.length+" of "+gateData.rows.length+" gate-pass lines";
 }
 var gqT; $("#gate-q").addEventListener("input",()=>{clearTimeout(gqT);gqT=setTimeout(loadGate,300);});
 $("#gate-type").onchange=()=>{$("#gate-q").value="";loadGate();};
@@ -749,11 +807,27 @@ function setTab(name){
 }
 document.querySelectorAll("#tabs button").forEach(b=>b.onclick=()=>setTab(b.dataset.tab));
 
-const SECTION_TAB={Weaving:"weaving",Yarn:"yf",Store:"store",Finance:"finance",Payroll:"payroll"};
-function openFinding(f){ if(!f) return; setTab(SECTION_TAB[f.section]||"overview"); }
+const SECTION_TAB={Weaving:"weaving",Looms:"weaving",Beams:"weaving",Yarn:"yf",Store:"store",Finance:"finance",Payroll:"payroll"};
+var findTerm="";
+function openFinding(f){
+  if(!f) return;
+  setTab(SECTION_TAB[f.section]||"overview");
+  var m=((f.title||"")+" "+(f.detail||"")).match(/\b([A-Z][A-Z0-9]*-[A-Z0-9]+|LOOM[-\s]?\w+|\d{5,})\b/);
+  findTerm = m ? m[1] : "";
+  setTimeout(applyFilter,500); setTimeout(applyFilter,1400);   // tables on some tabs load a moment later
+}
 
-/* ---------- search (filters visible tables) ---------- */
-function applyFilter(){ /* reserved: per-tab search inputs handle filtering */ }
+/* ---------- highlight the record a finding points to ---------- */
+function applyFilter(){
+  if(!findTerm) return;
+  var pane=document.querySelector(".pane:not([hidden])"); if(!pane) return;
+  var needle=findTerm.toLowerCase(), first=null;
+  pane.querySelectorAll("tbody tr").forEach(function(tr){
+    var hit=tr.textContent.toLowerCase().indexOf(needle)>=0;
+    tr.classList.toggle("hit",hit); if(hit&&!first) first=tr;
+  });
+  if(first) first.scrollIntoView({behavior:"smooth",block:"center"});
+}
 
 /* ---------- licence ---------- */
 async function licenceInfo(){

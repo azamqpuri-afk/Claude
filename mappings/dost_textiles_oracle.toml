@@ -170,6 +170,35 @@ WHERE v.trans_type IN ('GPOUT', 'GPIN') AND v.trans_date >= :since
 GROUP BY NVL(v.gp_no, v.trans_no), TRUNC(v.trans_date), c.cont_no, v.trans_type
 """
 
+# Count-wise loose-yarn stock, exactly as the mill's "Weft Stock Detail" / "Yarn Stock At Sizing" report.
+# WEFT_YARN_V = the mill's own loose yarn (+IGP_YARN/REWIND/FROM_LOOMS/FROM_SIZING, -OGP_YARN/TO_LOOMS/TO_SIZING);
+# WARP_YARN_V = yarn out at a sizer per party (incl. the sizer's SZ_OPN opening). Both carry signed BAGS/CONES
+# per line with CONE_PBAG; stock is netted as total cones up to and including :today. Brand is YBRANDS.BNAME
+# (a separate table, not on the yarn master); party is WYTM.AC1 -> ACH.AN on the full key (ac, uc, yc).
+[entities.yarn_stock]
+sql = """
+SELECT 'weft' AS section, CAST(NULL AS VARCHAR2(120)) AS party_name,
+       y.yarn_desc AS "count", b.bname AS brand, v.cone_pbag AS cone_pbag,
+       SUM(NVL(v.bags * NVL(v.cone_pbag, 1), 0) + NVL(v.cones, 0)) AS qty_cones
+FROM dostex.weft_yarn_v v
+LEFT JOIN dostex.yarn y ON y.ycode = v.ycode
+LEFT JOIN dostex.ybrands b ON b.bcode = v.bcode
+WHERE v.td <= :today
+GROUP BY v.ycode, y.yarn_desc, v.bcode, b.bname, v.cone_pbag
+HAVING SUM(NVL(v.bags * NVL(v.cone_pbag, 1), 0) + NVL(v.cones, 0)) <> 0
+UNION ALL
+SELECT 'sizing' AS section, a.an AS party_name,
+       y.yarn_desc AS "count", b.bname AS brand, v.cone_pbag AS cone_pbag,
+       SUM(NVL(v.bags * NVL(v.cone_pbag, 1), 0) + NVL(v.cones, 0)) AS qty_cones
+FROM dostex.warp_yarn_v v
+LEFT JOIN dostex.ach a ON a.ac = v.ac AND a.uc = v.uc AND a.yc = v.yc
+LEFT JOIN dostex.yarn y ON y.ycode = v.ycode
+LEFT JOIN dostex.ybrands b ON b.bcode = v.bcode
+WHERE v.td <= :today
+GROUP BY v.ac, a.an, v.ycode, y.yarn_desc, v.bcode, b.bname, v.cone_pbag
+HAVING SUM(NVL(v.bags * NVL(v.cone_pbag, 1), 0) + NVL(v.cones, 0)) <> 0
+"""
+
 # Beams (as 52_yarn_fabric_data.py / 60_beam_register.py read them).
 # On looms: WV_BEAM_ATLOOM_V (ACTUAL_LENGTH = set length, BEAM_PROD = woven from it, BLENGTH = left).
 # Sized and waiting: BEAMS_STOCK_V. Ends of each set from the sized-beam gate pass (WYTD.ENDS).
@@ -256,10 +285,11 @@ SELECT e.emp_code AS emp_code, e.emp_name AS name, e.father_name AS father_name,
        e.salary AS monthly_salary, e.per_day_wage AS per_day_wage,
        CAST(NULL AS VARCHAR2(50)) AS bank, e.bank_acc_no AS bank_account, e.mobile AS mobile,
        e.eobi_no AS eobi_no, e.ss_no AS social_security_no
+-- Department is EMP.SEC_CODE (the ERP's own EMP_V view joins emp.sec_code = dept.dept_code). SUB_DEPT_CODE is
+-- reused across departments, so it is only meaningful together with SEC_CODE - never MAX(dept_code) on it alone.
 FROM payroll.emp e
-LEFT JOIN (SELECT sub_dept_code, MAX(dept_code) dept_code, MAX(sub_dept_name) sub_dept_name
-           FROM payroll.dept_sub GROUP BY sub_dept_code) ds ON ds.sub_dept_code = e.sub_dept_code
-LEFT JOIN payroll.dept dp ON dp.dept_code = ds.dept_code
+LEFT JOIN payroll.dept dp ON dp.dept_code = e.sec_code
+LEFT JOIN payroll.dept_sub ds ON ds.dept_code = e.sec_code AND ds.sub_dept_code = e.sub_dept_code
 LEFT JOIN payroll.desg dg ON dg.desg_code = e.desg_code
 LEFT JOIN payroll.job_types jt ON TO_CHAR(jt.job_type_id) = e.job_type_id
 LEFT JOIN payroll.shifts sh ON sh.shift_id = e.shift_id

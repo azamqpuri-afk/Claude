@@ -32,7 +32,9 @@ def wage_bill(con, cfg, as_of=None):
                          FROM payroll WHERE pay_month = ?""", (month,)).fetchone()
     periods = con.execute("SELECT COUNT(DISTINCT period_start || '|' || period_end) FROM payroll WHERE pay_month = ?",
                           (month,)).fetchone()[0]
-    summary = [f"Wage bill for {month}: {tot[0] or 0} employees, net pay {round(tot[4] or 0):,}."]
+    span = con.execute("SELECT MIN(period_start), MAX(period_end) FROM payroll WHERE pay_month = ?", (month,)).fetchone()
+    dates = f" ({span[0]} to {span[1]})" if span and span[0] else ""
+    summary = [f"Wage bill for {month}{dates}: {tot[0] or 0} employees, net pay {round(tot[4] or 0):,}."]
     if periods > 2:
         summary.append(f"WARNING: {periods} pay periods in {month} - a month usually has 2 (1-15 and 16-end). "
                        "Check for a duplicate payroll run before trusting the totals.")
@@ -56,7 +58,8 @@ def payslips(con, cfg, as_of=None):
     out = [[c, n, s, round(d or 0, 1), round(ea or 0), round(o or 0), round(de or 0), round(nt or 0)]
            for c, n, s, d, ea, o, de, nt in rows]
     net = sum(r[7] for r in out)
-    return Report(f"Payslips {ps} to {pe}", cols, out, [f"{len(out)} employees, total net pay {net:,}."])
+    return Report(f"Payslips {ps} to {pe}", cols, out,
+                  [f"Pay period {ps} to {pe}: {len(out)} employees, total net pay {net:,}."])
 
 
 def loans(con, cfg, as_of=None):

@@ -51,7 +51,7 @@ def test_sync_fills_every_entity(env):
     _, con = env
     for table in ("items", "stock_balances", "store_receipts", "store_issues", "parties", "accounts", "ledger_entries",
                   "account_balances", "looms", "loom_production", "contracts", "yarn_movements", "fabric_dispatches",
-                  "beams", "beam_movements", "loom_monitor"):
+                  "yarn_stock", "beams", "beam_movements", "loom_monitor"):
         assert con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > 0, table
 
 
@@ -574,6 +574,12 @@ def test_dashboard_has_finance_weaving_charts(env):
     effs = [l["scb_eff"] for l in d["weaving"]["looms"] if l["scb_eff"] is not None]
     assert effs and all(0 <= e <= 100 for e in effs)
     assert d["yarn_fabric"]["yarn_hand_bags"] >= 0 and d["yarn_fabric"]["fabric_m"] >= 0
+    # count-wise weft stock: rows carry count/brand/cone_pbag and the totals equal the per-row sums
+    yf = d["yarn_fabric"]
+    assert yf["weft_stock"] and all({"count", "brand", "cone_pbag", "bags", "cones"} <= set(r) for r in yf["weft_stock"])
+    assert yf["weft_total"]["bags"] == sum(r["bags"] for r in yf["weft_stock"])
+    assert yf["weft_total"]["cones"] == sum(r["cones"] for r in yf["weft_stock"])
+    assert yf["yarn_hand_bags"] == yf["weft_total"]["bags"]
     json.dumps(d)
 
 
