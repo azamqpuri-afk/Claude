@@ -380,8 +380,11 @@ def test_pilferage_compares_per_party_and_yarn(env):
 def test_sync_keeps_full_history_for_yarn_and_fabric(env):
     _, con = env
     since = dict(con.execute("SELECT entity, since FROM sync_log"))
+    # yarn, fabric and production are all kept in full so stock (woven - dispatched) and contract life are complete
     assert since["yarn_movements"] == "1900-01-01" and since["fabric_dispatches"] == "1900-01-01"
-    assert since["loom_production"] > "2025-01-01"
+    assert since["loom_production"] == "1900-01-01"
+    # windowed entities (e.g. the gate register) still roll
+    assert since["gate_passes"] > "2025-01-01"
 
 
 # ---- installation -------------------------------------------------------------------------------------
@@ -570,6 +573,9 @@ def test_dashboard_has_finance_weaving_charts(env):
     assert d["fin"]["chips"] and d["fin"]["parties"]
     assert len(d["charts"]["cash_bank"]) == 30 and len(d["charts"]["receivables"]) == 12
     assert d["weaving"]["looms"] and "scoreboard_available" in d["weaving"]
+    # the floor shows only real looms (ever had ERP production) - never scoreboard-only phantom machines
+    prod_looms = {r[0] for r in con.execute("SELECT DISTINCT loom_code FROM loom_production")}
+    assert all(l["code"] in prod_looms for l in d["weaving"]["looms"])
     # scoreboard efficiency is a percentage, not multiplied by 100
     effs = [l["scb_eff"] for l in d["weaving"]["looms"] if l["scb_eff"] is not None]
     assert effs and all(0 <= e <= 100 for e in effs)

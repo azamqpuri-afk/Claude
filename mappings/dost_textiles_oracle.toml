@@ -254,15 +254,20 @@ WHERE m.tt IN ('BEAMS_TO_LOOM', 'BEAMS_FROM_LOOM') AND m.td >= :since
 """
 
 # Loom scoreboard (OLMS, MS Access) as a second source - formulas from 74_scoreboard_data.py:
-#   meters = picks x panels / (picks per inch x 39.37); efficiency = picks / (RPM x shift minutes)
+#   meters = picks x panels / (picks per inch x 39.37); efficiency = picks / (measured RPM x shift minutes).
+# PSHFTDUR is in seconds (/60 -> minutes). A shift can be split into several rows, so everything is SUMmed per
+# loom per day. Use the MEASURED PRPM, never PSTDRPM (wrongly 90 on many looms, which inflates efficiency past
+# 100%). About 19% of rows have PRPM = 0 (a missing reading, not a stopped loom), which would blow the ratio up;
+# those rows are excluded from the efficiency numerator and denominator (their meters still count).
 # Needs [sources.scoreboard] in config.toml: driver = "access", path = 'E:\scoreboard_copy\OLMSDB_copy.mdb', copy_first = true
 [entities.loom_monitor]
 source = "scoreboard"
 sql = """
 SELECT PDATE AS read_date, PMACH AS loom_code,
        SUM(IIF(PPINCH > 0, PPROD * PDELV / (PPINCH * 39.37), 0)) AS meters,
-       IIF(SUM(PRPM * PSHFTDUR) > 0, 100 * SUM(PPROD) / SUM(PRPM * PSHFTDUR / 60), NULL) AS efficiency_pct,
-       AVG(PRPM) AS rpm, SUM(PWRP + PUD) AS stops
+       IIF(SUM(IIF(PRPM > 0, PRPM * PSHFTDUR, 0)) > 0,
+           100 * SUM(IIF(PRPM > 0, PPROD, 0)) / SUM(IIF(PRPM > 0, PRPM * PSHFTDUR / 60, 0)), NULL) AS efficiency_pct,
+       AVG(IIF(PRPM > 0, PRPM, NULL)) AS rpm, SUM(PWRP + PUD) AS stops
 FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
 """
 

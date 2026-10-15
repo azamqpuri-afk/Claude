@@ -78,8 +78,12 @@ def _weaving(con, as_of):
                SUM(meters) AS m, AVG(rpm) AS rpm
         FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (start, d))}
     scb_avail = bool(scb)
+    # The real looms are the ones that have ever had ERP production - NOT the LOOMS master (full of unused rows) and
+    # NOT the scoreboard (which has sensor channels for looms that do not physically exist). Scoreboard data is
+    # overlaid only where it matches a real loom, so phantom scoreboard-only machines never appear on the floor.
+    real = {r[0] for r in con.execute("SELECT DISTINCT loom_code FROM loom_production")}
     looms = []
-    for code in sorted(set(erp) | set(scb), key=str):   # only looms active in the window, not every record in the LOOMS master
+    for code in sorted(real, key=str):
         e, s = erp.get(code), scb.get(code)
         last = e[3] if e else None
         gap = (as_of - date.fromisoformat(last)).days if last else None
@@ -92,17 +96,18 @@ def _weaving(con, as_of):
                       "last_date": last, "status": status})
     # shed-wide 30-day averages
     shed_erp = _one(con, f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d)
-    shed_scb = _one(con, """SELECT SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
-                            FROM loom_monitor WHERE read_date BETWEEN ? AND ?""", start, d) if scb_avail else None
+    real_only = "AND loom_code IN (SELECT DISTINCT loom_code FROM loom_production)"   # drop phantom scoreboard-only looms
+    shed_scb = _one(con, f"""SELECT SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
+                            FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", start, d) if scb_avail else None
     ndays = max((as_of - date.fromisoformat(start)).days + 1, 1)
     shed = {"erp_eff": round(shed_erp, 1) if shed_erp else None,
             "scb_eff": round(shed_scb, 1) if shed_scb else None,
             "erp_meters_day": round(_one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d) / ndays),
-            "scb_meters_day": round(_one(con, "SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ?", start, d) / ndays) if scb_avail else None}
+            "scb_meters_day": round((_one(con, f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", start, d) or 0) / ndays) if scb_avail else None}
     # 30-day efficiency trend, ERP vs scoreboard
     erp_day = dict(con.execute(f"SELECT prod_date, {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ? GROUP BY prod_date", (start, d)))
-    scb_day = dict(con.execute("""SELECT read_date, SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
-                                  FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY read_date""", (start, d))) if scb_avail else {}
+    scb_day = dict(con.execute(f"""SELECT read_date, SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
+                                  FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only} GROUP BY read_date""", (start, d))) if scb_avail else {}
     trend = [{"date": (as_of - timedelta(days=29 - i)).isoformat(),
               "erp": round(erp_day[x], 1) if (x := (as_of - timedelta(days=29 - i)).isoformat()) in erp_day and erp_day[x] is not None else None,
               "scb": round(scb_day[x], 1) if x in scb_day and scb_day[x] is not None else None} for i in range(30)]

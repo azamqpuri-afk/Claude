@@ -68,6 +68,7 @@ def create(con):
 
 
 FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # contract closing needs each contract's whole life
+                "loom_production",                                           # fabric stock = all-time woven - all-time dispatched; a window makes old contracts show negative
                 "ledger_entries")                                            # party ledgers show the opening (old-ERP) balance and full running balance
 
 
