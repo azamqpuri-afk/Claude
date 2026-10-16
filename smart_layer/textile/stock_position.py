@@ -76,13 +76,23 @@ def fabric_stock(con, cfg, as_of=None):
     """Fabric in stock exactly as the ERP's own fabric-stock report shows it (fabric_stock entity = WV_FAB_STOCK_V).
     We read the ERP's figure; we never recompute it. Negative lines are flagged, not hidden or netted away."""
     as_of = as_of or date.today()
-    rows, total = [], 0.0
+    # group by quality + party, combining a party's same-quality contracts; list the contract numbers in brackets.
+    agg = {}
     for cn, pn, q, fr, b, c, cp, m in con.execute(
             "SELECT contract_no, party_name, quality, fresh_m, b_m, c_m, cp_m, meters FROM fabric_stock").fetchall():
-        total += m or 0
-        check = "dispatched more than produced for this grade - check the ERP entry" if (m or 0) < -1 else ""
-        rows.append([cn, pn or "", q or "", round(fr or 0), round((b or 0) + (c or 0) + (cp or 0)), round(m or 0), check])
-    rows.sort(key=lambda r: -(r[5] or 0))
+        a = agg.setdefault((q or "", pn or ""), [0.0, 0.0, 0.0, 0.0, 0.0, set()])
+        a[0] += fr or 0; a[1] += b or 0; a[2] += c or 0; a[3] += cp or 0; a[4] += m or 0
+        if cn:
+            a[5].add(str(cn))
+    rows, total = [], 0.0
+    for (q, pn), (A, B, C, CP, T, conts) in agg.items():
+        if abs(T) < 0.5 and abs(B) < 0.5 and abs(C) < 0.5 and abs(CP) < 0.5:
+            continue
+        total += T
+        cs = ", ".join(sorted(conts, key=lambda x: (len(x), x)))
+        check = "dispatched more than produced - check the ERP entry" if T < -1 else ""
+        rows.append([q, pn, round(A), round(B), round(C), round(CP), round(T), cs, check])
+    rows.sort(key=lambda r: (str(r[0]), -(r[6] or 0)))
     # cross-check: the ERP report's total should reconcile with opening + woven - dispatched + returns. We read the
     # report's figure, and flag the difference vs what we can recompute from production/dispatch, in brackets.
     woven = con.execute("SELECT COALESCE(SUM(meters),0) FROM loom_production").fetchone()[0]
@@ -91,5 +101,5 @@ def fabric_stock(con, cfg, as_of=None):
     diff = total - calc
     note = f"  [cross-check: woven − dispatched = {calc:,.0f} m; difference {diff:+,.0f} m = opening stock + any unbooked]" if abs(diff) > 1 else ""
     return Report(f"Fabric stock - {as_of:%d-%b-%Y}",
-                  ["Contract", "Party", "Quality", "Fresh m", "Other grades m", "Total m", "Check"], rows,
+                  ["Quality", "Party", "A m", "B m", "C m", "CP m", "Total m", "Contracts", "Check"], rows,
                   [f"Fabric in stock (from the ERP's own fabric-stock report): {total:,.0f} m." + note])

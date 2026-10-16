@@ -58,6 +58,11 @@ def _last_purchase(con, code):
                           WHERE item_code = ? AND qty > 0 ORDER BY doc_date DESC, doc_no DESC LIMIT 1""", (code,)).fetchone()
 
 
+def _last_issue(con, code):
+    return con.execute("""SELECT doc_date, issued_to FROM store_issues
+                          WHERE item_code = ? AND qty > 0 ORDER BY doc_date DESC, doc_no DESC LIMIT 1""", (code,)).fetchone()
+
+
 def new_zero(con, cfg, as_of=None, remember=True):
     """Items that were in stock at the previous check and are at zero now.
     The first run only records the current state (nothing is 'new' yet)."""
@@ -93,13 +98,15 @@ def reorder_list(con, cfg, as_of=None):
         rate = lp[3] if lp and lp[3] else None
         value = need * rate if rate else None
         total += value or 0
-        supplier = lp[1] if (lp and lp[1]) else "(no purchase on record)"
-        rows.append([supplier, r["item_name"], r["item_code"], r["unit"],
-                     r["stock"], round(need, 2), rate, value])
-    # items with a known last supplier first; items with no purchase on record at the bottom
-    rows.sort(key=lambda x: (x[0] == "(no purchase on record)", str(x[0]), str(x[1])))
+        li = _last_issue(con, r["item_code"])
+        party = lp[1] if (lp and lp[1]) else "(no purchase on record)"
+        rows.append([r["item_name"], r["item_code"], r["stock"], round(need, 2),
+                     rate, party, round(lp[2]) if (lp and lp[2]) else None, lp[0] if lp else None,
+                     (li[1] if li else None)])
+    # items with a known last purchase first; "(no purchase on record)" at the bottom
+    rows.sort(key=lambda x: (x[5] == "(no purchase on record)", str(x[5]), str(x[0])))
     cur = cfg["company"]["currency"]
     return Report(f"Draft order list - {as_of:%d-%b-%Y}",
-                  ["Last supplier", "Item", "Code", "Unit", "Stock", "Order qty", "Last rate", "Est. value"], rows,
+                  ["Item", "Code", "Stock", "Order qty", "Last rate", "Last party", "Last qty", "Last date", "Last issued to"], rows,
                   [f"{len(rows)} items to order for {cover:g} months of use, about {cur} {total:,.0f} at last rates.",
                    "DRAFT - review before anything is sent to suppliers."])
