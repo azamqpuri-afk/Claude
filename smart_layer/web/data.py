@@ -32,10 +32,12 @@ def _month_ends(as_of, n=12):
 def _chart_series(con, as_of):
     """Extra trend series for the Overview: receivables, cash & bank, fabric stock."""
     mes = _month_ends(as_of, 12)
-    receivables = [{"month": me.strftime("%Y-%m"),
-                    "amount": round(_one(con, """SELECT SUM(l.amount) FROM ledger_entries l JOIN accounts a USING (account_code)
-                                                 WHERE a.account_group = 'customer' AND l.voucher_date <= ?""", me.isoformat()))}
-                   for me in mes]
+    def _grp_to(group, me, sign=1):
+        return round(sign * (_one(con, """SELECT SUM(l.amount) FROM ledger_entries l JOIN accounts a USING (account_code)
+                                          WHERE a.account_group = ? AND l.voucher_date <= ?""", group, me.isoformat()) or 0))
+    # receivables (what parties owe us) and payables (what we owe suppliers) on one chart, like Sales vs Expenses
+    receivables = [{"month": me.strftime("%Y-%m"), "amount": _grp_to("customer", me),
+                    "payable": _grp_to("supplier", me, -1)} for me in mes]
     fabric_stock = []
     for me in mes:
         # fabric in the mill = sum of positive per-contract stock (woven - dispatched), the same definition as the
@@ -88,23 +90,24 @@ def _weaving(con, as_of):
     looms = []
     for code in sorted(real, key=str):
         e, s = erp.get(code), scb.get(code)
-        last = e[3] if e else None
-        gap = (as_of - date.fromisoformat(last)).days if last else None
-        status = "running" if (code in today_m and today_m[code]) else \
-                 ("stopped" if gap is not None and gap >= 7 else "idle" if gap is not None and gap >= 2 else "running")
+        # the floor shows 30-day average efficiency only (no running/idle/stopped - the ERP posts production in
+        # ~3-day batches, so "running today" is not a reliable signal; the 30-day average is).
         looms.append({"loom": names.get(code, code), "code": code,
                       "erp_eff": round(e[1], 1) if e and e[1] is not None else None,
                       "scb_eff": round(s[1], 1) if s and s[1] is not None else None,
-                      "meters_today": round(today_m.get(code, 0) or 0),
-                      "last_date": last, "status": status})
+                      "meters_30d": round(e[2] or 0) if e else 0,
+                      "scb_meters_30d": round(s[2] or 0) if s else 0,
+                      "last_date": e[3] if e else None})
     # shed-wide 30-day averages
     shed_erp = _one(con, f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d)
     real_only = "AND loom_code IN (SELECT DISTINCT loom_code FROM loom_production)"   # drop phantom scoreboard-only looms
     shed_scb = _one(con, f"""SELECT SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
                             FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", start, d) if scb_avail else None
     ndays = max((as_of - date.fromisoformat(start)).days + 1, 1)
+    ag = con.execute("SELECT SUM(COALESCE(first_quality_m,0)), SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", (start, d)).fetchone()
     shed = {"erp_eff": round(shed_erp, 1) if shed_erp else None,
             "scb_eff": round(shed_scb, 1) if shed_scb else None,
+            "a_grade": round(100.0 * ag[0] / ag[1], 1) if ag and ag[1] else None,
             "erp_meters_day": round(_one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d) / ndays),
             "scb_meters_day": round((_one(con, f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", start, d) or 0) / ndays) if scb_avail else None}
     # 30-day efficiency trend, ERP vs scoreboard

@@ -382,7 +382,7 @@ def test_sync_keeps_full_history_for_yarn_and_fabric(env):
     since = dict(con.execute("SELECT entity, since FROM sync_log"))
     # yarn, fabric and production are all kept in full so stock (woven - dispatched) and contract life are complete
     assert since["yarn_movements"] == "1900-01-01" and since["fabric_dispatches"] == "1900-01-01"
-    assert since["loom_production"] == "1900-01-01"
+    assert since["loom_production"] == "1900-01-01" and since["store_receipts"] == "1900-01-01"
     # windowed entities (e.g. the gate register) still roll
     assert since["gate_passes"] > "2025-01-01"
 

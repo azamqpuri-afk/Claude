@@ -222,7 +222,7 @@
     <div class="sec">Trends</div>
     <div class="cols">
       <div class="card"><div class="hd"><h3>Sales vs Expenses</h3><span class="count">monthly · Rs lac</span></div><div class="cwrap"><canvas id="ov1"></canvas></div></div>
-      <div class="card"><div class="hd"><h3>Receivables</h3><span class="count">month-end · Rs lac</span></div><div class="cwrap"><canvas id="ov2"></canvas></div></div>
+      <div class="card"><div class="hd"><h3>Receivables vs Payables</h3><span class="count">month-end · Rs lac</span></div><div class="cwrap"><canvas id="ov2"></canvas></div></div>
     </div>
     <div class="cols">
       <div class="card"><div class="hd"><h3>Cash in hand &amp; Bank</h3><span class="count">30 days · Rs lac</span></div><div class="cwrap"><canvas id="ov3"></canvas></div></div>
@@ -421,8 +421,10 @@ function buildCharts(tab){
       {label:"Expenses",data:f.map(x=>lac(x.expenses)),backgroundColor:c.amber,borderRadius:4,maxBarThickness:20}]},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({beginAtZero:true},grid(c))}}});
     var rv=(D.charts&&D.charts.receivables)||[];
-    mk("ov2",{type:"line",data:{labels:rv.map(x=>mlabel(x.month)),datasets:[{label:"Receivable",data:rv.map(x=>lac(x.amount)),borderColor:c.blue,tension:.35,pointRadius:2,borderWidth:2.6}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:tip(c)},scales:{x:grid(c),y:grid(c)}}});
+    mk("ov2",{type:"line",data:{labels:rv.map(x=>mlabel(x.month)),datasets:[
+        {label:"Receivable",data:rv.map(x=>lac(x.amount)),borderColor:c.blue,tension:.35,pointRadius:2,borderWidth:2.6},
+        {label:"Payable",data:rv.map(x=>lac(x.payable)),borderColor:c.amber,tension:.35,pointRadius:2,borderWidth:2.6}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:grid(c)}}});
     var cb=(D.charts&&D.charts.cash_bank)||[];
     mk("ov3",{type:"line",data:{labels:cb.map(x=>dshort(x.date)),datasets:[
       {label:"Cash",data:cb.map(x=>lac(x.cash)),borderColor:c.teal,tension:.3,pointRadius:0,borderWidth:2.6},
@@ -498,27 +500,27 @@ function renderWeaving(){
   var w=D.weaving||{}, s=w.shed||{};
   var hasScb = !!w.scoreboard_available, useScb = hasScb && wvSrc==="scb";
   $("#wv-asof").textContent = (hasScb?"🕒 scoreboard live · ":"🕒 ") + "ERP as of " + dshort(D.as_of);
-  var running=(w.looms||[]).filter(l=>l.status==="running").length, idle=(w.looms||[]).filter(l=>l.status==="idle").length, stop=(w.looms||[]).filter(l=>l.status==="stopped").length;
+  var n = (w.looms||[]).length;
   $("#wv-tiles").innerHTML =
-    tile("🟢 Running", running+' <span class="cur">looms</span>', "of <b>"+(w.looms||[]).length+"</b>","accent") +
-    tile("🟡 Idle", idle+' <span class="cur">looms</span>', "beam change / no weft","warn") +
-    tile("🔴 Stopped", stop+' <span class="cur">looms</span>', "7+ days silent","bad") +
+    tile("🧵 Looms", n+' <span class="cur">looms</span>', "with production","accent") +
     tile("⚙️ Efficiency", (s.erp_eff!=null?s.erp_eff+"%":"–"), "ERP · 30-day avg") +
-    tile("🧵 Woven today", num((D.kpis||{}).meters)+' <span class="cur">m</span>', "");
+    tile("🏅 A-grade", (s.a_grade!=null?s.a_grade+"%":"–"), "first quality · 30 days") +
+    tile("📈 Woven / day", num(s.erp_meters_day)+' <span class="cur">m</span>', "30-day avg") +
+    tile("🚚 Woven this month", num((D.kpis||{}).woven_month)+' <span class="cur">m</span>', "");
   // source toggle - ERP by default; scoreboard only on request (its data posts live vs ERP's ~3-day cadence, so only 30-day averages compare)
   $("#wv-src-toggle").innerHTML = hasScb
     ? '<button data-s="erp" aria-selected="'+(!useScb)+'">ERP</button><button data-s="scb" aria-selected="'+useScb+'">Scoreboard</button>' : "";
   $("#wv-src-toggle").querySelectorAll("button").forEach(b=>b.onclick=()=>{wvSrc=b.dataset.s; renderWeaving(); rebuildCharts();});
-  $("#wv-legend").innerHTML = '<span><i style="background:var(--green)"></i>80%+</span><span><i style="background:var(--amber)"></i>70–80%</span><span><i style="background:var(--red)"></i>below 70%</span><span><i style="background:var(--line)"></i>no entry 7+ days</span>';
-  $("#wv-floor-note").textContent = useScb? "scoreboard efficiency · small = ERP · 30-day avg" : (hasScb? "ERP efficiency · 30-day avg (scoreboard on toggle)" : "ERP efficiency (scoreboard not connected)");
+  $("#wv-legend").innerHTML = '<span><i style="background:var(--green)"></i>80%+</span><span><i style="background:var(--amber)"></i>70–80%</span><span><i style="background:var(--red)"></i>below 70%</span><span><i style="background:var(--line)"></i>no reading</span>';
+  $("#wv-floor-note").textContent = useScb? "scoreboard efficiency · 30-day avg" : (hasScb? "ERP efficiency · 30-day avg (scoreboard on toggle)" : "ERP efficiency · 30-day avg");
+  // floor: 30-day average efficiency per loom, colour-coded. No running/idle/stopped.
   $("#wv-floor").innerHTML = (w.looms||[]).map(function(l){
     var e = useScb && l.scb_eff!=null ? l.scb_eff : l.erp_eff;
-    var cls, big, small, dt;
-    if(l.status==="stopped"){ cls="old"; big="—"; small="stopped"; dt=l.last_date?("since "+dshort(l.last_date)):""; }
-    else if(l.status==="idle"){ cls="warn"; big="idle"; small=""; dt=""; }
-    else if(e==null){ cls="old"; big="—"; small="no reading"; dt=""; }
-    else { cls = e>=80?"good":e>=70?"warn":"crit"; big=Math.round(e)+"%"; small=useScb&&l.erp_eff!=null?("ERP "+Math.round(l.erp_eff)+"%"):""; dt=num(l.meters_today)+" m today"; }
-    return `<div class="loom ${cls}"><div class="nm">${esc(l.loom)}</div><div class="ef">${big}</div><div class="er">${small}</div><div class="dt">${dt}</div></div>`;
+    var m = useScb ? l.scb_meters_30d : l.meters_30d;
+    var cls, big, small;
+    if(e==null){ cls="old"; big="—"; small="no reading"; }
+    else { cls = e>=80?"good":e>=70?"warn":"crit"; big=Math.round(e)+"%"; small=useScb&&l.erp_eff!=null?("ERP "+Math.round(l.erp_eff)+"%"):(num(m)+" m / 30d"); }
+    return `<div class="loom ${cls}"><div class="nm">${esc(l.loom)}</div><div class="ef">${big}</div><div class="er">${small}</div><div class="dt"></div></div>`;
   }).join("");
   // comparison boxes - only in scoreboard mode (30-day averages, the only fair comparison)
   $("#wv-cmp-card").hidden = !useScb;
@@ -528,17 +530,16 @@ function renderWeaving(){
       `<div class="cmpbox"><div class="t">Efficiency (30-day avg)</div><div class="v" style="color:var(--amber)">${s.scb_eff!=null?s.scb_eff+"%":"–"}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${s.erp_eff!=null?s.erp_eff+"%":"–"}</b></div></div>`+
       `<div class="cmpbox"><div class="t">Meters / day</div><div class="v" style="color:var(--amber)">${num(s.scb_meters_day)}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${num(s.erp_meters_day)}</b></div></div>`;
   }
-  // loom table - ERP by default; scoreboard column only in scoreboard mode
-  var cols = useScb ? ["Loom","Status","Scb %","ERP %","Gap","Meters today"] : ["Loom","Status","ERP %","Meters today"];
-  var numc = useScb ? [2,3,4,5] : [2,3];
+  // loom table - 30-day efficiency; scoreboard columns only in scoreboard mode. No status.
+  var cols = useScb ? ["Loom","Scb % (30d)","ERP % (30d)","Gap","Meters (30d)"] : ["Loom","Efficiency % (30d)","Meters (30d)"];
+  var numc = useScb ? [1,2,3,4] : [1,2];
   var rows = (w.looms||[]).map(function(l){
-    var st = l.status==="running"?'<span class="tag run">Running</span>':l.status==="idle"?'<span class="tag idle">Idle</span>':'<span class="tag stop">Stopped</span>';
     if(useScb){
       var gap = (l.scb_eff!=null&&l.erp_eff!=null)? Math.round(l.scb_eff-l.erp_eff) : null;
-      return [`<b>${esc(l.loom)}</b>`, st, l.scb_eff!=null?Math.round(l.scb_eff):"–", l.erp_eff!=null?Math.round(l.erp_eff):"–",
-              gap==null?"–":(gap>0?"+":"")+gap, num(l.meters_today)];
+      return [`<b>${esc(l.loom)}</b>`, l.scb_eff!=null?Math.round(l.scb_eff):"–", l.erp_eff!=null?Math.round(l.erp_eff):"–",
+              gap==null?"–":(gap>0?"+":"")+gap, num(l.scb_meters_30d)];
     }
-    return [`<b>${esc(l.loom)}</b>`, st, l.erp_eff!=null?Math.round(l.erp_eff):"–", num(l.meters_today)];
+    return [`<b>${esc(l.loom)}</b>`, l.erp_eff!=null?Math.round(l.erp_eff):"–", num(l.meters_30d)];
   });
   $("#wv-loomcount").textContent = (w.looms||[]).length + " looms";
   $("#wv-looms").outerHTML = table(cols, rows, numc).replace("<table", '<table id="wv-looms"');

@@ -93,9 +93,11 @@ def reorder_list(con, cfg, as_of=None):
         rate = lp[3] if lp and lp[3] else None
         value = need * rate if rate else None
         total += value or 0
-        rows.append([lp[1] if lp else "(no purchase on record)", r["item_name"], r["item_code"], r["unit"],
+        supplier = lp[1] if (lp and lp[1]) else "(no purchase on record)"
+        rows.append([supplier, r["item_name"], r["item_code"], r["unit"],
                      r["stock"], round(need, 2), rate, value])
-    rows.sort(key=lambda x: (x[0], x[1]))
+    # items with a known last supplier first; items with no purchase on record at the bottom
+    rows.sort(key=lambda x: (x[0] == "(no purchase on record)", str(x[0]), str(x[1])))
     cur = cfg["company"]["currency"]
     return Report(f"Draft order list - {as_of:%d-%b-%Y}",
                   ["Last supplier", "Item", "Code", "Unit", "Stock", "Order qty", "Last rate", "Est. value"], rows,
