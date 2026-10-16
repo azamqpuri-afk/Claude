@@ -528,7 +528,7 @@ function renderWeaving(){
   if(useScb){
     $("#wv-cmp").innerHTML =
       `<div class="cmpbox"><div class="t">Efficiency (30-day avg)</div><div class="v" style="color:var(--amber)">${s.scb_eff!=null?s.scb_eff+"%":"–"}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${s.erp_eff!=null?s.erp_eff+"%":"–"}</b></div></div>`+
-      `<div class="cmpbox"><div class="t">Meters / day</div><div class="v" style="color:var(--amber)">${num(s.scb_meters_day)}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${num(s.erp_meters_day)}</b></div></div>`;
+      `<div class="cmpbox"><div class="t">Meters (30 days)</div><div class="v" style="color:var(--amber)">${num(s.scb_meters_total)}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${num(s.erp_meters_total)}</b></div></div>`;
   }
   // loom table - 30-day efficiency; scoreboard columns only in scoreboard mode. No status.
   var cols = useScb ? ["Loom","Scb % (30d)","ERP % (30d)","Gap","Meters (30d)"] : ["Loom","Efficiency % (30d)","Meters (30d)"];

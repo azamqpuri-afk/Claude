@@ -105,11 +105,14 @@ def _weaving(con, as_of):
                             FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", start, d) if scb_avail else None
     ndays = max((as_of - date.fromisoformat(start)).days + 1, 1)
     ag = con.execute("SELECT SUM(COALESCE(first_quality_m,0)), SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", (start, d)).fetchone()
+    erp_tot = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d) or 0
+    scb_tot = (_one(con, f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", start, d) or 0) if scb_avail else None
     shed = {"erp_eff": round(shed_erp, 1) if shed_erp else None,
             "scb_eff": round(shed_scb, 1) if shed_scb else None,
             "a_grade": round(100.0 * ag[0] / ag[1], 1) if ag and ag[1] else None,
-            "erp_meters_day": round(_one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d) / ndays),
-            "scb_meters_day": round((_one(con, f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", start, d) or 0) / ndays) if scb_avail else None}
+            "erp_meters_day": round(erp_tot / ndays), "erp_meters_total": round(erp_tot),
+            "scb_meters_day": round(scb_tot / ndays) if scb_avail else None,
+            "scb_meters_total": round(scb_tot) if scb_avail else None}
     # 30-day efficiency trend, ERP vs scoreboard
     erp_day = dict(con.execute(f"SELECT prod_date, {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ? GROUP BY prod_date", (start, d)))
     scb_day = dict(con.execute(f"""SELECT read_date, SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
