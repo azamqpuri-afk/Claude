@@ -8,14 +8,27 @@ from datetime import timedelta
 from . import Report
 
 
+def _qty_text(q, u, bags, cones, thaan):
+    """Show the quantity in the line's own unit, as the ERP stores it: yarn in bags (+loose cones),
+    fabric in meters (+thaan count), store in its own uom. We read these; we do not convert."""
+    if bags:
+        s = f"{round(bags):g} bags"
+        return s + (f" + {round(cones):g} cones" if cones else "")
+    if thaan:
+        return f"{round(q or 0):g} m ({round(thaan):g} thaan)"
+    if q is not None:
+        return (f"{round(q, 2):g} " + (u or "")).strip()
+    return ""
+
+
 def register(con, cfg, as_of=None):
-    """Recent gate passes, newest first (one row per item line)."""
-    cols = ["Date", "Type", "GP no", "In/Out", "Party", "Item / beam", "Qty", "Unit", "Vehicle"]
+    """Recent gate passes, newest first (one row per item line). Quantity is shown in each line's own unit."""
+    cols = ["Date", "Type", "GP no", "In/Out", "Party", "Item / beam", "Quantity", "Vehicle"]
     rows = con.execute("""SELECT gp_date, type, gp_no, direction, party_name,
-                                 COALESCE(item, beam_no), qty, uom, vehicle
+                                 COALESCE(item, beam_no), qty, uom, bags, cones, thaan, vehicle
                           FROM gate_passes ORDER BY gp_date DESC, gp_no DESC LIMIT 500""").fetchall()
-    out = [[d, t, no, dirn, p, it, round(q or 0, 2) if q is not None else None, u, v]
-           for d, t, no, dirn, p, it, q, u, v in rows]
+    out = [[d, t, no, dirn, p, it, _qty_text(q, u, bg, cn, th), v]
+           for d, t, no, dirn, p, it, q, u, bg, cn, th, v in rows]
     slips = con.execute("SELECT COUNT(DISTINCT gatepass_id) FROM gate_passes").fetchone()[0]
     return Report("Gate register (latest 500 lines)", cols, out,
                   [f"{slips:,} gate passes in all; showing the most recent lines."] if slips

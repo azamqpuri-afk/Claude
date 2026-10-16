@@ -371,6 +371,7 @@ SELECT g.dt || '-' || TO_CHAR(g.gp_no) || '-' || TO_CHAR(g.gp_date, 'YYYYMMDD') 
                  WHEN 'OUT' THEN 'Store returnable out' WHEN 'SAL' THEN 'Store sale' ELSE g.gname END AS type,
        g.ac AS party_code, g.party AS party_name, g.vehicle AS vehicle, g.driver AS driver,
        g.ic AS item_code, g.item AS item, g.qty AS qty, g.uom AS uom,
+       g.bags AS bags, g.cones AS cones, g.cone_pbag AS cone_pbag, g.thaan AS thaan,
        CAST(NULL AS VARCHAR2(50)) AS contract_no, CAST(NULL AS VARCHAR2(50)) AS beam_no, g.usern AS entered_by
 FROM dostex.gate_reg_v g WHERE g.gp_date >= :since
 UNION ALL
@@ -380,6 +381,7 @@ SELECT 'EB-' || m.tt || '-' || m.gp_no || '-' || TO_CHAR(m.gp_date, 'YYYYMMDD'),
                  WHEN 'IGP_EMPTY_BEAMS' THEN 'Empty beam back' ELSE m.tt END,
        m.ac1, a.an, m.vehicle, m.driver,
        CAST(NULL AS VARCHAR2(50)), CAST(NULL AS VARCHAR2(200)), CAST(NULL AS NUMBER), 'beam',
+       CAST(NULL AS NUMBER), CAST(NULL AS NUMBER), CAST(NULL AS NUMBER), CAST(NULL AS NUMBER),
        CAST(NULL AS VARCHAR2(50)), d.beam_code, m.usern
 FROM dostex.wv_gp_beamsm m
 JOIN dostex.wv_gp_beamsd d ON d.trans_no = m.trans_no
@@ -390,6 +392,7 @@ SELECT 'SB-' || m.tt || '-' || m.gp_no || '-' || TO_CHAR(m.gp_date, 'YYYYMMDD'),
        m.gp_no, TRUNC(m.gp_date), 'in', 'Sized beam in',
        NVL(m.ac1, m.ac2), a.an, m.vehicle, m.driver,
        CAST(NULL AS VARCHAR2(50)), CAST(NULL AS VARCHAR2(200)), CAST(NULL AS NUMBER), 'beam',
+       CAST(NULL AS NUMBER), CAST(NULL AS NUMBER), CAST(NULL AS NUMBER), CAST(NULL AS NUMBER),
        TO_CHAR(c.cont_no), b.bcode, m.usern
 FROM dostex.wytm m
 JOIN dostex.wytd d ON d.trans_no = m.trans_no
