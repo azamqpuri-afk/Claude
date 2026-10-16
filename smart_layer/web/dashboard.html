@@ -531,13 +531,12 @@ function renderWeaving(){
       `<div class="cmpbox"><div class="t">Meters (30 days)</div><div class="v" style="color:var(--amber)">${num(s.scb_meters_total)}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${num(s.erp_meters_total)}</b></div></div>`;
   }
   // loom table - 30-day efficiency; scoreboard columns only in scoreboard mode. No status.
-  var cols = useScb ? ["Loom","Scb % (30d)","ERP % (30d)","Gap","Meters (30d)"] : ["Loom","Efficiency % (30d)","Meters (30d)"];
+  var cols = useScb ? ["Loom","Scb % (30d)","ERP % (30d)","Scb m (30d)","ERP m (30d)"] : ["Loom","Efficiency % (30d)","Meters (30d)"];
   var numc = useScb ? [1,2,3,4] : [1,2];
   var rows = (w.looms||[]).map(function(l){
     if(useScb){
-      var gap = (l.scb_eff!=null&&l.erp_eff!=null)? Math.round(l.scb_eff-l.erp_eff) : null;
       return [`<b>${esc(l.loom)}</b>`, l.scb_eff!=null?Math.round(l.scb_eff):"–", l.erp_eff!=null?Math.round(l.erp_eff):"–",
-              gap==null?"–":(gap>0?"+":"")+gap, num(l.scb_meters_30d)];
+              num(l.scb_meters_30d), num(l.meters_30d)];
     }
     return [`<b>${esc(l.loom)}</b>`, l.erp_eff!=null?Math.round(l.erp_eff):"–", num(l.meters_30d)];
   });
