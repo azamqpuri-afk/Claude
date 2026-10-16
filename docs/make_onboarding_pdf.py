@@ -34,73 +34,72 @@ def build(path):
     s.append(Paragraph("Project Smart Layer by Azam Puri", H1))
     s.append(Paragraph("What the mill needs to provide to install the app (read-only on your ERP)", SUB))
 
-    s.append(Paragraph("How it runs (read this first)", H2))
-    s.append(Paragraph("Smart Layer has two parts:", BODY))
-    s.append(bullets([
-        "<b>The engine</b> - reads the ERP, runs the dashboard, sends the alerts and does the automatic syncs. "
-        "It is installed on <b>one always-on Windows PC</b> near the ERP.",
-        "<b>The viewer</b> - the dashboard is just a web page. The owner and managers open it in <b>any browser</b> "
-        "(Windows, <b>Mac</b>, iPhone, Android). Nothing to install, and their device does <b>not</b> need to stay on.",
-    ]))
-    s.append(Paragraph("So the app is installed on the always-on PC only. The owner's MacBook, laptop or phone just opens "
-                       "the dashboard in a browser - on the mill network, or from anywhere through a secure Tailscale link. "
-                       "Do not run the engine on a personal laptop that sleeps or switches off, or it will miss syncs and alerts.", NOTE))
+    s.append(Paragraph("In one line", H2))
+    s.append(Paragraph("The app sits on top of your ERP, <b>only reads</b> it (never changes anything), and shows you "
+                       "clean reports and alerts on a web page. It is installed on <b>one computer that stays on</b>; "
+                       "everyone else just opens a web page in their browser.", BODY))
 
-    s.append(Paragraph("1. A computer to run it (the always-on PC)", H2))
+    s.append(Paragraph("Collect these before we start (tick each box)", H2))
     s.append(bullets([
-        "An always-on Windows PC (not the ERP database server itself). Windows 10/11 or Server, 64-bit.",
-        "Modest spec is fine: 8 GB RAM, ~20 GB free disk. It only reads the ERP and serves a dashboard.",
-        "It must be on the same network as the ERP database server.",
-    ]))
-
-    s.append(Paragraph("2. ERP database connection (read-only)", H2))
-    s.append(bullets([
-        "Which database the ERP uses: <b>Oracle</b>, SQL Server, MySQL or PostgreSQL, and its version.",
-        "The database address: <b>host : port / service</b> (for Oracle, e.g. <font face='Courier'>192.168.18.199:1521/orcl</font>), "
-        "or the TNS name.",
-        "A <b>read-only</b> database user and password. Best practice: create a dedicated read-only user "
-        "(the app prints the exact SQL with <font face='Courier'>SmartLayer.exe grants</font>). "
-        "Never give a write/admin login.",
-        "If payroll or other data lives in a <b>separate schema</b>, that read-only user must be allowed to read it too.",
-    ]))
-    s.append(Paragraph("The password is typed once during setup and stored only on this PC (sealed to the machine on "
-                       "Windows). It is never shown again and never leaves the mill.", NOTE))
-
-    s.append(Paragraph("3. Oracle 11g only - the Oracle Client", H2))
-    s.append(bullets([
-        "Older Oracle (11g and earlier) needs the free <b>Oracle Instant Client 19 or newer</b> (Windows x64) on the PC.",
-        "Download Basic Light, unzip to e.g. <font face='Courier'>C:\\oracle\\instantclient_23</font>, and note that folder "
-        "(it has <font face='Courier'>oci.dll</font>). Setup asks for it.",
-        "This does not touch or change your existing Oracle install - it sits alongside, used only by this app.",
+        "&#9744; <b>A computer that stays on</b> - a Windows PC (Windows 10 or 11, 64-bit) that is never switched off, "
+        "sitting near your ERP server, on the <b>same network/LAN</b> as it. 8 GB RAM and 20 GB free space is plenty. "
+        "(Do not use a personal laptop that sleeps.)",
+        "&#9744; <b>The ERP database login (view-only)</b> - three things written on a paper: "
+        "(1) the database <b>address</b> as <font face='Courier'>host:port/service</font> "
+        "(e.g. <font face='Courier'>192.168.18.199:1521/orcl</font>), (2) a <b>username</b>, (3) its <b>password</b>. "
+        "Ask your ERP/IT person for a <b>read-only</b> login - one that can look but not change.",
+        "&#9744; <b>(Oracle 11g only) the Oracle Instant Client</b> - a free small download from Oracle "
+        "(\"Instant Client Basic Light, Windows 64-bit\"). Unzip it to a simple folder like "
+        "<font face='Courier'>C:\\oracle\\instantclient_23</font> and remember that folder. If your ERP is Oracle 12c or "
+        "newer, you may not need this.",
+        "&#9744; <b>(If you have a loom scoreboard) its database file</b> - the loom monitor (e.g. OLMS) keeps an "
+        "Access file like <font face='Courier'>OLMSDB.mdb</font>. Make a copy of it to a fixed folder, e.g. "
+        "<font face='Courier'>E:\\scoreboard_copy\\OLMSDB_copy.mdb</font>, and remember that path. (The app reads the "
+        "copy so it never disturbs the live scoreboard.) Skip this if you have no scoreboard.",
+        "&#9744; <b>The mill's name</b> - exactly how you want it shown on the dashboard.",
+        "&#9744; <b>Internet on this PC for one minute</b> - only to send us the machine ID and get your licence.",
     ]))
 
-    s.append(Paragraph("4. Network access", H2))
+    s.append(Paragraph("How to install - click by click", H2))
     s.append(bullets([
-        "The PC must reach the ERP database server over the LAN (e.g. Oracle port 1521 open to this PC).",
-        "To open the dashboard to phones/PCs on the mill network, the app opens its dashboard port (default 8080) "
-        "in the Windows firewall during install.",
+        "1. Copy <font face='Courier'>SmartLayer-Setup.exe</font> onto the always-on PC and <b>double-click</b> it.",
+        "2. If a blue box says <i>\"Windows protected your PC\"</i>, click <b>More info</b>, then <b>Run anyway</b> "
+        "(this is normal for new apps).",
+        "3. Click <b>Next</b> / <b>Install</b>, wait for the bar to fill, then <b>Finish</b>.",
+        "4. A <b>setup window</b> opens and asks questions one at a time. Type the answers you collected above "
+        "(mill name, then the database address, username, password; the Oracle folder if asked; the scoreboard copy "
+        "path if you have one; and a <b>dashboard password</b> you choose). Press Enter after each.",
+        "5. It then <b>reads your ERP once</b> to recognise it, and does the <b>first sync</b> (pulling the data). "
+        "This can take a few minutes - let it finish and leave the window open until it says it is done.",
     ]))
 
-    s.append(Paragraph("5. Choices to make at setup", H2))
+    s.append(Paragraph("Get your licence - one time", H2))
     s.append(bullets([
-        "A <b>dashboard password</b> of your choice (type it; don't leave it blank).",
-        "Whether to open the dashboard to the whole mill network or keep it on this PC only.",
-        "Optional - the owner's phone: install the free <b>ntfy</b> app for alerts (setup gives a private topic to subscribe to).",
-        "Optional - a <b>Claude API key</b> if you want the 'Ask the ERP' chat.",
+        "Open the black command window (Start menu &rarr; type <font face='Courier'>cmd</font>), then type "
+        "<font face='Courier'>SmartLayer.exe machine-id</font> and press Enter. It prints a long ID.",
+        "Send us that ID. We send back a licence code tied to this one PC.",
+        "Open the dashboard, go to the <b>Licence</b> screen, and paste the code. Done.",
     ]))
 
-    s.append(Paragraph("6. Licence (one step)", H2))
+    s.append(Paragraph("Check the numbers are right", H2))
     s.append(bullets([
-        "After install, run <font face='Courier'>SmartLayer.exe machine-id</font> and send us that ID.",
-        "We send back a licence file/code, tied to that one PC. Paste it on the dashboard's Licence screen.",
+        "Type <font face='Courier'>SmartLayer.exe check --deep</font> and press Enter. "
+        "It checks the pulled data and <b>flags anything that looks wrong</b> (so you know before trusting a report).",
     ]))
 
-    s.append(Paragraph("7. If the ERP is one we have not mapped before", H2))
+    s.append(Paragraph("Open the dashboard", H2))
     s.append(bullets([
-        "The app reads each ERP through a mapping file. We already have mappings for known ERPs.",
-        "For a new ERP, we run a few read-only queries to list the relevant tables and columns, then write its mapping - "
-        "a one-time step, after which everything works the same.",
+        "On this PC: open a browser and go to <font face='Courier'>http://localhost:8080</font>.",
+        "On a phone or another PC on the mill network: <font face='Courier'>http://&lt;this-PC-address&gt;:8080</font> "
+        "(ask IT for this PC's address, e.g. <font face='Courier'>192.168.18.50</font>).",
+        "The data refreshes by itself on a schedule. To pull fresh data by hand any time: "
+        "<font face='Courier'>SmartLayer.exe sync</font>.",
     ]))
+
+    s.append(Paragraph("If your ERP is a new one we have not seen", H2))
+    s.append(Paragraph("The app reads your ERP once at setup and recognises it automatically. If it is a brand-new ERP "
+                       "we have not profiled, it drafts the connection and flags the few things it is unsure about for a "
+                       "one-time confirm - then it works the same as any other mill.", BODY))
 
     s.append(Spacer(1, 8))
     tbl = Table([
