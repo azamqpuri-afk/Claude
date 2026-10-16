@@ -154,6 +154,21 @@ GROUP BY p.bp_name, y.descr, (CASE WHEN y.cnt > 40 THEN 40 ELSE 24 END)
 HAVING SUM((CASE t.txn_kind WHEN 'SZO' THEN 1 WHEN 'BMR' THEN -1 ELSE 0 END) * l.bag_qty) <> 0
 """
 
+# Fabric in stock, per contract: woven - dispatched + returns (the demo has no opening-stock table).
+[entities.fabric_stock]
+sql = """
+SELECT o.order_ref AS contract_no, p.bp_name AS party_name, o.sort_no AS quality,
+       SUM(fr) AS fresh_m, 0 AS b_m, 0 AS c_m, 0 AS cp_m, SUM(fr + se) AS meters
+FROM (
+  SELECT order_ref, grade_a_mtr AS fr, grade_b_mtr + reject_mtr AS se FROM prd_shift_log WHERE log_dt <= :today
+  UNION ALL
+  SELECT order_ref, (CASE io WHEN 'O' THEN -1 ELSE 1 END) * fresh_mtr,
+                    (CASE io WHEN 'O' THEN -1 ELSE 1 END) * sec_mtr FROM fab_gatepass WHERE gp_dt <= :today
+) x JOIN so_order o ON o.order_ref = x.order_ref LEFT JOIN bp_partner p ON p.bp_id = o.bp_id
+GROUP BY o.order_ref, p.bp_name, o.sort_no
+HAVING ABS(SUM(fr + se)) > 0.001
+"""
+
 [entities.beams]
 sql = """
 SELECT b.beam_no AS beam_no,

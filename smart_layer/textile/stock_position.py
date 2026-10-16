@@ -73,23 +73,16 @@ def fabric_positions(con, as_of):
 
 
 def fabric_stock(con, cfg, as_of=None):
+    """Fabric in stock exactly as the ERP's own fabric-stock report shows it (fabric_stock entity = WV_FAB_STOCK_V).
+    We read the ERP's figure; we never recompute it. Negative lines are flagged, not hidden or netted away."""
     as_of = as_of or date.today()
-    party_of = dict(con.execute(
-        "SELECT contract_no, COALESCE(c.party_name, p.party_name) FROM contracts c LEFT JOIN parties p USING (party_code)"))
-    rows = []
-    for f in fabric_positions(con, as_of):
-        if abs(f["total"]) < 1 and abs(f["fresh"]) < 1:
-            continue
-        age = (as_of - date.fromisoformat(f["last_prod"])).days if f["last_prod"] else None
-        check = []
-        if f["fresh"] < -1 or f["rejected"] < -1:
-            check.append("dispatched more than produced in a grade - grade keyed wrong on a gate pass or production")
-        if age is not None and age > 60 and f["fresh"] > 500:
-            check.append("fabric lying more than 60 days after the last production")
-        rows.append([f["contract"], party_of.get(f["contract"], ""), round(f["fresh"]), round(f["rejected"]), round(f["total"]),
-                     f["last_prod"], f["last_disp"], age, "; ".join(check)])
-    rows.sort(key=lambda r: -(r[4] or 0))
+    rows, total = [], 0.0
+    for cn, pn, q, fr, b, c, cp, m in con.execute(
+            "SELECT contract_no, party_name, quality, fresh_m, b_m, c_m, cp_m, meters FROM fabric_stock").fetchall():
+        total += m or 0
+        check = "dispatched more than produced for this grade - check the ERP entry" if (m or 0) < -1 else ""
+        rows.append([cn, pn or "", q or "", round(fr or 0), round((b or 0) + (c or 0) + (cp or 0)), round(m or 0), check])
+    rows.sort(key=lambda r: -(r[5] or 0))
     return Report(f"Fabric stock - {as_of:%d-%b-%Y}",
-                  ["Contract", "Party", "Fresh m", "Other grades m", "Total m", "Last production", "Last dispatch",
-                   "Days since production", "Check"], rows,
-                  [f"Fabric in the mill: {sum(r[4] for r in rows if r[4] > 0):,.0f} m (woven - dispatched + returned)."])
+                  ["Contract", "Party", "Quality", "Fresh m", "Other grades m", "Total m", "Check"], rows,
+                  [f"Fabric in stock (from the ERP's own fabric-stock report): {total:,.0f} m."])

@@ -139,13 +139,12 @@ def _yarn_fabric(con, cfg, as_of):
     for (_party, cnt), v in hand.items():
         by_count[cnt] = by_count.get(cnt, 0) + v
     counts = sum(1 for v in by_count.values() if v > 1)
-    fab = fabric_positions(con, as_of)
-    # fabric physically in the mill = the positive per-contract stock (what the ERP's stock report shows). A
-    # negative contract balance means dispatched-more-than-produced (a grade/keying error), which is a data flag,
-    # not negative fabric - so it is counted separately, never netted against real stock.
-    fab_total = sum(f["total"] for f in fab if f["total"] > 0)
-    fab_anomalies = sum(1 for f in fab if f["total"] < -1)
-    lots = sum(1 for f in fab if f["total"] > 1)
+    # Fabric in stock = read the ERP's own fabric-stock figure as-is (fabric_stock entity reads WV_FAB_STOCK_V):
+    # the net total is exactly what the ERP report shows. We only FLAG negative lines, never recompute the total.
+    frows = con.execute("SELECT meters FROM fabric_stock").fetchall()
+    fab_total = sum((r[0] or 0) for r in frows)
+    fab_anomalies = sum(1 for r in frows if (r[0] or 0) < -1)
+    lots = sum(1 for r in frows if (r[0] or 0) > 1)
 
     # Count-wise loose-yarn stock, exactly as the mill's "Weft Stock Detail" / "Yarn Stock At Sizing" report:
     # one row per count + brand + packing, net total cones split back into bags and loose cones (sign preserved).

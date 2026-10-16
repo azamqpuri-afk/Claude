@@ -51,7 +51,7 @@ def test_sync_fills_every_entity(env):
     _, con = env
     for table in ("items", "stock_balances", "store_receipts", "store_issues", "parties", "accounts", "ledger_entries",
                   "account_balances", "looms", "loom_production", "contracts", "yarn_movements", "fabric_dispatches",
-                  "yarn_stock", "beams", "beam_movements", "loom_monitor"):
+                  "yarn_stock", "fabric_stock", "beams", "beam_movements", "loom_monitor"):
         assert con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > 0, table
 
 

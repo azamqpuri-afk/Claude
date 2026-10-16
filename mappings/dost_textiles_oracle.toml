@@ -170,6 +170,25 @@ WHERE v.trans_type IN ('GPOUT', 'GPIN') AND v.trans_date >= :since
 GROUP BY NVL(v.gp_no, v.trans_no), TRUNC(v.trans_date), c.cont_no, v.trans_type
 """
 
+# Fabric in stock exactly as the ERP's own FABRIC STOCK report shows it: WV_FAB_STOCK_V is a UNION of opening
+# (FAB_OPN) + woven (PRODUCTION) - dispatched (GPOUT) + returns (GPIN). There is NO stored balance - the report
+# is SUM(TOTAL_MTR) up to the date. We READ that same view (never recompute), so the total matches to the metre.
+[entities.fabric_stock]
+sql = """
+SELECT s.cont_no AS contract_no, a.an AS party_name, s.quality AS quality,
+       SUM(NVL(v.a,0) + NVL(v.a2,0)) AS fresh_m,
+       SUM(NVL(v.b,0)) AS b_m, SUM(NVL(v.c,0)) AS c_m, SUM(NVL(v.cp,0)) AS cp_m,
+       SUM(v.total_mtr) AS meters
+FROM dostex.wv_fab_stock_v v
+JOIN dostex.wc_cont_sub_v s ON s.cont_sub_id = v.cont_sub_id
+JOIN dostex.contm c ON c.cont_id = s.cont_id
+LEFT JOIN dostex.ach a ON a.ac = c.party_code AND a.uc = c.uc AND a.yc = c.yc
+WHERE v.td <= :today
+GROUP BY s.cont_no, a.an, s.quality
+HAVING ABS(SUM(v.total_mtr)) > 0.001 OR ABS(SUM(NVL(v.b,0))) > 0.001
+    OR ABS(SUM(NVL(v.c,0))) > 0.001 OR ABS(SUM(NVL(v.cp,0))) > 0.001
+"""
+
 # Count-wise loose-yarn stock, exactly as the mill's "Weft Stock Detail" / "Yarn Stock At Sizing" report.
 # WEFT_YARN_V = the mill's own loose yarn (+IGP_YARN/REWIND/FROM_LOOMS/FROM_SIZING, -OGP_YARN/TO_LOOMS/TO_SIZING);
 # WARP_YARN_V = yarn out at a sizer per party (incl. the sizer's SZ_OPN opening). Both carry signed BAGS/CONES

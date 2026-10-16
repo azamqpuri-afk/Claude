@@ -270,6 +270,20 @@ ENTITIES += (
          C("cone_pbag", "REAL", "Cones per bag for this packing (part of the grouping key)", True),
          C("qty_cones", "REAL", "Net stock in total cones (bags x cone_pbag + loose cones)", True)),
     ),
+    Entity(
+        "fabric_stock",
+        "Fabric in stock exactly as the ERP's own fabric-stock report shows it (opening + woven - dispatched + "
+        "returns), per contract and quality, as a snapshot at sync time. Meters are net and a row can be negative - "
+        "that is a data flag (dispatched more than produced for that grade), not real negative fabric.",
+        (C("contract_no", "TEXT", "Contract", True),
+         C("party_name", "TEXT", "Party"),
+         C("quality", "TEXT", "Fabric quality", True),
+         C("fresh_m", "REAL", "Fresh (first quality) meters in stock", True),
+         C("b_m", "REAL", "B-grade meters"),
+         C("c_m", "REAL", "C-grade meters"),
+         C("cp_m", "REAL", "CP-grade meters"),
+         C("meters", "REAL", "Total meters in stock (net, as the ERP reports it)", True)),
+    ),
 )
 
 # Payroll and the gate register. Payroll usually lives in its own ERP schema; the gate register is one list of
