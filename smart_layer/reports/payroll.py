@@ -43,7 +43,7 @@ def wage_bill(con, cfg, as_of=None):
 
 def payslips(con, cfg, as_of=None):
     """Each employee's pay for the latest period (or the period that contains as_of)."""
-    cols = ["Code", "Name", "Section", "Days", "Earned", "Overtime", "Deductions", "Net pay"]
+    cols = ["Code", "Name", "Section", "Monthly salary", "Days", "Earned", "Overtime", "Deductions", "Net pay"]
     periods = con.execute("SELECT DISTINCT period_start, period_end FROM payroll ORDER BY period_end").fetchall()
     if not periods:
         return Report("Payslips", cols, [], ["No payroll data has been synced yet."])
@@ -52,12 +52,13 @@ def payslips(con, cfg, as_of=None):
         inside = [(a, b) for a, b in periods if a <= as_of.isoformat() <= b]
         if inside:
             ps, pe = inside[-1]
-    rows = con.execute("""SELECT p.emp_code, e.name, p.section, p.worked_days, p.earned, p.overtime, p.deductions, p.net_pay
+    rows = con.execute("""SELECT p.emp_code, e.name, p.section, e.monthly_salary,
+                                 p.worked_days, p.earned, p.overtime, p.deductions, p.net_pay
                           FROM payroll p LEFT JOIN employees e ON e.emp_code = p.emp_code
                           WHERE p.period_start = ? AND p.period_end = ? ORDER BY p.emp_code""", (ps, pe)).fetchall()
-    out = [[c, n, s, round(d or 0, 1), round(ea or 0), round(o or 0), round(de or 0), round(nt or 0)]
-           for c, n, s, d, ea, o, de, nt in rows]
-    net = sum(r[7] for r in out)
+    out = [[c, n, s, round(sal or 0), round(d or 0, 1), round(ea or 0), round(o or 0), round(de or 0), round(nt or 0)]
+           for c, n, s, sal, d, ea, o, de, nt in rows]
+    net = sum(r[8] for r in out)
     return Report(f"Payslips {ps} to {pe}", cols, out,
                   [f"Pay period {ps} to {pe}: {len(out)} employees, total net pay {net:,}."])
 

@@ -38,10 +38,13 @@ def _chart_series(con, as_of):
                    for me in mes]
     fabric_stock = []
     for me in mes:
-        w = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date <= ?", me.isoformat())
-        d = _one(con, """SELECT SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters)
-                         FROM fabric_dispatches WHERE dispatch_date <= ?""", me.isoformat())
-        fabric_stock.append({"month": me.strftime("%Y-%m"), "meters": round((w or 0) - (d or 0))})
+        # fabric in the mill = sum of positive per-contract stock (woven - dispatched), the same definition as the
+        # stock tile, so the trend never shows a phantom negative from one contract's grade/keying error.
+        woven = dict(con.execute("SELECT contract_no, SUM(meters) FROM loom_production WHERE prod_date <= ? GROUP BY contract_no", (me.isoformat(),)))
+        disp = dict(con.execute("""SELECT contract_no, SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters)
+                                   FROM fabric_dispatches WHERE dispatch_date <= ? GROUP BY contract_no""", (me.isoformat(),)))
+        pos = sum(max((woven.get(c, 0) or 0) - (disp.get(c, 0) or 0), 0) for c in set(woven) | set(disp))
+        fabric_stock.append({"month": me.strftime("%Y-%m"), "meters": round(pos)})
     # cash & bank: a running daily balance over the last 30 days
     start = as_of - timedelta(days=29)
 
@@ -134,7 +137,11 @@ def _yarn_fabric(con, cfg, as_of):
         by_count[cnt] = by_count.get(cnt, 0) + v
     counts = sum(1 for v in by_count.values() if v > 1)
     fab = fabric_positions(con, as_of)
-    fab_total = max(sum(f["total"] for f in fab), 0)
+    # fabric physically in the mill = the positive per-contract stock (what the ERP's stock report shows). A
+    # negative contract balance means dispatched-more-than-produced (a grade/keying error), which is a data flag,
+    # not negative fabric - so it is counted separately, never netted against real stock.
+    fab_total = sum(f["total"] for f in fab if f["total"] > 0)
+    fab_anomalies = sum(1 for f in fab if f["total"] < -1)
     lots = sum(1 for f in fab if f["total"] > 1)
 
     # Count-wise loose-yarn stock, exactly as the mill's "Weft Stock Detail" / "Yarn Stock At Sizing" report:
@@ -165,7 +172,8 @@ def _yarn_fabric(con, cfg, as_of):
             "yarn_hand_cones": wc, "yarn_sizer_cones": sc,
             "weft_stock": weft, "sizing_stock": sizing,
             "weft_total": {"bags": wb, "cones": wc}, "sizing_total": {"bags": sb, "cones": sc},
-            "yarn_counts": counts, "fabric_m": round(fab_total), "fabric_lots": lots}
+            "yarn_counts": counts, "fabric_m": round(fab_total), "fabric_lots": lots,
+            "fabric_anomalies": fab_anomalies}
 
 
 def build(con, cfg, as_of=None):

@@ -21,7 +21,7 @@ REPORTS = {
     "closing":      (closing.contract_closing,      "Contract closing (party yarn balance)", False),
     "pilferage":    (pilferage.pilferage,           "Yarn: pilferage check", True),
     "beams":        (beams.beam_report,             "Beams on looms (days left, backups)", False),
-    "sizers":       (beams.sizer_ledger,            "Beams with sizers", False),
+    "sizers":       (beams.sizer_ledger,            "Empty beams with sizers (by quantity)", False),
     "pnl":          (finance.pnl,                   "Finance: profit and loss", False),
     "balances":     (finance.balances,              "Finance: balance summary", False),
     "parties":      (finance.parties,               "Finance: party balances", False),

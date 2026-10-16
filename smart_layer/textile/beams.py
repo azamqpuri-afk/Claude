@@ -16,7 +16,7 @@ Settings in config [beams].
 """
 
 import statistics
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 
 from ..reports import Report
@@ -142,30 +142,40 @@ def beam_report(con, cfg, as_of=None):
 
 
 def sizer_ledger(con, cfg, as_of=None):
-    """Empty beams sent to each sizer vs beams back (sized, or empty), by count; numbers sent and not seen again."""
+    """Empty beams with each sizer counted by QUANTITY (sent vs back), with a separate flag for when the quantity
+    comes back but under different beam numbers (sizers routinely swap physical beams, so an identity mismatch is
+    not a shortage). Net out is the real exposure; 'Number mismatch' is just book-keeping to reconcile."""
     as_of = as_of or date.today()
     t = settings(cfg)
     skip = {s.lower() for s in t["own_beam_sizers"]}
+    # an empty beam sent to a sizer comes back EITHER empty again OR wound as a sized beam - both mean "returned".
     moves = con.execute("""SELECT party_name, beam_no, move_type, move_date FROM beam_movements
                            WHERE move_type IN ('empty_to_sizer', 'empty_from_sizer', 'sized_received') AND move_date <= ?
                            ORDER BY move_date""", (as_of.isoformat(),)).fetchall()
-    sent, back = defaultdict(int), defaultdict(int)
-    out_beams = defaultdict(dict)                    # sizer -> beam -> date sent (still out)
+    sent, back = defaultdict(Counter), defaultdict(Counter)   # sizer -> Counter(beam_no)
+    sent_date = defaultdict(dict)                             # sizer -> beam -> last date sent
     for sizer, beam, mt, d in moves:
         if (sizer or "").lower() in skip:
             continue
         if mt == "empty_to_sizer":
-            sent[sizer] += 1
-            out_beams[sizer][beam] = d
-        else:
-            back[sizer] += 1
-            out_beams[sizer].pop(beam, None)
+            sent[sizer][beam] += 1
+            sent_date[sizer][beam] = d
+        else:                                                # empty_from_sizer or sized_received
+            back[sizer][beam] += 1
     limit = (as_of - timedelta(days=int(t["sizer_return_days"]))).isoformat()
     rows = []
     for sizer in sorted(set(sent) | set(back), key=str):
-        old = sorted((d, b) for b, d in out_beams[sizer].items() if d < limit)
-        rows.append([sizer, sent[sizer], back[sizer], len(out_beams[sizer]), len(old),
-                     ", ".join(f"{b} ({d})" for d, b in old[:12]) + (" ..." if len(old) > 12 else "")])
-    return Report(f"Beams with sizers - {as_of:%d-%b-%Y}",
-                  ["Sizer", "Empty sent", "Back", "Still out", f"Out over {t['sizer_return_days']} days", "Beams to ask about"],
-                  rows, [f"Beams sent to a sizer and not back within {t['sizer_return_days']} days are listed by number."])
+        s, b = sent[sizer], back[sizer]
+        n_sent, n_back = sum(s.values()), sum(b.values())
+        net_out = n_sent - n_back                            # the real quantity still with the sizer
+        still = s - b                                        # sent, no matching number back
+        unexpected = b - s                                   # returned under a number never sent
+        mismatch = min(sum(still.values()), sum(unexpected.values()))   # quantity reconciles but numbers differ
+        old = sorted((sent_date[sizer].get(bm, ""), bm) for bm in still.elements() if sent_date[sizer].get(bm, "") < limit)
+        ask = ", ".join(f"{bm} ({d})" for d, bm in old[:12]) + (" ..." if len(old) > 12 else "")
+        rows.append([sizer, n_sent, n_back, net_out, mismatch or "", ask])
+    return Report(f"Empty beams with sizers - {as_of:%d-%b-%Y}",
+                  ["Sizer", "Empty sent", "Back", "Net out (qty)", "Number mismatch", f"Out over {t['sizer_return_days']} days (by number)"],
+                  rows,
+                  ["Net out is by quantity (sent - back) - the real exposure.",
+                   "'Number mismatch' = beams returned under a different number than sent: the count balances, only the identity differs."])

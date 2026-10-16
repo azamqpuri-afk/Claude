@@ -460,7 +460,9 @@ def test_beam_audit_and_sizer_ledger(env):
     assert "ACTION LOOM-05: beam BM-05A finishes" in titles and "LOOM-12" not in titles
     assert "CONFIRMED Beam BM-20A on LOOM-20" in titles and "WATCH Empty beam BM-X9" in titles
     led = {r[0]: r for r in beams_mod.sizer_ledger(con, cfg, END).rows}
-    assert led["Rehman Sizing"][4] == 1 and led["Ali Sizing"][4] == 0
+    # columns: Sizer, Empty sent, Back, Net out (qty), Number mismatch, Out over N days (by number)
+    assert led["Rehman Sizing"][4] == 1 and led["Ali Sizing"][4] == ""   # Rehman has 1 beam back under a different number
+    assert "BM-X9" in led["Rehman Sizing"][5]                            # the unaccounted beam is named
 
 
 def test_edits_detected_between_audits(env):

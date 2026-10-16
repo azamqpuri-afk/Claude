@@ -209,8 +209,12 @@
 
   <!-- OVERVIEW -->
   <section class="pane" data-pane="overview">
-    <div class="sec">Needs attention</div>
-    <div class="strip" id="ov-attention"></div>
+    <div class="sec" id="ov-att-head" style="display:flex;align-items:center;gap:10px">
+      <span>Needs attention</span><span class="count" id="ov-att-count"></span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn ghost" id="ov-att-btn" style="padding:2px 12px;display:none">Show</button>
+    </div>
+    <div class="strip" id="ov-attention" hidden></div>
     <div class="sec">Money</div>
     <div class="grid g4" id="ov-money" style="margin-bottom:22px"></div>
     <div class="sec">The mill today</div>
@@ -231,7 +235,7 @@
     <div class="asof" id="wv-asof"></div>
     <div class="grid g5" id="wv-tiles" style="margin-bottom:16px"></div>
     <div class="card">
-      <div class="hd"><h3>Looms — efficiency, last 30 days</h3><span class="count" id="wv-floor-note"></span></div>
+      <div class="hd"><h3>Looms — efficiency, last 30 days</h3><span class="count" id="wv-floor-note"></span><span class="spacer" style="flex:1"></span><span id="wv-src-toggle" class="subtabs" style="margin:0"></span></div>
       <div class="pad">
         <div class="legend2" style="margin:0 4px 12px" id="wv-legend"></div>
         <div class="floor" id="wv-floor"></div>
@@ -383,6 +387,8 @@ function table(cols, rows, nums){
 }
 let D = null;
 var activeChip = null, curLedger = null, curLedgerData = null;
+var wvSrc = "erp";   // weaving: show ERP efficiency by default; scoreboard only when toggled (averages only - the two post on different cadences)
+var attOpen = false; // needs-attention starts collapsed so it never covers the page
 
 /* ---------- theme + logo ---------- */
 (function(){
@@ -430,7 +436,7 @@ function buildCharts(tab){
     var w=D.weaving||{};
     var tr=w.trend||[];
     var ds=[{label:"ERP",data:tr.map(x=>x.erp),borderColor:c.blue,tension:.3,pointRadius:0,borderWidth:2.6,spanGaps:true}];
-    if(w.scoreboard_available) ds.unshift({label:"Scoreboard",data:tr.map(x=>x.scb),borderColor:c.amber,tension:.3,pointRadius:0,borderWidth:2.6,spanGaps:true});
+    if(w.scoreboard_available && wvSrc==="scb") ds.unshift({label:"Scoreboard",data:tr.map(x=>x.scb),borderColor:c.amber,tension:.3,pointRadius:0,borderWidth:2.6,spanGaps:true});
     mk("wv1",{type:"line",data:{labels:tr.map(x=>dshort(x.date)),datasets:ds},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({min:50,max:100},grid(c))}}});
     var mo=w.monthly||[];
@@ -455,12 +461,19 @@ function render(){
   $("#asof").textContent = "as of " + dshort(D.as_of) + (D.synced_at? " · synced "+String(D.synced_at).slice(11,16) : "");
   if($("#day") && !$("#day").value && D.as_of) $("#day").value = D.as_of;
   var k=D.kpis||{};
-  // attention
+  // attention - collapsible so it never covers the page
   var fs=D.findings||[];
-  if(!fs.length){ $("#ov-attention").outerHTML='<div class="ok-strip" id="ov-attention">✓ Nothing needs attention today.</div>'; }
-  else {
-    $("#ov-attention").innerHTML = fs.slice(0,8).map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">— ${esc(f.detail)}</span>`:""}<span class="go">Open ›</span></div>`).join("");
-    $("#ov-attention").querySelectorAll(".alert").forEach(a=>a.onclick=()=>openFinding(fs[+a.dataset.fi]));
+  var strip=$("#ov-attention"), btn=$("#ov-att-btn"), cnt=$("#ov-att-count");
+  strip.classList.add("strip"); strip.classList.remove("ok-strip");
+  if(!fs.length){
+    cnt.textContent=""; btn.style.display="none"; strip.hidden=false;
+    strip.className="ok-strip"; strip.innerHTML="✓ Nothing needs attention today.";
+  } else {
+    cnt.textContent = fs.length + (fs.length===1?" item":" items");
+    strip.innerHTML = fs.map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">— ${esc(f.detail)}</span>`:""}<span class="go">Open ›</span></div>`).join("");
+    strip.querySelectorAll(".alert").forEach(a=>a.onclick=()=>openFinding(fs[+a.dataset.fi]));
+    btn.style.display=""; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length);
+    btn.onclick=()=>{ attOpen=!attOpen; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length); };
   }
   // money
   $("#ov-money").innerHTML =
@@ -483,7 +496,8 @@ function render(){
 /* ---------- weaving ---------- */
 function renderWeaving(){
   var w=D.weaving||{}, s=w.shed||{};
-  $("#wv-asof").textContent = (w.scoreboard_available?"🕒 scoreboard live · ":"🕒 ") + "ERP as of " + dshort(D.as_of);
+  var hasScb = !!w.scoreboard_available, useScb = hasScb && wvSrc==="scb";
+  $("#wv-asof").textContent = (hasScb?"🕒 scoreboard live · ":"🕒 ") + "ERP as of " + dshort(D.as_of);
   var running=(w.looms||[]).filter(l=>l.status==="running").length, idle=(w.looms||[]).filter(l=>l.status==="idle").length, stop=(w.looms||[]).filter(l=>l.status==="stopped").length;
   $("#wv-tiles").innerHTML =
     tile("🟢 Running", running+' <span class="cur">looms</span>', "of <b>"+(w.looms||[]).length+"</b>","accent") +
@@ -491,31 +505,35 @@ function renderWeaving(){
     tile("🔴 Stopped", stop+' <span class="cur">looms</span>', "7+ days silent","bad") +
     tile("⚙️ Efficiency", (s.erp_eff!=null?s.erp_eff+"%":"–"), "ERP · 30-day avg") +
     tile("🧵 Woven today", num((D.kpis||{}).meters)+' <span class="cur">m</span>', "");
+  // source toggle - ERP by default; scoreboard only on request (its data posts live vs ERP's ~3-day cadence, so only 30-day averages compare)
+  $("#wv-src-toggle").innerHTML = hasScb
+    ? '<button data-s="erp" aria-selected="'+(!useScb)+'">ERP</button><button data-s="scb" aria-selected="'+useScb+'">Scoreboard</button>' : "";
+  $("#wv-src-toggle").querySelectorAll("button").forEach(b=>b.onclick=()=>{wvSrc=b.dataset.s; renderWeaving(); rebuildCharts();});
   $("#wv-legend").innerHTML = '<span><i style="background:var(--green)"></i>80%+</span><span><i style="background:var(--amber)"></i>70–80%</span><span><i style="background:var(--red)"></i>below 70%</span><span><i style="background:var(--line)"></i>no entry 7+ days</span>';
-  $("#wv-floor-note").textContent = w.scoreboard_available? "big = scoreboard · small = ERP · colour by scoreboard" : "ERP efficiency (scoreboard not connected)";
+  $("#wv-floor-note").textContent = useScb? "scoreboard efficiency · small = ERP · 30-day avg" : (hasScb? "ERP efficiency · 30-day avg (scoreboard on toggle)" : "ERP efficiency (scoreboard not connected)");
   $("#wv-floor").innerHTML = (w.looms||[]).map(function(l){
-    var e = w.scoreboard_available && l.scb_eff!=null ? l.scb_eff : l.erp_eff;
+    var e = useScb && l.scb_eff!=null ? l.scb_eff : l.erp_eff;
     var cls, big, small, dt;
     if(l.status==="stopped"){ cls="old"; big="—"; small="stopped"; dt=l.last_date?("since "+dshort(l.last_date)):""; }
     else if(l.status==="idle"){ cls="warn"; big="idle"; small=""; dt=""; }
     else if(e==null){ cls="old"; big="—"; small="no reading"; dt=""; }
-    else { cls = e>=80?"good":e>=70?"warn":"crit"; big=Math.round(e)+"%"; small=(w.scoreboard_available&&l.erp_eff!=null)?("ERP "+Math.round(l.erp_eff)+"%"):""; dt=num(l.meters_today)+" m today"; }
+    else { cls = e>=80?"good":e>=70?"warn":"crit"; big=Math.round(e)+"%"; small=useScb&&l.erp_eff!=null?("ERP "+Math.round(l.erp_eff)+"%"):""; dt=num(l.meters_today)+" m today"; }
     return `<div class="loom ${cls}"><div class="nm">${esc(l.loom)}</div><div class="ef">${big}</div><div class="er">${small}</div><div class="dt">${dt}</div></div>`;
   }).join("");
-  // comparison boxes (scoreboard only)
-  $("#wv-cmp-card").hidden = !w.scoreboard_available;
-  $("#wv-trend-card").querySelector(".count").textContent = w.scoreboard_available? "scoreboard vs ERP · last 30 days" : "ERP · last 30 days";
-  if(w.scoreboard_available){
+  // comparison boxes - only in scoreboard mode (30-day averages, the only fair comparison)
+  $("#wv-cmp-card").hidden = !useScb;
+  $("#wv-trend-card").querySelector(".count").textContent = useScb? "scoreboard vs ERP · 30-day avg" : "ERP · last 30 days";
+  if(useScb){
     $("#wv-cmp").innerHTML =
-      `<div class="cmpbox"><div class="t">Efficiency</div><div class="v" style="color:var(--amber)">${s.scb_eff!=null?s.scb_eff+"%":"–"}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${s.erp_eff!=null?s.erp_eff+"%":"–"}</b></div></div>`+
+      `<div class="cmpbox"><div class="t">Efficiency (30-day avg)</div><div class="v" style="color:var(--amber)">${s.scb_eff!=null?s.scb_eff+"%":"–"}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${s.erp_eff!=null?s.erp_eff+"%":"–"}</b></div></div>`+
       `<div class="cmpbox"><div class="t">Meters / day</div><div class="v" style="color:var(--amber)">${num(s.scb_meters_day)}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${num(s.erp_meters_day)}</b></div></div>`;
   }
-  // loom table
-  var cols = w.scoreboard_available ? ["Loom","Status","Scb %","ERP %","Gap","Meters today"] : ["Loom","Status","ERP %","Meters today"];
-  var numc = w.scoreboard_available ? [2,3,4,5] : [2,3];
+  // loom table - ERP by default; scoreboard column only in scoreboard mode
+  var cols = useScb ? ["Loom","Status","Scb %","ERP %","Gap","Meters today"] : ["Loom","Status","ERP %","Meters today"];
+  var numc = useScb ? [2,3,4,5] : [2,3];
   var rows = (w.looms||[]).map(function(l){
     var st = l.status==="running"?'<span class="tag run">Running</span>':l.status==="idle"?'<span class="tag idle">Idle</span>':'<span class="tag stop">Stopped</span>';
-    if(w.scoreboard_available){
+    if(useScb){
       var gap = (l.scb_eff!=null&&l.erp_eff!=null)? Math.round(l.scb_eff-l.erp_eff) : null;
       return [`<b>${esc(l.loom)}</b>`, st, l.scb_eff!=null?Math.round(l.scb_eff):"–", l.erp_eff!=null?Math.round(l.erp_eff):"–",
               gap==null?"–":(gap>0?"+":"")+gap, num(l.meters_today)];
@@ -690,11 +708,19 @@ var storeView="stock";
 $("#store-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{storeView=b.dataset.v;$("#store-sub").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x===b));loadStore();});
 function loadStore(){
   $("#store-tools").innerHTML = storeView==="reorder"
-    ? `<span class="countline">Items that ran out or fell below one month's use (90-day window). Order qty brings stock to one month.</span><span class="spacer" style="flex:1"></span><button class="btn" onclick="window.print()">🖨 Print</button><a class="btn ghost" href="api/report?name=reorder&fmt=pdf${dayq()}">⤓ PDF</a>`
-    : `<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=stock&fmt=pdf${dayq()}">⤓ PDF</a>`;
+    ? SEARCH_BOX('#store-out','Find item…')+`<span class="countline" style="margin-left:10px">Items that ran out or fell below one month's use (90-day window). Order qty brings stock to one month.</span><span class="spacer" style="flex:1"></span><button class="btn" onclick="window.print()">🖨 Print</button><a class="btn ghost" href="api/report?name=reorder&fmt=pdf${dayq()}">⤓ PDF</a>`
+    : SEARCH_BOX('#store-out','Find item…')+`<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=stock&fmt=pdf${dayq()}">⤓ PDF</a>`;
   loadReport(storeView, "#store-out", "#store-msg");
 }
 function dayq(){ var d=$("#day").value; return d?("&date="+d):""; }
+// live client-side filter over a rendered report table (Store, Payroll)
+function filterRows(outSel, term){
+  term=(term||"").toLowerCase().trim();
+  document.querySelectorAll(outSel+" tbody tr").forEach(function(tr){
+    tr.style.display = (!term || tr.textContent.toLowerCase().indexOf(term)>=0) ? "" : "none";
+  });
+}
+var SEARCH_BOX = (sel, ph)=>`<input type="search" placeholder="🔍 ${ph}" oninput="filterRows('${sel}', this.value)" style="padding:6px 11px;border:1px solid var(--line);border-radius:8px;background:var(--field);color:var(--ink);min-width:200px">`;
 
 /* ---------- yarn & fabric ---------- */
 var yfView="yarn";
@@ -710,7 +736,7 @@ var payView="wage-bill";
 const PAY=[["wage-bill","Wage bill"],["payslips","Payslips"],["staff","Employees"],["emp-loans","Loans & advances"]];
 function initPay(){ $("#pay-sub").innerHTML = PAY.map(([v,t])=>`<button data-v="${v}" aria-selected="${v===payView}">${esc(t)}</button>`).join("");
   $("#pay-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{payView=b.dataset.v;$("#pay-sub").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x===b));loadPay();}); }
-function loadPay(){ $("#pay-tools").innerHTML=`<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=${payView}&fmt=pdf${dayq()}">⤓ PDF</a>`; loadReport(payView,"#pay-out","#pay-msg"); }
+function loadPay(){ $("#pay-tools").innerHTML=SEARCH_BOX('#pay-out','Find employee…')+`<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=${payView}&fmt=pdf${dayq()}">⤓ PDF</a>`; loadReport(payView,"#pay-out","#pay-msg"); }
 
 /* ---------- gate passes ---------- */
 var gateReady=false;
