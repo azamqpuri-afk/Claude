@@ -522,10 +522,10 @@ function renderWeaving(){
     else { cls = e>=80?"good":e>=70?"warn":"crit"; big=Math.round(e)+"%"; small=useScb&&l.erp_eff!=null?("ERP "+Math.round(l.erp_eff)+"%"):(num(m)+" m / 30d"); }
     return `<div class="loom ${cls}"><div class="nm">${esc(l.loom)}</div><div class="ef">${big}</div><div class="er">${small}</div><div class="dt"></div></div>`;
   }).join("");
-  // comparison boxes - only in scoreboard mode (30-day averages, the only fair comparison)
-  $("#wv-cmp-card").hidden = !useScb;
+  // ERP vs scoreboard comparison (efficiency + total 30-day meters) - always shown when the scoreboard is connected
+  $("#wv-cmp-card").hidden = !hasScb;
   $("#wv-trend-card").querySelector(".count").textContent = useScb? "scoreboard vs ERP · 30-day avg" : "ERP · last 30 days";
-  if(useScb){
+  if(hasScb){
     $("#wv-cmp").innerHTML =
       `<div class="cmpbox"><div class="t">Efficiency (30-day avg)</div><div class="v" style="color:var(--amber)">${s.scb_eff!=null?s.scb_eff+"%":"–"}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${s.erp_eff!=null?s.erp_eff+"%":"–"}</b></div></div>`+
       `<div class="cmpbox"><div class="t">Meters (30 days)</div><div class="v" style="color:var(--amber)">${num(s.scb_meters_total)}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${num(s.erp_meters_total)}</b></div></div>`;
