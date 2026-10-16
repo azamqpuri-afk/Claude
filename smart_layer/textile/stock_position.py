@@ -86,8 +86,8 @@ def fabric_stock(con, cfg, as_of=None):
             a[5].add(str(cn))
     rows, total = [], 0.0
     for (q, pn), (A, B, C, CP, T, conts) in agg.items():
-        if abs(T) < 0.5 and abs(B) < 0.5 and abs(C) < 0.5 and abs(CP) < 0.5:
-            continue
+        if abs(T) < 0.5:                                  # like the ERP's HAVING: drop rows that net to ~0
+            continue                                      # (e.g. contracts 9/10/11 booked across numbers cancel per quality)
         total += T
         cs = ", ".join(sorted(conts, key=lambda x: (len(x), x)))
         check = "dispatched more than produced - check the ERP entry" if T < -1 else ""
