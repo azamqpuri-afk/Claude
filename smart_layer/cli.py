@@ -53,6 +53,10 @@ def cmd_check(cfg, args):
         except Exception as ex:                      # report every entity, not just the first failure
             ok = False
             print(f"  {ent.name:<17} FAILED: {ex}")
+    if getattr(args, "deep", False):                 # also validate the VALUES in the local store, not just the SQL
+        from . import selfcheck
+        con = _store(cfg)
+        print("\n" + selfcheck.summary(selfcheck.run(con, cfg)))
     return 0 if ok else 1
 
 
@@ -78,6 +82,13 @@ def cmd_autoprofile(cfg, args):
             best = {c: cands[0] for c, cands in sug.items() if cands and cands[0][2] >= 0.5}
             print(f"  {ent.name:<17} {len(best)}/{len(ent.columns)} matched"
                   + (f"  · confirm: {', '.join(weak)}" if weak else "  · all matched"))
+    if getattr(args, "write_draft", None):
+        from pathlib import Path
+        text, drafted, skipped = autoprofile.draft_mapping(p["schema"])
+        Path(args.write_draft).write_text(text, encoding="utf-8")
+        print(f"\nDraft mapping written to {args.write_draft}")
+        print(f"  {len(drafted)} entities drafted, {len(skipped)} with no candidate table.")
+        print("  Edit the TODOs, add joins/filters and confirm business rules, then point config.toml at it.")
     return 0
 
 
@@ -272,7 +283,8 @@ def main(argv=None):
     p = argparse.ArgumentParser(prog="smart_layer", description=PRODUCT)
     p.add_argument("-c", "--config", default="config.toml")
     sub = p.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("check")
+    ck = sub.add_parser("check")
+    ck.add_argument("--deep", action="store_true", help="also check the synced values look sane (balances, ranges, blanks)")
     s = sub.add_parser("sync")
     s.add_argument("--entities", nargs="*")
     s.add_argument("--live", action="store_true", help="quick refresh: all modules, last few days only (for the 5-minute task)")
@@ -298,7 +310,8 @@ def main(argv=None):
     d.add_argument("--date")
     d.add_argument("--out")
     sub.add_parser("schema")
-    sub.add_parser("autoprofile")
+    apr = sub.add_parser("autoprofile")
+    apr.add_argument("--write-draft", metavar="PATH", help="write a draft mapping .toml (for an ERP with no known profile)")
     sub.add_parser("setup")
     sub.add_parser("machine-id")
     lc = sub.add_parser("licence")
@@ -322,6 +335,17 @@ def main(argv=None):
         from .setup_wizard import run
         cfg_path = run(Path(args.config).resolve().parent)
         cfg = config.load(cfg_path)
+        print("\nAnalysing the ERP (reading its tables once) ...")
+        try:
+            from . import autoprofile, erp as _erp
+            con, _ = _erp.connect(cfg["erp"], cfg.base_dir)
+            pr = autoprofile.profile(con, cfg["erp"].get("driver", "sqlite"))
+            if pr["recognised"]:
+                print(f"  Recognised: {pr['label']} ({pr['confidence']:.0%}). Using mappings/{pr['mapping']} - no tuning needed.")
+            else:
+                print(f"  New ERP ({pr['tables']} tables). To start a mapping:  SmartLayer.exe autoprofile --write-draft mymill.toml")
+        except Exception as ex:
+            print(f"  (Auto-profile skipped: {ex})")
         print("\nTesting the connection to the ERP ...")
         rc = cmd_check(cfg, args)
         if rc == 0:                                      # ERP reachable: do the first sync now so the dashboard has data

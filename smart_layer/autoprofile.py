@@ -233,6 +233,58 @@ def suggest_columns(db, entity, top=3):
 
 
 # --------------------------------------------------------------------------------------------------------------
+# Draft a mapping for an UNKNOWN ERP: pick the best source table per entity and alias its best-matching columns.
+# This is a scaffold to edit, never a finished mapping - joins, filters and business rules still need a human.
+# --------------------------------------------------------------------------------------------------------------
+
+def best_table_for(db, entity, minscore=0.5):
+    """The source table whose columns best cover this entity's fields (sum of confident per-field scores)."""
+    best, best_score = None, 0.0
+    for t in db.tables.values():
+        total = sum(s for s in (max((score_column(col, c) for c in t.columns), default=0.0) for col in entity.columns) if s >= minscore)
+        if total > best_score:
+            best, best_score = t, total
+    return best
+
+
+def draft_entity_sql(db, entity, minscore=0.5):
+    t = best_table_for(db, entity, minscore)
+    if t is None:
+        return None
+    alias = "".join(ch for ch in t.name.lower() if ch.isalnum())[:1] or "t"
+    n = len(entity.columns)
+    lines = []
+    for i, col in enumerate(entity.columns):
+        comma = "," if i < n - 1 else ""                  # comma before any comment, so the SQL stays valid
+        ranked = sorted(((score_column(col, c), c.name) for c in t.columns), reverse=True)
+        if ranked and ranked[0][0] >= minscore:
+            lines.append(f"       {alias}.{ranked[0][1]} AS {col.name}{comma}")
+        else:
+            lines.append(f"       NULL AS {col.name}{comma}  -- TODO: no confident source column")
+    sql = "SELECT\n" + "\n".join(lines) + f"\nFROM {t.name} {alias}"
+    return t.name, sql
+
+
+def draft_mapping(db, name="auto_draft"):
+    """A full mapping .toml drafted from the schema. Every unmatched field is a TODO; review before trusting."""
+    blocks = [f'[mapping]\nname = "{name}"\n'
+              'notes = "Auto-drafted by Smart Layer from the ERP schema. Review every TODO, add joins/filters, '
+              'and confirm business rules (account groups, formulas) before trusting reports."']
+    drafted, skipped = [], []
+    for ent in schema.ENTITIES:
+        res = draft_entity_sql(db, ent)
+        if res is None:
+            skipped.append(ent.name)
+            continue
+        _tbl, sql = res
+        blocks.append(f'# {ent.description.splitlines()[0]}\n[entities.{ent.name}]\nsql = """\n{sql}\n"""')
+        drafted.append(ent.name)
+    if skipped:
+        blocks.append("# No candidate table found for: " + ", ".join(skipped))
+    return "\n\n".join(blocks) + "\n", drafted, skipped
+
+
+# --------------------------------------------------------------------------------------------------------------
 # One call that ties it together for the installer / a diagnostic command.
 # --------------------------------------------------------------------------------------------------------------
 

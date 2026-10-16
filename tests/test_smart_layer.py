@@ -463,6 +463,41 @@ def test_autoprofile_reads_and_fingerprints(env):
     assert sug["cnic"] and sug["cnic"][0][1] == "cnic"
 
 
+def test_autoprofile_drafts_valid_mapping(env):
+    import tomllib
+    cfg, _ = env
+    con, _ = erp.connect(cfg["erp"], cfg.base_dir)
+    db = autoprofile.read_schema(con, cfg["erp"]["driver"])
+    text, drafted, skipped = autoprofile.draft_mapping(db)
+    d = tomllib.loads(text)                                   # the draft is valid TOML
+    assert d["mapping"]["name"] and len(d["entities"]) >= 15
+    assert "cnic AS cnic" in d["entities"]["employees"]["sql"]   # an obvious field is mapped, not left TODO
+
+
+def test_selfcheck_passes_on_clean_demo(env):
+    from smart_layer import selfcheck
+    cfg, con = env
+    findings = selfcheck.run(con, cfg, END)
+    assert findings and "BAD" not in {f[0] for f in findings}   # a clean sync has no hard failures
+
+
+def test_selfcheck_flags_bad_values():
+    # a sync that produced an impossible efficiency and an unbalanced ledger must be caught
+    from smart_layer import selfcheck
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE sync_log(entity TEXT, synced_at TEXT, since TEXT, rows INT);
+        CREATE TABLE loom_monitor(read_date TEXT, loom_code TEXT, meters REAL, efficiency_pct REAL, rpm REAL, stops REAL);
+        CREATE TABLE ledger_entries(voucher_date TEXT, account_code TEXT, amount REAL);
+        INSERT INTO sync_log VALUES('loom_monitor','x',NULL,2),('ledger_entries','x',NULL,2);
+        INSERT INTO loom_monitor VALUES('2026-10-01','L1',100,999,180,2),('2026-10-01','L2',100,85,180,2);
+        INSERT INTO ledger_entries VALUES('2026-10-01','A',1000),('2026-10-01','B',-300);
+    """)
+    f = selfcheck.run(con, None, END)
+    assert any(a == "loom_monitor" and "efficiency" in m for s, a, m in f)
+    assert any(a == "ledger_entries" and "balance" in m for s, a, m in f)
+
+
 def test_autoprofile_rejects_foreign_schema():
     # a database that is not a known ERP must not be mis-recognised
     con = sqlite3.connect(":memory:")
