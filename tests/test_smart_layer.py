@@ -98,7 +98,7 @@ def test_reports(env):
     assert len(p.rows) == 23 and "LOOM-07" in p.summary[1]
     s = stock.stock_status(con, cfg, END)
     assert [r for r in s.rows if r[2] == "EL-002"][0][0] == "OUT OF STOCK"
-    assert any(r[2] == "EL-002" for r in stock.reorder_list(con, cfg, END).rows)
+    assert any(r[1] == "EL-002" for r in stock.reorder_list(con, cfg, END).rows)   # Code is now column 1
 
 
 def test_new_zero_reports_only_newly_out_of_stock(env):
