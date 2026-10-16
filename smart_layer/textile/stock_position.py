@@ -83,6 +83,13 @@ def fabric_stock(con, cfg, as_of=None):
         check = "dispatched more than produced for this grade - check the ERP entry" if (m or 0) < -1 else ""
         rows.append([cn, pn or "", q or "", round(fr or 0), round((b or 0) + (c or 0) + (cp or 0)), round(m or 0), check])
     rows.sort(key=lambda r: -(r[5] or 0))
+    # cross-check: the ERP report's total should reconcile with opening + woven - dispatched + returns. We read the
+    # report's figure, and flag the difference vs what we can recompute from production/dispatch, in brackets.
+    woven = con.execute("SELECT COALESCE(SUM(meters),0) FROM loom_production").fetchone()[0]
+    disp = con.execute("SELECT COALESCE(SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters),0) FROM fabric_dispatches").fetchone()[0]
+    calc = woven - disp
+    diff = total - calc
+    note = f"  [cross-check: woven − dispatched = {calc:,.0f} m; difference {diff:+,.0f} m = opening stock + any unbooked]" if abs(diff) > 1 else ""
     return Report(f"Fabric stock - {as_of:%d-%b-%Y}",
                   ["Contract", "Party", "Quality", "Fresh m", "Other grades m", "Total m", "Check"], rows,
-                  [f"Fabric in stock (from the ERP's own fabric-stock report): {total:,.0f} m."])
+                  [f"Fabric in stock (from the ERP's own fabric-stock report): {total:,.0f} m." + note])
