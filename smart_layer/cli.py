@@ -56,6 +56,31 @@ def cmd_check(cfg, args):
     return 0 if ok else 1
 
 
+def cmd_autoprofile(cfg, args):
+    """Read the ERP's own catalogue and identify it - the one-time install analysis (pure Python, offline)."""
+    from . import autoprofile, erp as _erp
+    con, _ = _erp.connect(cfg["erp"], cfg.base_dir)
+    p = autoprofile.profile(con, cfg["erp"].get("driver", "sqlite"))
+    print(f"ERP driver     : {p['driver']}")
+    print(f"Tables / views : {p['tables']}")
+    print(f"Columns        : {p['columns']}")
+    if p["recognised"]:
+        print(f"\nRecognised ERP : {p['label']}")
+        print(f"  confidence   : {p['confidence']:.0%}  (signature tables found: {', '.join(p['signature_found'])})")
+        print(f"  use mapping  : mappings/{p['mapping']}")
+        print("\nThis ERP is known - its mapping applies, so reports work without hand-tuning.")
+    else:
+        print("\nUnknown ERP - no profile matches. Drafting best-guess column matches per entity;")
+        print("fields with no confident match need a one-time confirm:\n")
+        for ent in schema.ENTITIES:
+            sug = autoprofile.suggest_columns(p["schema"], ent, top=1)
+            weak = [c for c, cands in sug.items() if not cands or cands[0][2] < 0.5]
+            best = {c: cands[0] for c, cands in sug.items() if cands and cands[0][2] >= 0.5}
+            print(f"  {ent.name:<17} {len(best)}/{len(ent.columns)} matched"
+                  + (f"  · confirm: {', '.join(weak)}" if weak else "  · all matched"))
+    return 0
+
+
 def cmd_sync(cfg, args):
     e = _open_erp(cfg)
     if args.live:                                    # the 5-minute refresh: every module, only the last few days, no
@@ -273,6 +298,7 @@ def main(argv=None):
     d.add_argument("--date")
     d.add_argument("--out")
     sub.add_parser("schema")
+    sub.add_parser("autoprofile")
     sub.add_parser("setup")
     sub.add_parser("machine-id")
     lc = sub.add_parser("licence")
@@ -317,7 +343,7 @@ def main(argv=None):
         from .licence import require                      # licence can be installed from its own Licence screen
         require(cfg)
     return {"check": cmd_check, "sync": cmd_sync, "report": cmd_report, "audit": cmd_audit, "ask": cmd_ask, "serve": cmd_serve,
-            "dashboard": cmd_dashboard,
+            "dashboard": cmd_dashboard, "autoprofile": cmd_autoprofile,
             "status": cmd_status, "grants": cmd_grants, "licence": cmd_licence}[args.cmd](cfg, args)
 
 

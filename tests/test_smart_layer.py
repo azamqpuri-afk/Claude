@@ -14,7 +14,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "demo"))
 
 import build_demo_erp  # noqa: E402
-from smart_layer import audit, config, erp, report_registry, store  # noqa: E402
+from smart_layer import audit, autoprofile, config, erp, report_registry, schema, store  # noqa: E402
 from smart_layer.ask import Assistant  # noqa: E402
 from smart_layer.reports import production, stock  # noqa: E402
 
@@ -447,6 +447,28 @@ def test_beam_days_left_backups_and_shrinkage(env):
     assert rows["LOOM-05"]["days"] == pytest.approx(3, abs=0.6) and rows["LOOM-05"]["backup"] is None
     assert rows["LOOM-12"]["days"] == pytest.approx(4, abs=0.6) and rows["LOOM-12"]["backup"]["contract"] == "CON-42"
     assert rows["LOOM-20"]["over"]
+
+
+def test_autoprofile_reads_and_fingerprints(env):
+    cfg, _ = env
+    con, _ = erp.connect(cfg["erp"], cfg.base_dir)
+    p = autoprofile.profile(con, cfg["erp"]["driver"])
+    # reads the ERP's own catalog
+    assert p["tables"] > 10 and p["columns"] > 50
+    # recognises the known ERP and names the mapping to load - no tuning needed for a known ERP
+    assert p["recognised"] == "demo_sqlite" and p["confidence"] == 1.0 and p["mapping"] == "demo_sqlite.toml"
+    # heuristic column matching (the unknown-ERP path) finds obvious fields by name/type
+    sug = autoprofile.suggest_columns(p["schema"], schema.BY_NAME["employees"])
+    assert sug["name"] and sug["name"][0][1] == "bp_name"
+    assert sug["cnic"] and sug["cnic"][0][1] == "cnic"
+
+
+def test_autoprofile_rejects_foreign_schema():
+    # a database that is not a known ERP must not be mis-recognised
+    con = sqlite3.connect(":memory:")
+    con.executescript("CREATE TABLE widgets(id INTEGER, label TEXT); CREATE TABLE orders_x(id INTEGER);")
+    p = autoprofile.profile(con, "sqlite")
+    assert p["recognised"] is None and p["confidence"] == 0.0
 
 
 def test_beam_audit_and_sizer_ledger(env):
