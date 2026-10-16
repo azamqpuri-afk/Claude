@@ -295,8 +295,12 @@ def build(con, cfg, as_of=None):
 def _beam_stock(con):
     """Counts of beams by where they are now - for the Weaving tab's beam-stock panel."""
     counts = dict(con.execute("SELECT status, COUNT(*) FROM beams GROUP BY status"))
+    # empty beams at sizers aren't in the beams snapshot - read them from the movements (sent out minus come back)
+    at_sizer = con.execute("""SELECT SUM(CASE move_type WHEN 'empty_to_sizer' THEN 1
+                                             WHEN 'empty_from_sizer' THEN -1 ELSE 0 END) FROM beam_movements""").fetchone()[0] or 0
     return {"on_loom": counts.get("on_loom", 0), "sized_waiting": counts.get("sized_waiting", 0),
-            "empty_in_mill": counts.get("empty_in_mill", 0), "at_sizer": counts.get("at_sizer", 0),
+            "empty_in_mill": counts.get("empty_in_mill", 0),
+            "at_sizer": max(round(at_sizer), 0) or counts.get("at_sizer", 0),
             "sent_out": counts.get("sent_out", 0)}
 
 
