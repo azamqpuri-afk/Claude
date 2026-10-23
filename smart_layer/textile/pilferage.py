@@ -20,7 +20,9 @@ from .method import KG_PER_LB, Method
 DEFAULTS = {"lookback_days": 90, "window_days": 7, "excess_kg": 400, "excess_ratio": 1.3,
             "no_production_kg": 300, "no_production_days": 3, "large_issue_kg": 700,
             "late_entry_days": 7, "work_start_hour": 6, "work_end_hour": 21, "sizing_loss_pct": 6,
-            "compare_by": "yarn"}
+            "compare_by": "yarn",
+            # yarns that are not weft (selvedge / border / kinara) - left out of the weft pilferage check entirely
+            "non_weft_keywords": ["kinara", "leno", "selvedge", "selved", "border"]}
 
 
 def weft_kg_per_m(method, row):
@@ -45,25 +47,37 @@ def analyse(con, cfg, d0, d1):
     cinfo = {}
     for row in con.execute("""SELECT contract_no, COALESCE(c.party_name, p.party_name), picks_per_inch, width_in, weft_yarn, weft_count
                               FROM contracts c LEFT JOIN parties p USING (party_code)"""):
-        cinfo[row[0]] = (weft_kg_per_m(method, row), row[1], method.group(method.contract_overrides(row[0]).get("weft_yarn", row[4])))
+        wg = method.group(method.contract_overrides(row[0]).get("weft_yarn", row[4]))
+        cinfo[row[0]] = (weft_kg_per_m(method, row), row[1], wg, row[5] or (str(wg) if wg is not None else "?"))
 
     def account(cno, yarn=None):
-        k, party, wgroup = cinfo.get(cno, (None, None, None))
-        return (cno,) if by_contract else (party, method.group(yarn) if yarn is not None else wgroup)
+        info = cinfo.get(cno, (None, None, None, None))
+        return (cno,) if by_contract else (info[1], method.group(yarn) if yarn is not None else info[2])
 
-    # the weft count each party's contracts actually call for; a yarn issued that is NOT one of these is a
-    # "weft differs from contract" case, not pilferage (e.g. 34/1 PC issued while the contract master says 30/1 PC).
-    party_wefts = defaultdict(set)
-    for cno, (k, party, wgroup) in cinfo.items():
-        if wgroup is not None:
-            party_wefts[party].add(wgroup)
+    non_weft = [k.lower() for k in t.get("non_weft_keywords", DEFAULTS["non_weft_keywords"])]
+
+    def is_non_weft(name):
+        n = (name or "").lower()
+        return any(k in n for k in non_weft)
 
     issues, needed, woven = defaultdict(float), defaultdict(float), defaultdict(float)
     lines = defaultdict(list)
     members = defaultdict(set)
-    for d, cno, yarn, mt, kg, doc, ea, user in con.execute("""
-            SELECT move_date, contract_no, yarn_code, move_type, kg, doc_no, entered_at, entered_by FROM yarn_movements
+    weft_differs = {}                               # contract -> {issued names, the contract's own weft, kg}
+    for d, cno, yarn, yname, mt, kg, doc, ea, user in con.execute("""
+            SELECT move_date, contract_no, yarn_code, yarn_name, move_type, kg, doc_no, entered_at, entered_by FROM yarn_movements
             WHERE move_type IN ('to_looms', 'from_looms') AND move_date BETWEEN ? AND ?""", (start.isoformat(), d1.isoformat())):
+        nm = yname or yarn
+        if is_non_weft(nm):
+            continue                                # selvedge / kinara is not weft - keep it out of the weft check
+        # compare each issue to ITS OWN contract's weft count; a different count is a booking mismatch, not pilferage
+        cwg, cwn = cinfo.get(cno, (None, None, None, None))[2], cinfo.get(cno, (None, None, None, None))[3]
+        ig = method.group(yarn)
+        if cwg is not None and ig is not None and ig != cwg:
+            if mt == "to_looms":
+                w = weft_differs.setdefault(cno, {"issued": set(), "contract": cwn, "kg": 0.0})
+                w["issued"].add(nm); w["kg"] += kg or 0
+            continue                                # excluded from the kg comparison (would be apples-to-oranges)
         a = account(cno, yarn)
         members[a].add(cno)
         issues[(a, d)] += (kg or 0) * (1 if mt == "to_looms" else -1)
@@ -106,19 +120,11 @@ def analyse(con, cfg, d0, d1):
             tot = sum(x[1] for x in L)
             near = sum(woven[(a, x)] for x in days(dd - timedelta(days=int(t["no_production_days"])),
                                                      dd + timedelta(days=int(t["no_production_days"]))))
-            # a yarn count the party's contracts don't call for: the "needed" figure is computed on a different
-            # count, so the kg comparison is meaningless - flag the count mismatch instead of a false pilferage.
-            mismatch = (not by_contract and len(a) > 1 and a[1] is not None
-                        and a[0] in party_wefts and a[1] not in party_wefts[a[0]])
             why = []
-            if mismatch:
-                calls = ", ".join(sorted(str(x) for x in party_wefts[a[0]]))
-                why.append(f"weft {a[1]} issued, but this party's contracts use {calls} - check which count is right")
-            else:
-                if tot >= float(t["no_production_kg"]) and near == 0:
-                    why.append(f"{tot:,.0f} kg issued but no production with this yarn within {t['no_production_days']} days")
-                if need is not None and iss - need > float(t["excess_kg"]) and iss > float(t["excess_ratio"]) * max(need, 1):
-                    why.append(f"last {win} days: {iss:,.0f} kg issued vs {need:,.0f} kg needed for fabric woven (+{iss - need:,.0f} kg)")
+            if tot >= float(t["no_production_kg"]) and near == 0:
+                why.append(f"{tot:,.0f} kg issued but no production with this yarn within {t['no_production_days']} days")
+            if need is not None and iss - need > float(t["excess_kg"]) and iss > float(t["excess_ratio"]) * max(need, 1):
+                why.append(f"last {win} days: {iss:,.0f} kg issued vs {need:,.0f} kg needed for fabric woven (+{iss - need:,.0f} kg)")
             if tot >= float(t["large_issue_kg"]):
                 why.append(f"very large day: {tot:,.0f} kg issued")
             for doc, kg, ea, user, cno in L:
@@ -131,6 +137,14 @@ def analyse(con, cfg, d0, d1):
                     why.append(f"issue {doc} keyed at {e:%H:%M}, outside working hours (by {user or '?'})")
             if why:
                 flags.append(dict(contract=label(a), party=party, date=d, kg=tot, reasons=list(dict.fromkeys(why))))
+
+    # one "weft differs from contract" flag per contract (not per day), with the yarn NAMES, not codes.
+    for cno, w in weft_differs.items():
+        party = cinfo.get(cno, (None, None, None, None))[1]
+        issued = ", ".join(sorted(w["issued"]))
+        flags.append(dict(contract=str(cno), party=party, date=d1.isoformat(), kg=round(w["kg"]),
+                          reasons=[f"weft {issued} issued, but contract {cno} calls for {w['contract']} - "
+                                   f"check which count is right"]))
 
     # Sizing loss per sizer and contract over the contract's whole history (so beams are matched with the yarn
     # they were made from); yarn sent after the last sized beams came back is still at the sizer and left out.

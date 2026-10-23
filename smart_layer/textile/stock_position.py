@@ -12,7 +12,7 @@ from collections import defaultdict
 from datetime import date
 
 from ..reports import Report
-from .method import KG_PER_LB, Method
+from .method import Method
 
 
 def yarn_positions(con, cfg, as_of):
@@ -38,19 +38,42 @@ def yarn_positions(con, cfg, as_of):
 
 
 def yarn_stock(con, cfg, as_of=None):
+    """Count-wise loose-yarn stock, read straight from the ERP's own stock view (the yarn_stock entity =
+    WEFT_YARN_V / WARP_YARN_V) - the SAME figures the dashboard shows. We never recompute from kg per party."""
     as_of = as_of or date.today()
-    hand, sizer, names = yarn_positions(con, cfg, as_of)
-    bag_kg = float(Method(cfg["closing"]).cfg["bag_lb"]) * KG_PER_LB
+    combine = {}
+    for grp in cfg["yarn"].get("combine_counts", []):
+        if isinstance(grp, (list, tuple)) and len(grp) >= 2:
+            for c in grp[1:]:
+                combine[c] = grp[0]
+
+    def split(qty, cpb):
+        cpb = cpb or 1
+        b = int(qty / cpb)                              # TRUNC toward zero, like the report's CF_QTYFORMULA
+        return b, qty - b * cpb
+
+    agg = {}
+    for section, party, cnt, brand, cpb, qty in con.execute(
+            'SELECT section, party_name, "count" AS c, brand, cone_pbag, qty_cones FROM yarn_stock'):
+        cnt = combine.get(cnt, cnt)
+        key = ("sizing" if section == "sizing" else "weft",
+               (party or "") if section == "sizing" else "", cnt, brand or "", round(cpb or 0))
+        agg[key] = agg.get(key, 0.0) + (qty or 0)
     rows = []
-    for key in sorted(set(hand) | set(sizer), key=lambda k: (str(k[0]), str(k[1]))):
-        h, s = hand.get(key, 0.0), sizer.get(key, 0.0)
-        if abs(h) < 1 and abs(s) < 1:
-            continue
-        rows.append([key[0], names.get(key[1], key[1]), round(h), round(h / bag_kg, 1), round(s), round(s / bag_kg, 1),
-                     "negative - more issued than received; check entries" if h < -bag_kg else ""])
-    return Report(f"Yarn stock - {as_of:%d-%b-%Y}",
-                  ["Party", "Yarn", "In hand kg", "In hand bags", "At sizer kg", "At sizer bags", "Check"], rows,
-                  ["At sizer = yarn sent to sizers, less yarn and sized beams back (includes sizing loss not yet written off)."])
+    wb = wc = sb = sc = 0
+    for (section, party, cnt, brand, cpb), qty in sorted(
+            agg.items(), key=lambda kv: (kv[0][0] != "weft", kv[0][1], str(kv[0][2]), kv[0][4])):
+        b, c = split(qty, cpb)
+        rows.append(["At sizer" if section == "sizing" else "Weft", party or "-", cnt, brand or "-",
+                     round(cpb or 0), round(b), round(c)])
+        if section == "sizing":
+            sb += b; sc += c
+        else:
+            wb += b; wc += c
+    return Report(f"Yarn stock (count-wise) - {as_of:%d-%b-%Y}",
+                  ["Where", "Party", "Count", "Brand", "Cones/bag", "Bags", "Cones"], rows,
+                  [f"Weft (loose yarn in the mill): {round(wb):,} bags, {round(wc):,} cones.",
+                   f"At sizers: {round(sb):,} bags, {round(sc):,} cones."])
 
 
 def fabric_positions(con, as_of):

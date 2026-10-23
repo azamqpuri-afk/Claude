@@ -173,6 +173,10 @@ rate_days = 30
 ends_tolerance = 5                 # 8,855 / 8,856-end sets count as the same (63_beam_backup_alert.py)
 own_beam_sizers = ["Hiba"]         # parties that bring their own beams - left out of the sizer ledger
 
+[yarn]
+# 52/1 and 54/1 CTN are the same yarn commercially - show them as one line in the count-wise stock list.
+combine_counts = [["52/1 & 54/1 CTN", "52/1 CTN", "54/1 CTN"]]
+
 # The OLMS loom scoreboard (MS Access on the scoreboard PC), read from a copy as 74_scoreboard_data.py does
 [sources.scoreboard]
 driver = "access"
