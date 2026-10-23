@@ -444,7 +444,9 @@ def test_setup_wizard_writes_config_and_env(tmp_path):
     assert cfg["erp"]["password"] == "db-pass" and cfg["serve"]["password"] == "dash-pass"
     assert cfg["serve"]["host"] == "0.0.0.0" and "ntfy" in cfg["notify"]["channels"]
     assert len(cfg["notify"]["ntfy_topic"]) > 20
-    assert "db-pass" not in cfg_path.read_text() and "db-pass" in (tmp_path / ".env").read_text()
+    # the secret is kept out of config.toml and lives in .env - in plain text, or DPAPI-encrypted on Windows
+    env = (tmp_path / ".env").read_text()
+    assert "db-pass" not in cfg_path.read_text() and ("db-pass" in env or "ERP_PASSWORD=DPAPI:" in env)
 
 
 def test_config_reads_windows_encodings(tmp_path, monkeypatch):
