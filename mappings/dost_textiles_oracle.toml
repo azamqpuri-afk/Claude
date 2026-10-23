@@ -105,23 +105,28 @@ sql = "SELECT lcode AS loom_code, lname AS loom_name FROM dostex.looms"
 [entities.loom_production]
 # Efficiency (WV_EFF_V) is joined on date + loom + shift ONLY, never quality. On a weft change the production row
 # and the efficiency row carry different quality strings (e.g. 30/30 vs 31/34); joining on quality silently dropped
-# those rows (~7.6% of the mill's meters-at-100). We sum meters-at-100 for the whole loom-shift and spread it across
-# that shift's quality rows in proportion to meters, so every row keeps a correct combined efficiency and the
-# meters-at-100 never double-counts (SUM over the quality rows = the shift total).
+# those rows (~7.6% of the mill's meters-at-100).
+# IMPORTANT: efficiency is computed ENTIRELY inside WV_EFF_V (its own meters / its own eff_100), so the numerator and
+# denominator always share one meter basis. Mixing WV_PROD_V meters with WV_EFF_V's eff_100 is wrong - for multi-panel
+# cloth (3-panel 46"/45") the two views count meters differently and the ratio inflates to ~3x (194%+ "efficiency").
+# WV_PROD_V is used only for the meters column and to spread meters-at-100 across the shift's quality rows (in
+# proportion to meters, so SUM over the rows = the shift's eff_100 and the combined efficiency is unchanged).
 sql = """
 SELECT prod_date, loom_code, shift, contract_no, quality, beam_no, meters, first_quality_m, second_quality_m, rejected_m,
-       CASE WHEN m100 > 0 AND sh_meters > 0 THEN 100 * sh_meters / m100 END AS efficiency_pct,
+       eff AS efficiency_pct,
        CASE WHEN sh_meters > 0 THEN m100 * meters / sh_meters ELSE m100 END AS meters_at_100
 FROM (
   SELECT p.td AS prod_date, p.lcode AS loom_code, p.shift AS shift, p.cont_no AS contract_no, p.quality AS quality,
          p.beam AS beam_no, p.meters AS meters, p.first_q AS first_quality_m, p.second_q AS second_quality_m,
-         p.rej AS rejected_m, SUM(p.meters) OVER (PARTITION BY p.td, p.lcode, p.shift) AS sh_meters, e.m100 AS m100
+         p.rej AS rejected_m, SUM(p.meters) OVER (PARTITION BY p.td, p.lcode, p.shift) AS sh_meters,
+         e.m100 AS m100, e.eff AS eff
   FROM (SELECT TRUNC(v.td) td, v.lcode, NVL(TO_CHAR(v.shift), '-') shift, v.quality, MAX(v.cont_no) cont_no,
                MAX(TO_CHAR(v.ref_tno)) beam, SUM(NVL(v.total_mtr, 0)) meters, SUM(NVL(v.a, 0) + NVL(v.a2, 0)) first_q,
                SUM(NVL(v.b, 0)) second_q, SUM(NVL(v.b, 0) + NVL(v.c, 0) + NVL(v.cp, 0)) rej
         FROM dostex.wv_prod_v v WHERE v.tt = 'PRODUCTION' AND v.td >= :since
         GROUP BY TRUNC(v.td), v.lcode, NVL(TO_CHAR(v.shift), '-'), v.quality) p
-  LEFT JOIN (SELECT TRUNC(td) td, lcode, NVL(TO_CHAR(shift), '-') shift, SUM(eff_100) m100
+  LEFT JOIN (SELECT TRUNC(td) td, lcode, NVL(TO_CHAR(shift), '-') shift, SUM(eff_100) m100,
+                    100 * SUM(total_mtr) / NULLIF(SUM(eff_100), 0) eff
              FROM dostex.wv_eff_v WHERE tt = 'PRODUCTION' AND td >= :since
              GROUP BY TRUNC(td), lcode, NVL(TO_CHAR(shift), '-')) e
     ON e.td = p.td AND e.lcode = p.lcode AND e.shift = p.shift
