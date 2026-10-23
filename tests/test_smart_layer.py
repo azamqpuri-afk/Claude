@@ -136,6 +136,29 @@ def test_open_loans_use_amount_minus_repaid(env):
         assert r[-1] == r[4] - r[5] and r[-1] > 1                 # Balance = Amount - Repaid, and only open loans listed
 
 
+def test_strict_similar_name_matching():
+    from smart_layer.reports.stock import _strict_similar, _tokens
+    assert _strict_similar(_tokens("6202"), _tokens("6202 SKF"))          # whole-word prefix
+    assert _strict_similar(_tokens("6202 SKF"), _tokens("6202 ZZ"))       # shared part-number lead token
+    assert not _strict_similar(_tokens("6202"), _tokens("6203"))          # different number
+    assert not _strict_similar(_tokens("BELT"), _tokens("BELT GUARD"))    # lead token not a part number
+    assert not _strict_similar(_tokens("6202"), _tokens("6202"))          # identical = same item, not "similar"
+
+
+def test_store_check_flags_similar_named_item_in_stock(tmp_path):
+    from smart_layer import store as store_mod
+    from smart_layer.reports import stock as stock_mod
+    con = store_mod.open_store(tmp_path / "s.db")
+    con.execute("INSERT INTO items (item_code, item_name, unit) VALUES ('6202','6202','pcs'),('6202SKF','6202 SKF','pcs')")
+    con.execute("INSERT INTO stock_balances (item_code, qty) VALUES ('6202',0),('6202SKF',10)")
+    con.execute("INSERT INTO store_issues (doc_no, doc_date, item_code, qty) VALUES ('1', ?, '6202', 5)", (date(2026, 10, 1).isoformat(),))
+    con.commit()
+    rep = stock_mod.stock_status(con, {"reports": {"tracked_issue_days": 90}}, date(2026, 10, 16))
+    assert rep.columns[-1] == "Similar item in stock"
+    row = [r for r in rep.rows if r[2] == "6202"][0]
+    assert row[0] == "OUT OF STOCK" and "6202 SKF" in row[-1] and "10" in row[-1]
+
+
 def test_new_zero_reports_only_newly_out_of_stock(env):
     cfg, con = env
     store.set_state(con, "stock_snapshot", None)

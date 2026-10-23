@@ -240,9 +240,13 @@ def build(con, cfg, as_of=None):
                 for f in sorted(a.findings, key=lambda f: (order[f.severity], f.section))]
 
     # stock
+    from ..reports.stock import _in_stock_index, _similar_in_stock
     items = _status_rows(con, as_of, int(cfg["reports"]["tracked_issue_days"]))
+    pos = _in_stock_index(con)
     stock = [{"status": r["status"], "item": r["item_name"], "code": r["item_code"], "unit": r["unit"],
-              "stock": r["stock"], "avg_month": round(r["avg_month"], 1)} for r in items if r["status"] != "IN STOCK"]
+              "stock": r["stock"], "avg_month": round(r["avg_month"], 1),
+              "similar": _similar_in_stock(pos, r["item_code"], r["item_name"])}
+             for r in items if r["status"] != "IN STOCK"]
 
     # yarn
     crows = closing.contract_rows(con, Method(cfg["closing"]), as_of)
