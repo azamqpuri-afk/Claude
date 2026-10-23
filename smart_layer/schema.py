@@ -312,7 +312,16 @@ ENTITIES += (
          C("bank_account", "TEXT", "Bank account number"),
          C("mobile", "TEXT", "Mobile / phone"),
          C("eobi_no", "TEXT", "EOBI number, if registered"),
-         C("social_security_no", "TEXT", "Social security number, if registered")),
+         C("social_security_no", "TEXT", "Social security number, if registered"),
+         C("quit", "TEXT", "'Y' if the employee has left the mill (blank/N if still on the books)")),
+        key=("emp_code",),
+    ),
+    Entity(
+        "attendance",
+        "Last day each employee was marked present. Used to tell who is actually working now, since the "
+        "employment status flag is often not kept up to date. One row per employee (latest present day only).",
+        (C("emp_code", "TEXT", "Employee code (employees.emp_code)", True),
+         C("last_present", "DATE", "Most recent day the employee was marked present")),
         key=("emp_code",),
     ),
     Entity(
@@ -345,6 +354,7 @@ ENTITIES += (
          C("amount", "REAL", "Amount given"),
          C("installment", "REAL", "Agreed recovery per period"),
          C("opening", "REAL", "Opening balance brought forward"),
+         C("repaid", "REAL", "Total recovered so far (sum of salary deductions against this loan)"),
          C("completed", "TEXT", "Whether fully recovered"),
          C("remarks", "TEXT", "Remarks")),
         date_column="loan_date",

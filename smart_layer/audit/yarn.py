@@ -3,16 +3,18 @@
 from datetime import date
 
 from ..textile.pilferage import analyse
-from ..textile.stock_position import fabric_positions
 
 
 def run(a):
     d0, d1 = (date.fromisoformat(x) for x in a.window)
-    for f in fabric_positions(a.con, d1):            # fabric dispatched beyond what was produced, per grade
-        if f["fresh"] < -50 or f["rejected"] < -50:
-            a.add("CONFIRMED", "Fabric", f"fabneg-{f['contract']}-{round(f['fresh'])}-{round(f['rejected'])}",
-                  f"Contract {f['contract']}: fabric stock negative (fresh {f['fresh']:,.0f} m, other grades {f['rejected']:,.0f} m)",
-                  "dispatched more than produced in a grade - grade keyed wrong on the gate pass or on production")
+    # Negative fabric stock is read from the ERP's OWN stock view (the fabric_stock entity, which includes the
+    # opening stock FAB_OPN) - never from woven - dispatched, which ignores opening and makes go-live contracts
+    # look negative. So only a contract the ERP itself shows negative is flagged.
+    for cno, m in a.q("SELECT contract_no, SUM(meters) FROM fabric_stock GROUP BY contract_no"):
+        if (m or 0) < -50:
+            a.add("CONFIRMED", "Fabric", f"fabneg-{cno}-{round(m)}",
+                  f"Contract {cno}: fabric stock is negative ({m:,.0f} m) in the ERP's own stock report",
+                  "more dispatched than produced - a grade or quantity keyed wrong on a gate pass or on production")
     if not a.q("SELECT 1 FROM yarn_movements LIMIT 1"):
         return
     flags, weekly, sizing, t = analyse(a.con, a.cfg, d0, d1)

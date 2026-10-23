@@ -3,7 +3,7 @@ empty beams not back from a sizer (see textile/beams.py)."""
 
 from datetime import date
 
-from ..textile.beams import beams_on_looms, settings
+from ..textile.beams import beams_on_looms, is_own_sizer, settings
 
 
 def run(a):
@@ -25,17 +25,21 @@ def run(a):
               f"contract {r['contract'] or '?'}, {r['to_come']:,.0f} m of fabric to come at {r['rate']:,.0f} m a day; "
               f"get the next set sized")
     limit = (d1.toordinal() - int(t["sizer_return_days"]))
-    skip = {s.lower() for s in t["own_beam_sizers"]}
+    own = t["own_beam_sizers"]
+    # don't resurface ancient unmatched beams forever: a beam sent long ago that never came back by its own number
+    # is almost always one the sizer returned under a different number (they swap physical beams). Only alert on
+    # beams sent recently enough to still act on (within 4x the return window).
+    floor = (d1.toordinal() - 4 * int(t["sizer_return_days"]))
     out = {}
     for sizer, beam, mt, d in a.q("""SELECT party_name, beam_no, move_type, move_date FROM beam_movements
             WHERE move_type IN ('empty_to_sizer', 'empty_from_sizer', 'sized_received') AND move_date <= ? ORDER BY move_date""", a.window[1]):
-        if (sizer or "").lower() in skip:
+        if is_own_sizer(sizer, own):
             continue
         if mt == "empty_to_sizer":
             out[(sizer, beam)] = d
         else:
             out.pop((sizer, beam), None)
     for (sizer, beam), d in out.items():
-        if date.fromisoformat(d).toordinal() < limit:
+        if floor <= date.fromisoformat(d).toordinal() < limit:
             a.add("WATCH", "Beams", f"beamout-{sizer}-{beam}-{d}", f"Empty beam {beam} sent to {sizer} on {d} has not come back",
                   "ask the sizer, or check the return was entered under another party / beam number")

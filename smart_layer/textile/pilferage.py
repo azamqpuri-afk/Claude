@@ -51,6 +51,13 @@ def analyse(con, cfg, d0, d1):
         k, party, wgroup = cinfo.get(cno, (None, None, None))
         return (cno,) if by_contract else (party, method.group(yarn) if yarn is not None else wgroup)
 
+    # the weft count each party's contracts actually call for; a yarn issued that is NOT one of these is a
+    # "weft differs from contract" case, not pilferage (e.g. 34/1 PC issued while the contract master says 30/1 PC).
+    party_wefts = defaultdict(set)
+    for cno, (k, party, wgroup) in cinfo.items():
+        if wgroup is not None:
+            party_wefts[party].add(wgroup)
+
     issues, needed, woven = defaultdict(float), defaultdict(float), defaultdict(float)
     lines = defaultdict(list)
     members = defaultdict(set)
@@ -99,13 +106,21 @@ def analyse(con, cfg, d0, d1):
             tot = sum(x[1] for x in L)
             near = sum(woven[(a, x)] for x in days(dd - timedelta(days=int(t["no_production_days"])),
                                                      dd + timedelta(days=int(t["no_production_days"]))))
+            # a yarn count the party's contracts don't call for: the "needed" figure is computed on a different
+            # count, so the kg comparison is meaningless - flag the count mismatch instead of a false pilferage.
+            mismatch = (not by_contract and len(a) > 1 and a[1] is not None
+                        and a[0] in party_wefts and a[1] not in party_wefts[a[0]])
             why = []
-            if tot >= float(t["no_production_kg"]) and near == 0:
-                why.append(f"{tot:,.0f} kg issued but no production with this yarn within {t['no_production_days']} days")
+            if mismatch:
+                calls = ", ".join(sorted(str(x) for x in party_wefts[a[0]]))
+                why.append(f"weft {a[1]} issued, but this party's contracts use {calls} - check which count is right")
+            else:
+                if tot >= float(t["no_production_kg"]) and near == 0:
+                    why.append(f"{tot:,.0f} kg issued but no production with this yarn within {t['no_production_days']} days")
+                if need is not None and iss - need > float(t["excess_kg"]) and iss > float(t["excess_ratio"]) * max(need, 1):
+                    why.append(f"last {win} days: {iss:,.0f} kg issued vs {need:,.0f} kg needed for fabric woven (+{iss - need:,.0f} kg)")
             if tot >= float(t["large_issue_kg"]):
                 why.append(f"very large day: {tot:,.0f} kg issued")
-            if need is not None and iss - need > float(t["excess_kg"]) and iss > float(t["excess_ratio"]) * max(need, 1):
-                why.append(f"last {win} days: {iss:,.0f} kg issued vs {need:,.0f} kg needed for fabric woven (+{iss - need:,.0f} kg)")
             for doc, kg, ea, user, cno in L:
                 if not ea:
                     continue

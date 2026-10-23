@@ -192,11 +192,12 @@ class ERP:
             self._open[name] = connect(self.sources_cfg[name], self.base_dir)
         return self._open[name]
 
-    def fetch(self, entity_name, since):
-        """Rows of one entity as tuples in schema column order."""
+    def fetch(self, entity_name, since, as_of=None):
+        """Rows of one entity as tuples in schema column order.
+        as_of overrides the :today bind, so a snapshot view (e.g. fabric_stock) can be read as of a past date."""
         entity = schema.BY_NAME[entity_name]
         con, style = self.connection(entity_name)
-        params = {"since": since, "today": date.today()}
+        params = {"since": since, "today": as_of or date.today()}
         if isinstance(con, sqlite3.Connection):          # SQLite keeps dates as ISO text
             params = {k: v.isoformat() for k, v in params.items()}
         elif style == "qmark":                            # ODBC (SQL Server, Access) binds datetimes most reliably

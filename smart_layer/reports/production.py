@@ -50,8 +50,8 @@ def daily_production(con, cfg, day=None):
         WHERE p.prod_date = ? GROUP BY p.loom_code ORDER BY 1""", (d,)).fetchall()
     idle = idle_looms(con, day, int(cfg["audit"]["idle_loom_min_days"]))
     total_m = sum(r[1] or 0 for r in rows)
-    w = [(r[2], r[1]) for r in rows if r[2] is not None]
-    eff = sum(e * m for e, m in w) / sum(m for _, m in w) if w else None
+    # overall efficiency is weighted by meters-at-100 (EFF_AGG), not by meters, so it matches the audit figure
+    eff = con.execute(f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date = ?", (d,)).fetchone()[0]
     rej = sum(r[3] or 0 for r in rows)
     out = [[n, m, round(e, 1) if e is not None else None, round(100.0 * rj / m, 1) if m else None, q]
            for n, m, e, rj, q in rows]

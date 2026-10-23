@@ -103,20 +103,29 @@ sql = "SELECT lcode AS loom_code, lname AS loom_name FROM dostex.looms"
 # Grades as the ERP's own Daily Production report counts them: first = A + A2; rejection = everything else
 # (B + C + CP, i.e. 100 - "Grade %"); second = B is kept separately for reference.
 [entities.loom_production]
+# Efficiency (WV_EFF_V) is joined on date + loom + shift ONLY, never quality. On a weft change the production row
+# and the efficiency row carry different quality strings (e.g. 30/30 vs 31/34); joining on quality silently dropped
+# those rows (~7.6% of the mill's meters-at-100). We sum meters-at-100 for the whole loom-shift and spread it across
+# that shift's quality rows in proportion to meters, so every row keeps a correct combined efficiency and the
+# meters-at-100 never double-counts (SUM over the quality rows = the shift total).
 sql = """
-SELECT p.td AS prod_date, p.lcode AS loom_code, p.shift AS shift, p.cont_no AS contract_no, p.quality AS quality,
-       p.beam AS beam_no, p.meters AS meters, p.first_q AS first_quality_m, p.second_q AS second_quality_m,
-       p.rej AS rejected_m, e.eff AS efficiency_pct, e.m100 AS meters_at_100
-FROM (SELECT TRUNC(v.td) td, v.lcode, NVL(TO_CHAR(v.shift), '-') shift, v.quality, MAX(v.cont_no) cont_no,
-             MAX(TO_CHAR(v.ref_tno)) beam, SUM(NVL(v.total_mtr, 0)) meters, SUM(NVL(v.a, 0) + NVL(v.a2, 0)) first_q,
-             SUM(NVL(v.b, 0)) second_q, SUM(NVL(v.b, 0) + NVL(v.c, 0) + NVL(v.cp, 0)) rej
-      FROM dostex.wv_prod_v v WHERE v.tt = 'PRODUCTION' AND v.td >= :since
-      GROUP BY TRUNC(v.td), v.lcode, NVL(TO_CHAR(v.shift), '-'), v.quality) p
-LEFT JOIN (SELECT TRUNC(td) td, lcode, NVL(TO_CHAR(shift), '-') shift, quality,
-                  100 * SUM(total_mtr) / NULLIF(SUM(eff_100), 0) eff, SUM(eff_100) m100
-           FROM dostex.wv_eff_v WHERE tt = 'PRODUCTION' AND td >= :since
-           GROUP BY TRUNC(td), lcode, NVL(TO_CHAR(shift), '-'), quality) e
-  ON e.td = p.td AND e.lcode = p.lcode AND e.shift = p.shift AND e.quality = p.quality
+SELECT prod_date, loom_code, shift, contract_no, quality, beam_no, meters, first_quality_m, second_quality_m, rejected_m,
+       CASE WHEN m100 > 0 AND sh_meters > 0 THEN 100 * sh_meters / m100 END AS efficiency_pct,
+       CASE WHEN sh_meters > 0 THEN m100 * meters / sh_meters ELSE m100 END AS meters_at_100
+FROM (
+  SELECT p.td AS prod_date, p.lcode AS loom_code, p.shift AS shift, p.cont_no AS contract_no, p.quality AS quality,
+         p.beam AS beam_no, p.meters AS meters, p.first_q AS first_quality_m, p.second_q AS second_quality_m,
+         p.rej AS rejected_m, SUM(p.meters) OVER (PARTITION BY p.td, p.lcode, p.shift) AS sh_meters, e.m100 AS m100
+  FROM (SELECT TRUNC(v.td) td, v.lcode, NVL(TO_CHAR(v.shift), '-') shift, v.quality, MAX(v.cont_no) cont_no,
+               MAX(TO_CHAR(v.ref_tno)) beam, SUM(NVL(v.total_mtr, 0)) meters, SUM(NVL(v.a, 0) + NVL(v.a2, 0)) first_q,
+               SUM(NVL(v.b, 0)) second_q, SUM(NVL(v.b, 0) + NVL(v.c, 0) + NVL(v.cp, 0)) rej
+        FROM dostex.wv_prod_v v WHERE v.tt = 'PRODUCTION' AND v.td >= :since
+        GROUP BY TRUNC(v.td), v.lcode, NVL(TO_CHAR(v.shift), '-'), v.quality) p
+  LEFT JOIN (SELECT TRUNC(td) td, lcode, NVL(TO_CHAR(shift), '-') shift, SUM(eff_100) m100
+             FROM dostex.wv_eff_v WHERE tt = 'PRODUCTION' AND td >= :since
+             GROUP BY TRUNC(td), lcode, NVL(TO_CHAR(shift), '-')) e
+    ON e.td = p.td AND e.lcode = p.lcode AND e.shift = p.shift
+)
 """
 
 # Contracts (DOSTEX.CONTM) as read by 48_contract_closing.py. warp_thread / weft_thread are taken as
@@ -282,10 +291,13 @@ WHERE m.tt IN ('BEAMS_TO_LOOM', 'BEAMS_FROM_LOOM') AND m.td >= :since
 [entities.loom_monitor]
 source = "scoreboard"
 sql = """
+-- Efficiency is run-time based: (shift time - stop time) / shift time, summed over the loom's records before
+-- dividing (a shift can be split across several records). PSHFTDUR and PTSTPDUR are both seconds. This matches the
+-- scoreboard exactly and works even when PRPM is 0 (night-shift records often have PRPM = 0, which the old
+-- PRPM-weighted formula could not handle - it understated or blanked those looms).
 SELECT PDATE AS read_date, PMACH AS loom_code,
        SUM(IIF(PPINCH > 0, PPROD * PDELV / (PPINCH * 39.37), 0)) AS meters,
-       IIF(SUM(IIF(PRPM > 0, PRPM * PSHFTDUR, 0)) > 0,
-           100 * SUM(IIF(PRPM > 0, PPROD, 0)) / SUM(IIF(PRPM > 0, PRPM * PSHFTDUR / 60, 0)), NULL) AS efficiency_pct,
+       IIF(SUM(PSHFTDUR) > 0, 100 * (SUM(PSHFTDUR) - SUM(PTSTPDUR)) / SUM(PSHFTDUR), NULL) AS efficiency_pct,
        AVG(IIF(PRPM > 0, PRPM, NULL)) AS rpm, SUM(PWRP + PUD) AS stops
 FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
 """
@@ -308,7 +320,7 @@ SELECT e.emp_code AS emp_code, e.emp_name AS name, e.father_name AS father_name,
        TRUNC(e.doj) AS date_joining, e.emp_status AS status, TO_CHAR(e.sal_type) AS wage_type,
        e.salary AS monthly_salary, e.per_day_wage AS per_day_wage,
        CAST(NULL AS VARCHAR2(50)) AS bank, e.bank_acc_no AS bank_account, e.mobile AS mobile,
-       e.eobi_no AS eobi_no, e.ss_no AS social_security_no
+       e.eobi_no AS eobi_no, e.ss_no AS social_security_no, NVL(e.quit, 'N') AS quit
 -- Department is EMP.SEC_CODE (the ERP's own EMP_V view joins emp.sec_code = dept.dept_code). SUB_DEPT_CODE is
 -- reused across departments, so it is only meaningful together with SEC_CODE - never MAX(dept_code) on it alone.
 FROM payroll.emp e
@@ -318,6 +330,20 @@ LEFT JOIN payroll.desg dg ON dg.desg_code = e.desg_code
 LEFT JOIN payroll.job_types jt ON TO_CHAR(jt.job_type_id) = e.job_type_id
 LEFT JOIN payroll.shifts sh ON sh.shift_id = e.shift_id
 LEFT JOIN payroll.segments sg ON sg.seg_id = e.seg_id
+"""
+
+# Attendance: the last day each employee was marked present (ATTENDANCE_TYPE = 'P'), used to tell who is actually
+# working now. The employment status flag (EMP_STATUS) is only 'SP'/blank and QUIT is rarely filled, so "working
+# now" is: not quit AND (present in the last ~45 days OR paid in the last ~2 months - which also catches a new
+# joiner who has not had a salary run yet).
+# NOTE: confirm the date column of PAYROLL.IN_OUT on this ERP. It is assumed to be ATT_DATE below; if `check` reports
+# this entity failing, change ATT_DATE here to the real column (no rebuild needed). Active staff then falls back to
+# the paid-in-last-2-periods rule until it is correct, so nothing else breaks.
+[entities.attendance]
+sql = """
+SELECT emp_code, MAX(TRUNC(att_date)) AS last_present
+FROM payroll.in_out WHERE attendance_type = 'P' AND att_date >= :since
+GROUP BY emp_code
 """
 
 # Payroll per employee per pay period (mills pay twice a month: 1-15, 16-end). The real key is emp + fdate + tdate
@@ -348,10 +374,19 @@ FROM (
 """
 
 [entities.employee_loans]
+# Open balance is CALCULATED, not stored: LOAN_COMPLETED is never set and LOAN_OPENING/ADJ_AMT are always 0.
+#   remaining = LOAN_AMOUNT - repaid, where repaid = SUM(SALD.EARNED_AMOUNT) for ALLOWANCE_DEDUCTION = 'D',
+#   matched on LOAN_CODE + LOAN_TYPE + EMP_CODE (codes restart per type, so all three are needed). EMP_PAY_REC
+#   cash receipts are deliberately ignored - the only rows are pre-go-live (2023) with old employee numbers whose
+#   loan codes clash with today's loans. Validated: every loan/advance is exactly repaid except loan 243.
 sql = """
 SELECT l.loan_code AS loan_code, TRUNC(l.loan_date) AS loan_date, l.emp_code AS emp_code,
        l.loan_type AS loan_type, l.loan_amount AS amount, l.installment_amount AS installment,
-       l.loan_opening AS opening, l.loan_completed AS completed, l.remarks AS remarks
+       l.loan_opening AS opening,
+       (SELECT NVL(SUM(d.earned_amount), 0) FROM payroll.sald d
+        WHERE d.loan_code = l.loan_code AND d.loan_type = l.loan_type AND d.emp_code = l.emp_code
+          AND d.allowance_deduction = 'D') AS repaid,
+       l.loan_completed AS completed, l.remarks AS remarks
 FROM payroll.emp_loans l WHERE l.loan_date >= :since
 """
 

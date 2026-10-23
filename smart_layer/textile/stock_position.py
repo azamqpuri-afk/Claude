@@ -76,30 +76,43 @@ def fabric_stock(con, cfg, as_of=None):
     """Fabric in stock exactly as the ERP's own fabric-stock report shows it (fabric_stock entity = WV_FAB_STOCK_V).
     We read the ERP's figure; we never recompute it. Negative lines are flagged, not hidden or netted away."""
     as_of = as_of or date.today()
+    # last movement per contract (ageing): the more recent of last woven and last dispatched.
+    last_move = {}
+    for cno, d in con.execute("SELECT contract_no, MAX(prod_date) FROM loom_production GROUP BY contract_no"):
+        if d:
+            last_move[str(cno)] = d
+    for cno, d in con.execute("SELECT contract_no, MAX(dispatch_date) FROM fabric_dispatches GROUP BY contract_no"):
+        if d:
+            last_move[str(cno)] = max(d, last_move.get(str(cno), d))
     # group by quality + party, combining a party's same-quality contracts; list the contract numbers in brackets.
     agg = {}
     for cn, pn, q, fr, b, c, cp, m in con.execute(
             "SELECT contract_no, party_name, quality, fresh_m, b_m, c_m, cp_m, meters FROM fabric_stock").fetchall():
-        a = agg.setdefault((q or "", pn or ""), [0.0, 0.0, 0.0, 0.0, 0.0, set()])
+        a = agg.setdefault((q or "", pn or ""), [0.0, 0.0, 0.0, 0.0, 0.0, set(), None])
         a[0] += fr or 0; a[1] += b or 0; a[2] += c or 0; a[3] += cp or 0; a[4] += m or 0
         if cn:
             a[5].add(str(cn))
+            mv = last_move.get(str(cn))
+            if mv and (a[6] is None or mv > a[6]):
+                a[6] = mv
     rows, total = [], 0.0
-    for (q, pn), (A, B, C, CP, T, conts) in agg.items():
+    for (q, pn), (A, B, C, CP, T, conts, mv) in agg.items():
         if abs(T) < 0.5:                                  # like the ERP's HAVING: drop rows that net to ~0
             continue                                      # (e.g. contracts 9/10/11 booked across numbers cancel per quality)
         total += T
         cs = ", ".join(sorted(conts, key=lambda x: (len(x), x)))
+        age = (as_of - date.fromisoformat(mv)).days if mv else None
         check = "dispatched more than produced - check the ERP entry" if T < -1 else ""
-        rows.append([q, pn, round(A), round(B), round(C), round(CP), round(T), cs, check])
+        rows.append([q, pn, round(A), round(B), round(C), round(CP), round(T), cs, mv or "", age, check])
     rows.sort(key=lambda r: (str(r[0]), -(r[6] or 0)))
-    # cross-check: the ERP report's total should reconcile with opening + woven - dispatched + returns. We read the
-    # report's figure, and flag the difference vs what we can recompute from production/dispatch, in brackets.
+    # cross-check: the ERP report's figure should equal opening + woven - dispatched. We read the ERP's figure and
+    # show, in plain words, the gap vs what production and dispatch records alone give (the gap is the opening stock).
     woven = con.execute("SELECT COALESCE(SUM(meters),0) FROM loom_production").fetchone()[0]
     disp = con.execute("SELECT COALESCE(SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters),0) FROM fabric_dispatches").fetchone()[0]
     calc = woven - disp
     diff = total - calc
-    note = f"  [cross-check: woven − dispatched = {calc:,.0f} m; difference {diff:+,.0f} m = opening stock + any unbooked]" if abs(diff) > 1 else ""
+    note = (f"Cross-check: production minus dispatch records give {calc:,.0f} m; the {diff:+,.0f} m gap to the ERP "
+            f"figure is opening stock carried forward in the ERP (normal, not an error).") if abs(diff) > 1 else ""
     return Report(f"Fabric stock - {as_of:%d-%b-%Y}",
-                  ["Quality", "Party", "A m", "B m", "C m", "CP m", "Total m", "Contracts", "Check"], rows,
-                  [f"Fabric in stock (from the ERP's own fabric-stock report): {total:,.0f} m." + note])
+                  ["Quality", "Party", "A m", "B m", "C m", "CP m", "Total m", "Contracts", "Last movement", "Age (days)", "Check"], rows,
+                  [f"Fabric in stock (from the ERP's own fabric-stock report): {total:,.0f} m."] + ([note] if note else []))

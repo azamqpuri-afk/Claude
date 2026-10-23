@@ -3,6 +3,8 @@ Payroll reports, written only against the canonical employees / payroll / employ
 any mill once its payroll is mapped. Net pay is already computed in the mapping (earned + overtime - deductions).
 """
 
+from datetime import date, timedelta
+
 from . import Report
 
 
@@ -64,25 +66,38 @@ def payslips(con, cfg, as_of=None):
 
 
 def loans(con, cfg, as_of=None):
-    """Open employee loans and advances (not marked complete)."""
-    cols = ["Code", "Name", "Type", "Given", "Amount", "Installment"]
-    rows = con.execute("""SELECT l.emp_code, e.name, l.loan_type, l.loan_date, l.amount, l.installment
+    """Open employee loans and advances. The ERP's 'completed' flag is unreliable, so a loan is open when
+    amount - repaid (repaid = salary deductions booked against it) is still positive."""
+    cols = ["Code", "Name", "Type", "Given", "Amount", "Repaid", "Balance"]
+    rows = con.execute("""SELECT l.emp_code, e.name, l.loan_type, l.loan_date, l.amount, l.repaid
                           FROM employee_loans l LEFT JOIN employees e ON e.emp_code = l.emp_code
-                          WHERE COALESCE(UPPER(l.completed), '') NOT IN ('Y', '1', 'TRUE')
                           ORDER BY l.loan_date DESC""").fetchall()
-    out = [[c, n, t, d, round(a or 0), round(i or 0)] for c, n, t, d, a, i in rows]
-    total = sum(r[4] for r in out)
+    out = []
+    for c, n, t, d, a, r in rows:
+        bal = round((a or 0) - (r or 0))
+        if bal <= 1:                                   # fully (or over-) recovered - not open
+            continue
+        out.append([c, n, t, d, round(a or 0), round(r or 0), bal])
+    total = sum(x[6] for x in out)
     return Report("Employee loans and advances (open)", cols, out,
-                  [f"{len(out)} open loans / advances, totalling {total:,} given." if out else "No open loans or advances."])
+                  [f"{len(out)} open loans / advances, balance {total:,} still to recover." if out
+                   else "No open loans or advances."])
 
 
 def staff(con, cfg, as_of=None):
-    """Active employee list by department."""
+    """Employees actually working now: not quit, and either present recently or paid in the last ~2 months
+    (the latter also catches a new joiner who has not had a salary run yet). The ERP's status flag alone marks
+    almost everyone active, so it is not used."""
+    as_of = as_of or date.today()
+    present_since = (as_of - timedelta(days=45)).isoformat()
+    paid_since = (as_of - timedelta(days=62)).isoformat()
     cols = ["Code", "Name", "Department", "Designation", "Section", "Monthly salary"]
-    rows = con.execute("""SELECT emp_code, name, COALESCE(department, '-'), COALESCE(designation, '-'),
-                                 COALESCE(section, '-'), monthly_salary
-                          FROM employees
-                          WHERE COALESCE(UPPER(status), '') NOT IN ('LEFT', 'QUIT', 'RESIGNED', 'TERMINATED')
-                          ORDER BY department, name""").fetchall()
+    rows = con.execute("""SELECT e.emp_code, e.name, COALESCE(e.department, '-'), COALESCE(e.designation, '-'),
+                                 COALESCE(e.section, '-'), e.monthly_salary
+                          FROM employees e
+                          WHERE COALESCE(UPPER(e.quit), 'N') NOT IN ('Y', '1', 'TRUE', 'LEFT', 'QUIT', 'RESIGNED', 'TERMINATED')
+                            AND (EXISTS (SELECT 1 FROM attendance a WHERE a.emp_code = e.emp_code AND a.last_present >= ?)
+                                 OR EXISTS (SELECT 1 FROM payroll p WHERE p.emp_code = e.emp_code AND p.period_end >= ?))
+                          ORDER BY e.department, e.name""", (present_since, paid_since)).fetchall()
     out = [[c, n, dept, desg, sec, round(sal or 0)] for c, n, dept, desg, sec, sal in rows]
-    return Report("Employees (active)", cols, out, [f"{len(out)} active employees."])
+    return Report("Employees (active)", cols, out, [f"{len(out)} employees working now."])

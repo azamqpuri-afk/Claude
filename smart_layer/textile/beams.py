@@ -30,6 +30,15 @@ def settings(cfg):
     return {**DEFAULTS, **cfg["beams"]}
 
 
+def is_own_sizer(sizer, own_names):
+    """True if this party is one of the mill's own sizing units. Matched as a substring both ways, so a short
+    config name ('Hiba') still matches the full party name on the gate pass ('HIBA FABRICS') and vice versa."""
+    s = (sizer or "").strip().lower()
+    if not s:
+        return False
+    return any(o and (o in s or s in o) for o in (str(n).strip().lower() for n in own_names))
+
+
 def learned_shrinkage(con, default_pct, lo=0.01, hi=0.20):
     """Shrinkage (warp length -> fabric) learned from genuinely finished beams: the median per contract, per
     quality (construction), and mill-wide. Beams still on a loom, and any outside the sane band `lo`..`hi`
@@ -147,7 +156,7 @@ def sizer_ledger(con, cfg, as_of=None):
     not a shortage). Net out is the real exposure; 'Number mismatch' is just book-keeping to reconcile."""
     as_of = as_of or date.today()
     t = settings(cfg)
-    skip = {s.lower() for s in t["own_beam_sizers"]}
+    own = t["own_beam_sizers"]
     # an empty beam sent to a sizer comes back EITHER empty again OR wound as a sized beam - both mean "returned".
     moves = con.execute("""SELECT party_name, beam_no, move_type, move_date FROM beam_movements
                            WHERE move_type IN ('empty_to_sizer', 'empty_from_sizer', 'sized_received') AND move_date <= ?
@@ -155,7 +164,7 @@ def sizer_ledger(con, cfg, as_of=None):
     sent, back = defaultdict(Counter), defaultdict(Counter)   # sizer -> Counter(beam_no)
     sent_date = defaultdict(dict)                             # sizer -> beam -> last date sent
     for sizer, beam, mt, d in moves:
-        if (sizer or "").lower() in skip:
+        if is_own_sizer(sizer, own):
             continue
         if mt == "empty_to_sizer":
             sent[sizer][beam] += 1

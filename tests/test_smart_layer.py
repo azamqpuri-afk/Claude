@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT / "demo"))
 import build_demo_erp  # noqa: E402
 from smart_layer import audit, autoprofile, config, erp, report_registry, schema, store  # noqa: E402
 from smart_layer.ask import Assistant  # noqa: E402
-from smart_layer.reports import production, stock  # noqa: E402
+from smart_layer.reports import payroll, production, stock  # noqa: E402
 
 END = date(2026, 10, 2)
 
@@ -99,6 +99,41 @@ def test_reports(env):
     s = stock.stock_status(con, cfg, END)
     assert [r for r in s.rows if r[2] == "EL-002"][0][0] == "OUT OF STOCK"
     assert any(r[1] == "EL-002" for r in stock.reorder_list(con, cfg, END).rows)   # Code is now column 1
+
+
+def test_fabric_stock_history_is_captured_from_the_erp(env):
+    _, con = env
+    # the month-end fabric trend is read from the ERP's own view as-of each month-end, stored at sync time
+    n = con.execute("SELECT COUNT(*) FROM fabric_stock_history").fetchone()[0]
+    assert n > 0
+    months = [m for (m,) in con.execute("SELECT month FROM fabric_stock_history")]
+    assert all(len(m) == 7 and m[4] == "-" for m in months)       # YYYY-MM keys
+
+
+def test_fabric_chart_uses_stored_history_not_recompute(env):
+    cfg, con = env
+    d = web_data.build(con, cfg, END)
+    pts = d["charts"]["fabric_stock"]
+    stored = dict(con.execute("SELECT month, meters FROM fabric_stock_history"))
+    for p in pts:
+        assert round(stored[p["month"]]) == p["meters"]           # chart == stored ERP figure, never recomputed
+
+
+def test_is_own_sizer_matches_as_substring():
+    from smart_layer.textile.beams import is_own_sizer
+    assert is_own_sizer("HIBA FABRICS", ["Hiba"])
+    assert is_own_sizer("Hiba", ["HIBA FABRICS"])
+    assert not is_own_sizer("AL NOOR SIZING", ["Hiba"])
+    assert not is_own_sizer("", ["Hiba"])
+
+
+def test_open_loans_use_amount_minus_repaid(env):
+    cfg, con = env
+    rep = payroll.loans(con, cfg, END)
+    rows = rep.rows
+    assert rep.columns[-1] == "Balance"
+    for r in rows:
+        assert r[-1] == r[4] - r[5] and r[-1] > 1                 # Balance = Amount - Repaid, and only open loans listed
 
 
 def test_new_zero_reports_only_newly_out_of_stock(env):

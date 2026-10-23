@@ -38,15 +38,11 @@ def _chart_series(con, as_of):
     # receivables (what parties owe us) and payables (what we owe suppliers) on one chart, like Sales vs Expenses
     receivables = [{"month": me.strftime("%Y-%m"), "amount": _grp_to("customer", me),
                     "payable": _grp_to("supplier", me, -1)} for me in mes]
-    fabric_stock = []
-    for me in mes:
-        # fabric in the mill = sum of positive per-contract stock (woven - dispatched), the same definition as the
-        # stock tile, so the trend never shows a phantom negative from one contract's grade/keying error.
-        woven = dict(con.execute("SELECT contract_no, SUM(meters) FROM loom_production WHERE prod_date <= ? GROUP BY contract_no", (me.isoformat(),)))
-        disp = dict(con.execute("""SELECT contract_no, SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters)
-                                   FROM fabric_dispatches WHERE dispatch_date <= ? GROUP BY contract_no""", (me.isoformat(),)))
-        pos = sum(max((woven.get(c, 0) or 0) - (disp.get(c, 0) or 0), 0) for c in set(woven) | set(disp))
-        fabric_stock.append({"month": me.strftime("%Y-%m"), "meters": round(pos)})
+    # Fabric stock trend = the ERP's own month-end figure, captured as-of each month-end at sync time
+    # (fabric_stock_history). We show exactly what the ERP's stock view says; nothing is recomputed here.
+    hist = dict(con.execute("SELECT month, meters FROM fabric_stock_history"))
+    fabric_stock = [{"month": me.strftime("%Y-%m"), "meters": round(hist[me.strftime("%Y-%m")])}
+                    for me in mes if me.strftime("%Y-%m") in hist]
     # cash & bank: a running daily balance over the last 30 days
     start = as_of - timedelta(days=29)
 
@@ -156,16 +152,26 @@ def _yarn_fabric(con, cfg, as_of):
         b = int(qty / cpb)                 # TRUNC toward zero, like the report's CF_QTYFORMULA
         return round(b), round(qty - b * cpb)
 
-    weft, sizing = [], []
-    wb = wc = sb = sc = 0
+    # counts that are the same yarn commercially can be shown as one line (config [yarn].combine_counts, each entry
+    # [label, count, count, ...]) - e.g. ["52/1 & 54/1 CTN", "52/1 CTN", "54/1 CTN"]. Totals are summed, never recomputed.
+    combine = {}
+    for grp in cfg["yarn"].get("combine_counts", []):
+        if isinstance(grp, (list, tuple)) and len(grp) >= 2:
+            for c in grp[1:]:
+                combine[c] = grp[0]
+    agg_rows = {}                                        # (section, party, count, brand, cone_pbag) -> cones
     for section, party, cnt, brand, cpb, qty in con.execute(
             'SELECT section, party_name, "count" AS c, brand, cone_pbag, qty_cones FROM yarn_stock'):
-        qty = qty or 0
+        cnt = combine.get(cnt, cnt)
+        key = (section, (party or "—") if section == "sizing" else None, cnt, brand, round(cpb or 0))
+        agg_rows[key] = agg_rows.get(key, 0.0) + (qty or 0)
+    weft, sizing = [], []
+    wb = wc = sb = sc = 0
+    for (section, party, cnt, brand, cpb), qty in agg_rows.items():
         b, c = split(qty, cpb)
-        row = {"count": cnt, "brand": brand, "cone_pbag": round(cpb or 0),
-               "bags": b, "cones": c, "qty_cones": round(qty)}
+        row = {"count": cnt, "brand": brand, "cone_pbag": cpb, "bags": b, "cones": c, "qty_cones": round(qty)}
         if section == "sizing":
-            row["party"] = party or "—"
+            row["party"] = party
             sizing.append(row); sb += b; sc += c
         else:
             weft.append(row); wb += b; wc += c

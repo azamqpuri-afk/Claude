@@ -61,6 +61,18 @@ lookback_days = 90
 excess_kg = 400
 sizing_loss_pct = 6
 
+[beams]
+# The mill's OWN sizing units - empty beams sent to these are never flagged as "not back".
+# Matched as a substring, so a short name here matches the full party name on the gate pass
+# (e.g. "Hiba" matches "HIBA FABRICS").
+# own_beam_sizers = ["Hiba"]
+
+[yarn]
+# Yarn counts that are the same yarn commercially and should appear as ONE line in the
+# count-wise stock list. Each entry is [display label, count, count, ...]. Totals are summed,
+# never recomputed.
+# combine_counts = [["52/1 & 54/1 CTN", "52/1 CTN", "54/1 CTN"]]
+
 [ask]
 model = "claude-opus-5-5"
 effort = "high"
