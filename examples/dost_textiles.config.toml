@@ -151,6 +151,10 @@ weft_closing_count = 53
 lookback_days = 90
 excess_kg = 400                    # weft issued above need over the window
 sizing_loss_pct = 6
+# Yarns that are NOT the fabric's weft (selvedge / border / catch-cord) - left out of the weft-mismatch check.
+# dnr (denier filament) and polyester here are catch-cord / selvedge at Dost, not a fabric weft; if any Dost
+# contract ever runs polyester as its real weft, remove "polyester" so genuine mismatches are still caught.
+non_weft_keywords = ["kinara", "leno", "selvedge", "selved", "border", "dnr", "polyester"]
 
 [serve]
 host = "0.0.0.0"                   # reachable from phones on the mill network

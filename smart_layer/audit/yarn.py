@@ -19,9 +19,13 @@ def run(a):
         return
     flags, weekly, sizing, t = analyse(a.con, a.cfg, d0, d1)
     for f in flags:
-        a.add("ACTION" if len(f["reasons"]) >= 2 else "WATCH", "Yarn", f"yarn-{f['contract']}-{f['date']}",
-              f"Contract {f['contract']} ({f['party'] or '?'}) {f['date']}: {f['kg']:,.0f} kg weft issued - check",
-              "; ".join(f["reasons"]))
+        fid = f.get("key") or f"yarn-{f['contract']}-{f['date']}"      # stable id so a mismatch is not re-pushed daily
+        when = (f["first"] if f["first"] == f["last"] else f"{f['first']} to {f['last']}") if f.get("first") else f["date"]
+        if f.get("kind") == "weft_differs":
+            headline = f"Contract {f['contract']} ({f['party'] or '?'}) {when}: weft count does not match the contract"
+        else:
+            headline = f"Contract {f['contract']} ({f['party'] or '?'}) {when}: {f['kg']:,.0f} kg weft issued - check"
+        a.add("ACTION" if len(f["reasons"]) >= 2 else "WATCH", "Yarn", fid, headline, "; ".join(f["reasons"]))
     for s in sizing:
         if s["loss_pct"] > float(t["sizing_loss_pct"]):
             a.add("WATCH", "Yarn", f"sizing-{s['sizer']}-{s['contract']}-{round(s['loss_pct'])}",

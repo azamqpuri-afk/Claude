@@ -60,10 +60,17 @@ def analyse(con, cfg, d0, d1):
         n = (name or "").lower()
         return any(k in n for k in non_weft)
 
+    # readable yarn name per count group (from the movements), so messages name the yarn ("40/1 CTN"), not a number.
+    group_name = {}
+    for code, nm in con.execute("SELECT DISTINCT yarn_code, yarn_name FROM yarn_movements"):
+        g = method.group(code)
+        if g is not None and nm and g not in group_name:
+            group_name[g] = nm
+
     issues, needed, woven = defaultdict(float), defaultdict(float), defaultdict(float)
     lines = defaultdict(list)
     members = defaultdict(set)
-    weft_differs = {}                               # contract -> {issued names, the contract's own weft, kg}
+    weft_differs = {}                               # (contract, issued group) -> issued name, contract weft name, kg, first/last issue date
     for d, cno, yarn, yname, mt, kg, doc, ea, user in con.execute("""
             SELECT move_date, contract_no, yarn_code, yarn_name, move_type, kg, doc_no, entered_at, entered_by FROM yarn_movements
             WHERE move_type IN ('to_looms', 'from_looms') AND move_date BETWEEN ? AND ?""", (start.isoformat(), d1.isoformat())):
@@ -71,12 +78,14 @@ def analyse(con, cfg, d0, d1):
         if is_non_weft(nm):
             continue                                # selvedge / kinara is not weft - keep it out of the weft check
         # compare each issue to ITS OWN contract's weft count; a different count is a booking mismatch, not pilferage
-        cwg, cwn = cinfo.get(cno, (None, None, None, None))[2], cinfo.get(cno, (None, None, None, None))[3]
+        cwg = cinfo.get(cno, (None, None, None, None))[2]
         ig = method.group(yarn)
         if cwg is not None and ig is not None and ig != cwg:
             if mt == "to_looms":
-                w = weft_differs.setdefault(cno, {"issued": set(), "contract": cwn, "kg": 0.0})
-                w["issued"].add(nm); w["kg"] += kg or 0
+                cw_name = group_name.get(cwg) or str(cwg)
+                w = weft_differs.setdefault((cno, ig), {"issued": nm, "contract": cw_name, "kg": 0.0, "first": d, "last": d})
+                w["kg"] += kg or 0
+                w["first"], w["last"] = min(w["first"], d), max(w["last"], d)
             continue                                # excluded from the kg comparison (would be apples-to-oranges)
         a = account(cno, yarn)
         members[a].add(cno)
@@ -138,12 +147,13 @@ def analyse(con, cfg, d0, d1):
             if why:
                 flags.append(dict(contract=label(a), party=party, date=d, kg=tot, reasons=list(dict.fromkeys(why))))
 
-    # one "weft differs from contract" flag per contract (not per day), with the yarn NAMES, not codes.
-    for cno, w in weft_differs.items():
+    # one "weft differs from contract" flag per contract + yarn (not per day): a STABLE id so it is not re-pushed
+    # every day, dated with the actual first-last issue dates (not the report date), and naming the yarns.
+    for (cno, ig), w in weft_differs.items():
         party = cinfo.get(cno, (None, None, None, None))[1]
-        issued = ", ".join(sorted(w["issued"]))
-        flags.append(dict(contract=str(cno), party=party, date=d1.isoformat(), kg=round(w["kg"]),
-                          reasons=[f"weft {issued} issued, but contract {cno} calls for {w['contract']} - "
+        flags.append(dict(kind="weft_differs", key=f"weftdiff-{cno}-{ig}", contract=str(cno), party=party,
+                          date=w["first"], first=w["first"], last=w["last"], kg=round(w["kg"]),
+                          reasons=[f"weft {w['issued']} issued, but contract {cno} calls for {w['contract']} - "
                                    f"check which count is right"]))
 
     # Sizing loss per sizer and contract over the contract's whole history (so beams are matched with the yarn
@@ -171,9 +181,10 @@ def analyse(con, cfg, d0, d1):
 
 
 def episodes(flags, gap_days=3):
-    """Consecutive flagged days of one contract merged into one episode (worst day's reasons kept)."""
+    """Consecutive flagged days of one contract merged into one episode (worst day's reasons kept).
+    Weft-differs flags already carry their own first-last issue span, so they pass through as one episode each."""
     out = []
-    for f in sorted(flags, key=lambda f: (str(f["contract"]), f["date"])):
+    for f in sorted((f for f in flags if f.get("kind") != "weft_differs"), key=lambda f: (str(f["contract"]), f["date"])):
         e = out[-1] if out else None
         if e and e["contract"] == f["contract"] and (date.fromisoformat(f["date"]) - date.fromisoformat(e["last"])).days <= gap_days:
             e["last"], e["kg"], e["days"] = f["date"], e["kg"] + f["kg"], e["days"] + 1
@@ -185,6 +196,8 @@ def episodes(flags, gap_days=3):
     for e in out:
         if e["days"] > 1:
             e["why"] = f"{e['days']} days flagged; worst: {e['why']}"
+    out += [dict(contract=f["contract"], party=f["party"], first=f["first"], last=f["last"], kg=f["kg"], days=1,
+                 why="; ".join(f["reasons"]), n=len(f["reasons"])) for f in flags if f.get("kind") == "weft_differs"]
     return sorted(out, key=lambda e: (-e["n"], -e["days"], e["first"]))
 
 
