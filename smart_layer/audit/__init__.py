@@ -40,8 +40,9 @@ def pct(values, p):
 
 
 class Audit:
-    def __init__(self, con, cfg, d0, d1):
+    def __init__(self, con, cfg, d0, d1, persist=False):
         self.con, self.cfg, self.d0, self.d1 = con, cfg, d0, d1
+        self.persist = persist                           # only the daily audit writes the edit-detection snapshot
         self.t = cfg["audit"]
         self.cur = cfg["company"]["currency"]
         self.findings = []
@@ -122,9 +123,9 @@ def is_urgent(f, audit_cfg=None):
     return "negative" in f.title.lower()
 
 
-def run(con, cfg, d0, d1=None):
+def run(con, cfg, d0, d1=None, persist=False):
     from . import beams, edits, finance, monitor, store, weaving, yarn
-    a = Audit(con, cfg, d0, d1 or d0)
+    a = Audit(con, cfg, d0, d1 or d0, persist=persist)
     for rules in (finance, store, weaving, yarn, beams, monitor, edits):
         rules.run(a)
     return a

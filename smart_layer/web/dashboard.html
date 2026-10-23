@@ -489,7 +489,7 @@ function render(){
     tile("🧵 Meters woven", num(k.meters)+' <span class="cur">m</span>', "today · <b>"+num(k.woven_month)+" m</b> this month","accent") +
     tile("⚙️ Efficiency", (k.eff!=null?k.eff+"%":"–"), "today") +
     tile("📦 Fabric in stock", num(yf.fabric_m)+' <span class="cur">m</span>', "<b>"+num(yf.fabric_lots)+"</b> lots") +
-    tile("🧶 Yarn in godown", num(yf.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(yf.yarn_hand_kg)+" kg</b> · "+num(yf.yarn_counts)+" counts") +
+    tile("🧶 Yarn in godown", num(yf.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(yf.yarn_hand_cones)+" cones</b> loose · "+num(yf.yarn_counts)+" counts") +
     tile("🚚 Dispatched", num(k.dispatched_month)+' <span class="cur">m</span>', "this month");
   renderWeaving(); renderFinanceTiles(); renderYFTiles();
   buildCharts(curTab);

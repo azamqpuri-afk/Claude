@@ -34,6 +34,7 @@ ENTITY_LABELS = {
     "contracts": "Contracts", "yarn_movements": "Yarn movements", "fabric_dispatches": "Fabric dispatches",
     "beams": "Beams", "beam_movements": "Beam movements", "loom_monitor": "Loom monitor",
     "employees": "Employees", "payroll": "Payroll", "employee_loans": "Employee loans", "gate_passes": "Gate passes",
+    "yarn_stock": "Yarn stock (count-wise)", "fabric_stock": "Fabric stock", "attendance": "Attendance (last present)",
 }
 
 

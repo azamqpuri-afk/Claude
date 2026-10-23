@@ -83,8 +83,11 @@ def contract_rows(con, method, as_of):
 def _yarn_label(method, code, names):
     for g in method.cfg["yarn_groups"]:
         if str(g[0]) == str(code) and len(g) > 1:
-            return " + ".join(str(names.get(str(c), c)) for c in g)
-    return names.get(code, code)
+            # name every member we can; never show a bare numeric code (e.g. "52/1 CTN + 18") - drop unknowns.
+            parts = [names[str(c)] for c in g if str(c) in names and names[str(c)] != str(c)]
+            if parts:
+                return " + ".join(dict.fromkeys(parts))
+    return names.get(str(code), names.get(code, code))
 
 
 def contract_closing(con, cfg, as_of=None, party=None):

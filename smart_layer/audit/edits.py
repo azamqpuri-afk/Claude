@@ -33,7 +33,11 @@ def run(a):
         FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
         WHERE p.prod_date >= date(?, '-60 days') GROUP BY p.prod_date, p.loom_code, p.shift, p.quality""", a.window[1])}
     old = get_state(a.con, "edit_snapshot")
-    set_state(a.con, "edit_snapshot", {"taken": now, "issues": issues, "prod": prod})
+    # ONLY the daily audit updates the baseline. Dashboard loads and the 5-minute urgent check compare against it
+    # read-only - otherwise the snapshot would be rewritten constantly (and opening an old date would wipe it,
+    # making the next daily audit report everything since as "deleted").
+    if a.persist:
+        set_state(a.con, "edit_snapshot", {"taken": now, "issues": issues, "prod": prod})
     if not old:
         return
     since = old.get("taken", now)

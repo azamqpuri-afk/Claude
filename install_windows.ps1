@@ -106,6 +106,13 @@ Register-ScheduledTask -TaskName "Smart Layer Daily" -Action $daily -Principal $
     -Trigger (New-ScheduledTaskTrigger -Daily -At $DailyAt) `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 3)) | Out-Null
 
+# Live refresh: a quick pull of the fast-changing data every 5 minutes, so the dashboard stays current.
+$live = New-ScheduledTaskAction -Execute $ps -WorkingDirectory $PSScriptRoot `
+    -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\run_live.ps1`""
+Register-ScheduledTask -TaskName "Smart Layer Live" -Action $live -Principal $principal -Force `
+    -Trigger (New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)) `
+    -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) | Out-Null
+
 $dash = New-ScheduledTaskAction -Execute $ps -WorkingDirectory $PSScriptRoot `
     -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$PSScriptRoot\run_dashboard.ps1`""
 Register-ScheduledTask -TaskName "Smart Layer Dashboard" -Action $dash -Principal $principal -Force `
@@ -114,7 +121,7 @@ Register-ScheduledTask -TaskName "Smart Layer Dashboard" -Action $dash -Principa
                -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)) | Out-Null
 Stop-ScheduledTask -TaskName "Smart Layer Dashboard" -ErrorAction SilentlyContinue
 Start-ScheduledTask -TaskName "Smart Layer Dashboard"
-Say "  Tasks 'Smart Layer Daily' and 'Smart Layer Dashboard' installed" Green
+Say "  Tasks 'Smart Layer Daily', 'Smart Layer Live' and 'Smart Layer Dashboard' installed" Green
 
 # ---- 6. firewall -----------------------------------------------------------------------------
 $port = (& $python -c "from smart_layer import config; print(config.load('config.toml')['serve'].get('port', 8080))").Trim()

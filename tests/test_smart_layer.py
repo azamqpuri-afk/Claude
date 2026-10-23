@@ -582,18 +582,27 @@ def test_beam_audit_and_sizer_ledger(env):
     assert "BM-X9" in led["Rehman Sizing"][5]                            # the unaccounted beam is named
 
 
+def test_non_daily_audit_does_not_rewrite_edit_snapshot(env):
+    # a dashboard load or the 5-minute urgent check (persist defaults False) must NOT move the edit baseline
+    cfg, con = env
+    store.set_state(con, "edit_snapshot", {"taken": "MARKER", "issues": {}, "prod": {}})
+    audit.run(con, cfg, END)
+    assert store.get_state(con, "edit_snapshot")["taken"] == "MARKER"
+    con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
+
+
 def test_edits_detected_between_audits(env):
     cfg, con = env
     store.set_state(con, "edit_snapshot", None)
     con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
-    audit.run(con, cfg, END)                                           # first run: snapshot only
+    audit.run(con, cfg, END, persist=True)                             # first daily run: snapshot only
     doc, item = con.execute("""SELECT doc_no, item_code FROM store_issues
                                WHERE qty > 2 AND doc_date BETWEEN '2026-07-01' AND '2026-09-01' LIMIT 1""").fetchone()
     con.execute("UPDATE store_issues SET qty = qty + 1 WHERE doc_no = ? AND item_code = ?", (doc, item))
     d, loom = con.execute("SELECT prod_date, loom_code FROM loom_production WHERE prod_date BETWEEN '2026-09-01' AND '2026-09-20' LIMIT 1").fetchone()
     con.execute("UPDATE loom_production SET meters = meters + 40 WHERE prod_date = ? AND loom_code = ?", (d, loom))
     try:
-        found = [f for f in audit.run(con, cfg, END).findings if f.section == "Edits"]
+        found = [f for f in audit.run(con, cfg, END, persist=True).findings if f.section == "Edits"]
         assert any(f.severity == "CONFIRMED" and doc in f.title and "quantity changed" in f.title for f in found)
         assert any(f.severity == "WATCH" and "production of" in f.title and "changed" in f.title for f in found)
     finally:
@@ -704,7 +713,9 @@ def test_dashboard_has_finance_weaving_charts(env):
     assert yf["weft_stock"] and all({"count", "brand", "cone_pbag", "bags", "cones"} <= set(r) for r in yf["weft_stock"])
     assert yf["weft_total"]["bags"] == sum(r["bags"] for r in yf["weft_stock"])
     assert yf["weft_total"]["cones"] == sum(r["cones"] for r in yf["weft_stock"])
-    assert yf["yarn_hand_bags"] == yf["weft_total"]["bags"]
+    # godown bags roll the loose cones in, so they are at least the whole-bag total
+    assert yf["yarn_hand_bags"] >= yf["weft_total"]["bags"]
+    assert yf["yarn_counts"] == len({r["count"] for r in yf["weft_stock"]})
     json.dumps(d)
 
 

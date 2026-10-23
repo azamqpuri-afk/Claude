@@ -254,7 +254,8 @@ ENTITIES += (
          C("meters", "REAL", "Meters counted by the monitor", True),
          C("efficiency_pct", "REAL", "Efficiency by the monitor"),
          C("rpm", "REAL", "Average speed"),
-         C("stops", "REAL", "Number of stops")),
+         C("stops", "REAL", "Number of stops"),
+         C("shift_sec", "REAL", "Total shift time in this reading (seconds) - the weight for a time-based efficiency")),
         date_column="read_date",
     ),
     Entity(

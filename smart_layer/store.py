@@ -75,11 +75,18 @@ FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # c
                 "ledger_entries",                                            # party ledgers show the opening (old-ERP) balance and full running balance
                 "employee_loans")                                            # a loan given years ago can still be open; its balance = amount - all-time salary deductions
 
+# The 5-minute live refresh touches ONLY these fast-changing, window-safe entities. Everything else (ledgers and
+# other entities that carry an all-time "opening" row, attendance, the month-end fabric history) is left to the
+# daily full sync: windowing an entity whose query also returns opening rows would re-insert those opening rows
+# every run (they fall outside the delete window), duplicating balances. Snapshots here are replaced wholesale.
+LIVE_ENTITIES = ("loom_production", "loom_monitor", "gate_passes", "stock_balances",
+                 "store_issues", "store_receipts", "yarn_stock", "fabric_stock")
 
-def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HISTORY):
+
+def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HISTORY, fabric_history=True):
     window = date.today() - timedelta(days=int(history_days))
     now = datetime.now().isoformat(sep=" ", timespec="seconds")
-    result = {}
+    result, failed = {}, []
     for e in schema.ENTITIES:
         if entities and e.name not in entities:
             continue
@@ -92,6 +99,7 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
         except Exception as exc:                          # one bad mapping must not lose every other entity's data
             log(f"  {e.name:<17} FAILED ({str(exc).splitlines()[0][:80]}) - kept the previous data")
             result[e.name] = None
+            failed.append(e.name)
             continue
         with con:
             if e.date_column:
@@ -104,7 +112,11 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
                         (e.name, now, since.isoformat() if e.date_column else None, len(rows)))
         result[e.name] = len(rows)
         log(f"  {e.name:<17} {len(rows):>8,} rows")
-    _sync_fabric_history(con, erp, now, log, entities)
+    if fabric_history:
+        _sync_fabric_history(con, erp, now, log, entities)
+    if failed:
+        log(f"  WARNING: {len(failed)} data set(s) did not sync and still hold OLD data: {', '.join(failed)}")
+    result["_failed"] = failed
     return result
 
 

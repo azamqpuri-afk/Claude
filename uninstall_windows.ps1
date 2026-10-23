@@ -2,7 +2,7 @@
 # The folder (settings, local data, reports) is left as it is; delete it yourself if no longer needed.
 # Run as Administrator.
 
-foreach ($t in "Smart Layer Dashboard", "Smart Layer Daily") {
+foreach ($t in "Smart Layer Dashboard", "Smart Layer Daily", "Smart Layer Live") {
     Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
     Unregister-ScheduledTask -TaskName $t -Confirm:$false -ErrorAction SilentlyContinue
 }

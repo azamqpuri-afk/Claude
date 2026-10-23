@@ -57,5 +57,6 @@ Filename: "http://localhost:8080"; Description: "Open the dashboard (do this aft
 [UninstallRun]
 ; Remove the scheduled tasks and the firewall rule (keeps the folder, data and licence).
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Daily"" /F";     Flags: runhidden; RunOnceId: "DelDaily"
+Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Live"" /F";      Flags: runhidden; RunOnceId: "DelLive"
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Dashboard"" /F"; Flags: runhidden; RunOnceId: "DelDash"
 Filename: "powershell.exe"; Parameters: "-NoProfile -Command ""Get-NetFirewallRule -DisplayName 'Smart Layer Dashboard' -ErrorAction SilentlyContinue | Remove-NetFirewallRule"""; Flags: runhidden; RunOnceId: "DelFw"

@@ -94,15 +94,16 @@ def cmd_autoprofile(cfg, args):
 
 def cmd_sync(cfg, args):
     e = _open_erp(cfg)
-    if args.live:                                    # the 5-minute refresh: every module, only the last few days, no
-        days = int(cfg["sync"].get("live_days", 3))  # full-history re-read - quick and gentle on the ERP
-        print(f"Live sync from {e.mapping.name} (last {days} days, all modules)")
-        store.sync(_store(cfg), e, days, entities=args.entities, full_history=())
-        return 0
+    if args.live:                                    # the 5-minute refresh: only the fast, window-safe entities
+        days = int(cfg["sync"].get("live_days", 3))  # (LIVE_ENTITIES) - ledgers, attendance and month-end history
+        ent = [x for x in args.entities if x in store.LIVE_ENTITIES] if args.entities else list(store.LIVE_ENTITIES)
+        print(f"Live sync from {e.mapping.name} (last {days} days: {', '.join(ent)})")  # are left to the daily sync
+        res = store.sync(_store(cfg), e, days, entities=ent, full_history=(), fabric_history=False)
+        return 1 if res.get("_failed") else 0
     print(f"Syncing from {e.mapping.name} (last {cfg['sync']['history_days']} days; full history for yarn and fabric)")
-    store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities,
-               full_history=cfg["sync"].get("full_history", store.FULL_HISTORY))
-    return 0
+    res = store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities,
+                     full_history=cfg["sync"].get("full_history", store.FULL_HISTORY))
+    return 1 if res.get("_failed") else 0
 
 
 def cmd_report(cfg, args):
@@ -129,7 +130,8 @@ def cmd_audit(cfg, args):
         d0, d1 = date(y, m, 1), date(y, m, calendar.monthrange(y, m)[1])
     else:
         d0 = d1 = date.fromisoformat(args.date) if args.date else date.today() - timedelta(days=1)
-    a = audit.run(_store(cfg), cfg, d0, d1)
+    persist = bool(getattr(args, "push", False) and not getattr(args, "urgent", False))  # only the daily summary
+    a = audit.run(_store(cfg), cfg, d0, d1, persist=persist)
     rep = a.report()
     print(rep.text())
     if args.csv:

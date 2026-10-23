@@ -36,12 +36,15 @@ def store_consumption(con, cfg, as_of=None, months=12):
             ledger[month] = amt or 0
     issued = dict(con.execute("""SELECT strftime('%Y-%m', doc_date), SUM(amount) FROM store_issues
                                  WHERE doc_date >= ? AND doc_date <= ? GROUP BY 1""", (since, as_of.isoformat())))
+    this_month = f"{as_of.year:04d}-{as_of.month:02d}"       # the running month: its journal is not posted yet
     rows, flagged = [], 0
     for month in sorted(set(ledger) | set(issued), reverse=True):
         a, b = ledger.get(month, 0.0), issued.get(month, 0.0) or 0.0
         diff = a - b
         note = ""
-        if abs(diff) > limit:
+        if month == this_month:
+            note = "current month - not closed yet, journal still to be posted"
+        elif abs(diff) > limit:
             flagged += 1
             note = ("journal lower than the store issued - a consumption journal may be missing" if diff < 0
                     else "journal higher than the store issued - posted twice, or issues missing in the store")

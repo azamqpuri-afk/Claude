@@ -74,8 +74,10 @@ def _weaving(con, as_of):
         SELECT p.loom_code, {EFF_AGG} AS eff, SUM(p.meters) AS m, MAX(p.prod_date) AS last
         FROM loom_production p WHERE p.prod_date BETWEEN ? AND ? GROUP BY p.loom_code""", (start, d))}
     today_m = dict(con.execute("SELECT loom_code, SUM(meters) FROM loom_production WHERE prod_date = ? GROUP BY loom_code", (d,)))
+    # scoreboard efficiency is weighted by SHIFT TIME (shift_sec), not meters - a loom running slow cloth still has
+    # a full shift; weighting by meters would understate it. Falls back to meters only if shift_sec is absent.
     scb = {r[0]: r for r in con.execute("""
-        SELECT loom_code, SUM(efficiency_pct * meters) / NULLIF(SUM(meters), 0) AS eff,
+        SELECT loom_code, SUM(efficiency_pct * COALESCE(shift_sec, meters)) / NULLIF(SUM(COALESCE(shift_sec, meters)), 0) AS eff,
                SUM(meters) AS m, AVG(rpm) AS rpm
         FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (start, d))}
     scb_avail = bool(scb)
@@ -97,7 +99,7 @@ def _weaving(con, as_of):
     # shed-wide 30-day averages
     shed_erp = _one(con, f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d)
     real_only = "AND loom_code IN (SELECT DISTINCT loom_code FROM loom_production)"   # drop phantom scoreboard-only looms
-    shed_scb = _one(con, f"""SELECT SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
+    shed_scb = _one(con, f"""SELECT SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0)
                             FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", start, d) if scb_avail else None
     ndays = max((as_of - date.fromisoformat(start)).days + 1, 1)
     ag = con.execute("SELECT SUM(COALESCE(first_quality_m,0)), SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", (start, d)).fetchone()
@@ -111,7 +113,7 @@ def _weaving(con, as_of):
             "scb_meters_total": round(scb_tot) if scb_avail else None}
     # 30-day efficiency trend, ERP vs scoreboard
     erp_day = dict(con.execute(f"SELECT prod_date, {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ? GROUP BY prod_date", (start, d)))
-    scb_day = dict(con.execute(f"""SELECT read_date, SUM(efficiency_pct*meters)/NULLIF(SUM(meters),0)
+    scb_day = dict(con.execute(f"""SELECT read_date, SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0)
                                   FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only} GROUP BY read_date""", (start, d))) if scb_avail else {}
     trend = [{"date": (as_of - timedelta(days=29 - i)).isoformat(),
               "erp": round(erp_day[x], 1) if (x := (as_of - timedelta(days=29 - i)).isoformat()) in erp_day and erp_day[x] is not None else None,
@@ -177,13 +179,18 @@ def _yarn_fabric(con, cfg, as_of):
             weft.append(row); wb += b; wc += c
     weft.sort(key=lambda r: (str(r["count"]), r["cone_pbag"], str(r["brand"])))
     sizing.sort(key=lambda r: (str(r.get("party") or ""), str(r["count"]), r["cone_pbag"]))
+    # godown tile is driven by the count-wise data (what the ERP shows), not the old kg method: total bags INCLUDE
+    # the loose cones (rounded once from cones/bag), and "counts" is the number of distinct yarn counts in stock.
+    weft_bags_total = round(sum(r["qty_cones"] / (r["cone_pbag"] or 1) for r in weft))
+    sizer_bags_total = round(sum(r["qty_cones"] / (r["cone_pbag"] or 1) for r in sizing))
+    weft_counts = len({r["count"] for r in weft})
 
-    return {"yarn_hand_kg": round(hand_kg), "yarn_hand_bags": wb,
-            "yarn_sizer_kg": round(sizer_kg), "yarn_sizer_bags": sb,
+    return {"yarn_hand_kg": round(hand_kg), "yarn_hand_bags": weft_bags_total,
+            "yarn_sizer_kg": round(sizer_kg), "yarn_sizer_bags": sizer_bags_total,
             "yarn_hand_cones": wc, "yarn_sizer_cones": sc,
             "weft_stock": weft, "sizing_stock": sizing,
             "weft_total": {"bags": wb, "cones": wc}, "sizing_total": {"bags": sb, "cones": sc},
-            "yarn_counts": counts, "fabric_m": round(fab_total), "fabric_lots": lots,
+            "yarn_counts": weft_counts, "fabric_m": round(fab_total), "fabric_lots": lots,
             "fabric_anomalies": fab_anomalies}
 
 
@@ -303,14 +310,21 @@ def build(con, cfg, as_of=None):
 
 
 def _beam_stock(con):
-    """Counts of beams by where they are now - for the Weaving tab's beam-stock panel."""
+    """Counts of beams by where they are now - for the Weaving tab's beam-stock panel.
+    on_loom / sized_waiting come from the beam snapshot; at_sizer and empty_in_mill are the CURRENT state of each
+    empty beam, read from its latest movement (an empty sent out that came back - empty or sized - is no longer at
+    the sizer; one that came back empty and is still idle is 'empty in mill')."""
     counts = dict(con.execute("SELECT status, COUNT(*) FROM beams GROUP BY status"))
-    # empty beams at sizers aren't in the beams snapshot - read them from the movements (sent out minus come back)
-    at_sizer = con.execute("""SELECT SUM(CASE move_type WHEN 'empty_to_sizer' THEN 1
-                                             WHEN 'empty_from_sizer' THEN -1 ELSE 0 END) FROM beam_movements""").fetchone()[0] or 0
+    last = {}
+    for beam, mt in con.execute("""SELECT beam_no, move_type FROM beam_movements
+            WHERE move_type IN ('empty_to_sizer', 'empty_from_sizer', 'sized_received') AND beam_no IS NOT NULL
+            ORDER BY move_date, rowid"""):
+        last[beam] = mt                                  # ordered, so the last movement for each beam wins
+    at_sizer = sum(1 for mt in last.values() if mt == "empty_to_sizer")      # sent out, not yet back
+    empty_in_mill = sum(1 for mt in last.values() if mt == "empty_from_sizer")  # came back empty, sitting idle
     return {"on_loom": counts.get("on_loom", 0), "sized_waiting": counts.get("sized_waiting", 0),
-            "empty_in_mill": counts.get("empty_in_mill", 0),
-            "at_sizer": max(round(at_sizer), 0) or counts.get("at_sizer", 0),
+            "empty_in_mill": empty_in_mill or counts.get("empty_in_mill", 0),
+            "at_sizer": at_sizer or counts.get("at_sizer", 0),
             "sent_out": counts.get("sent_out", 0)}
 
 
