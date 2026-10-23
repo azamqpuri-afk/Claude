@@ -295,11 +295,12 @@ WHERE m.tt IN ('BEAMS_TO_LOOM', 'BEAMS_FROM_LOOM') AND m.td >= :since
 # Needs [sources.scoreboard] in config.toml: driver = "access", path = 'E:\scoreboard_copy\OLMSDB_copy.mdb', copy_first = true
 [entities.loom_monitor]
 source = "scoreboard"
+# Efficiency is run-time based: (shift time - stop time) / shift time, summed over the loom's records before
+# dividing (a shift can be split across several records). PSHFTDUR and PTSTPDUR are both seconds. This matches the
+# scoreboard exactly and works even when PRPM is 0 (night-shift records often have PRPM = 0, which the old
+# PRPM-weighted formula could not handle - it understated or blanked those looms).
+# NOTE: this runs on MS Access (Jet SQL), which rejects -- comments inside the query, so keep comments out here.
 sql = """
--- Efficiency is run-time based: (shift time - stop time) / shift time, summed over the loom's records before
--- dividing (a shift can be split across several records). PSHFTDUR and PTSTPDUR are both seconds. This matches the
--- scoreboard exactly and works even when PRPM is 0 (night-shift records often have PRPM = 0, which the old
--- PRPM-weighted formula could not handle - it understated or blanked those looms).
 SELECT PDATE AS read_date, PMACH AS loom_code,
        SUM(IIF(PPINCH > 0, PPROD * PDELV / (PPINCH * 39.37), 0)) AS meters,
        IIF(SUM(PSHFTDUR) > 0, 100 * (SUM(PSHFTDUR) - SUM(PTSTPDUR)) / SUM(PSHFTDUR), NULL) AS efficiency_pct,
@@ -341,13 +342,13 @@ LEFT JOIN payroll.segments sg ON sg.seg_id = e.seg_id
 # working now. The employment status flag (EMP_STATUS) is only 'SP'/blank and QUIT is rarely filled, so "working
 # now" is: not quit AND (present in the last ~45 days OR paid in the last ~2 months - which also catches a new
 # joiner who has not had a salary run yet).
-# NOTE: confirm the date column of PAYROLL.IN_OUT on this ERP. It is assumed to be ATT_DATE below; if `check` reports
-# this entity failing, change ATT_DATE here to the real column (no rebuild needed). Active staff then falls back to
-# the paid-in-last-2-periods rule until it is correct, so nothing else breaks.
+# The date column of PAYROLL.IN_OUT on this ERP is DATED (confirmed). If a future ERP names it differently and
+# `check` reports this entity failing, change DATED here to the real column (no rebuild needed) - active staff then
+# falls back to the paid-in-last-2-periods rule until it is correct, so nothing else breaks.
 [entities.attendance]
 sql = """
-SELECT emp_code, MAX(TRUNC(att_date)) AS last_present
-FROM payroll.in_out WHERE attendance_type = 'P' AND att_date >= :since
+SELECT emp_code, MAX(TRUNC(dated)) AS last_present
+FROM payroll.in_out WHERE attendance_type = 'P' AND dated >= :since
 GROUP BY emp_code
 """
 
