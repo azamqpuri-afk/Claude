@@ -39,6 +39,15 @@ DEFAULT_CLOSING = {
     "yarn_groups": [],               # [["6", "18"]]: one yarn booked under several codes (first code names the group)
     "parties": [],                   # [{match = "WAHAB", divisor = 800, ...}]
     "contracts": [],                 # [{contract_no = "46", picks_per_inch = 64, ...}]
+    "wip": True,                     # deduct the party's yarn still in the mill (fabric in stock, warp on looms,
+                                     # sized beams waiting, yarn at a sizer, loose yarn in hand) from the balance
+    "exclude_contracts": [],         # contract numbers to leave out of closing entirely (e.g. different-width runs)
+    "contract_min": 0,               # only include contracts numbered >= this (0 = no lower bound)
+    "contract_max": 0,               # only include contracts numbered <= this (0 = no upper bound)
+    "default_shrinkage_pct": 7,      # warp->fabric shrinkage when none is learned, for the WIP (beams) deduction
+    "at_sizer_min_bags": 3,          # ignore tiny yarn-at-sizer balances below this many bags (rounding noise)
+    "weft_yarn_by_quality": {},      # {"31/34" = "125"}: the weft the sub-quality really uses (the ERP's is blank)
+    "owner_return_meters": {},       # {"70" = 382}: party returns the owner knows of that are not yet in the ERP
 }
 OVERRIDABLE = ("weight_formula", "divisor", "bag_lb", "count_margin", "basis", "rejection_charged_to",
                "wastage_allowance_pct", "warp_crimp_pct", "weft_crimp_pct")

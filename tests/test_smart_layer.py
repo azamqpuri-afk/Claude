@@ -258,26 +258,27 @@ def _closing(cfg, con, **over):
 
 def test_closing_balances_follow_the_mills_method(env):
     cfg, con = env
-    base = _closing(cfg, con)
-    assert set(base) == {"CON-40", "CON-41", "CON-42"}          # CON-39 has nothing left to close: hidden
+    # base: yarn used = yarn in the fabric delivered to the party (WIP deductions off, to isolate the method knobs)
+    base = _closing(cfg, con, wip=False)
+    assert set(base) == {"CON-40", "CON-41", "CON-42"}          # contracts with fabric delivered to their party
     r = base["CON-41"]
     assert r["received_bags"] > r["used_bags"] > 0 and abs(r["balance_bags"] - (r["received_bags"] - r["used_bags"])) < 1e-6
-    # a smaller divisor means more yarn per meter, so less balance left with the mill
-    assert _closing(cfg, con, divisor=800)["CON-41"]["used_bags"] > r["used_bags"]
-    # allowance, basis and rejection rule all change the result
-    assert _closing(cfg, con, wastage_allowance_pct=2)["CON-41"]["used_bags"] == pytest.approx(r["used_bags"] * 1.02)
-    assert _closing(cfg, con, basis="woven")["CON-41"]["meters"] != r["meters"]
-    assert _closing(cfg, con, basis="woven", rejection_charged_to="party")["CON-41"]["meters"] > \
-        _closing(cfg, con, basis="woven")["CON-41"]["meters"]
+    # a smaller divisor means more yarn per meter, so more is charged to the fabric
+    assert _closing(cfg, con, wip=False, divisor=800)["CON-41"]["used_bags"] > r["used_bags"]
+    # the wastage allowance scales the fabric consumption exactly
+    assert _closing(cfg, con, wip=False, wastage_allowance_pct=2)["CON-41"]["used_bags"] == pytest.approx(r["used_bags"] * 1.02)
     # per-party override touches only that party
-    o = _closing(cfg, con, parties=[{"match": "Kohinoor", "divisor": 800}])
+    o = _closing(cfg, con, wip=False, parties=[{"match": "Kohinoor", "divisor": 800}])
     assert o["CON-42"]["used_bags"] > base["CON-42"]["used_bags"] and o["CON-41"]["used_bags"] == r["used_bags"]
     # a party can close the same yarn at its own count
-    pc = _closing(cfg, con, parties=[{"match": "Lahore", "yarns": {"Y40": {"closing_count": 35}}}])
+    pc = _closing(cfg, con, wip=False, parties=[{"match": "Lahore", "yarns": {"Y40": {"closing_count": 35}}}])
     assert pc["CON-41"]["used_bags"] > r["used_bags"] and pc["CON-40"]["used_bags"] == base["CON-40"]["used_bags"]
     # the mill's own formula replaces the standard one
-    f = _closing(cfg, con, weight_formula="threads_per_inch * width_in / 700 / count")
-    assert f["CON-41"]["used_bags"] != r["used_bags"]
+    assert _closing(cfg, con, wip=False, weight_formula="threads_per_inch * width_in / 700 / count")["CON-41"]["used_bags"] != r["used_bags"]
+    # turning WIP on deducts the party's yarn still in the mill, so more is accounted for (higher 'used')
+    assert _closing(cfg, con)["CON-41"]["used_bags"] >= r["used_bags"]
+    # excluding a contract drops it entirely
+    assert "CON-41" not in _closing(cfg, con, wip=False, exclude_contracts=["CON-41"])
 
 
 def test_yarn_groups_share_one_balance(env):

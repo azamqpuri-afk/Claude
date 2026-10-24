@@ -176,12 +176,13 @@ WHERE m.td >= :since
 [entities.fabric_dispatches]
 sql = """
 SELECT TO_CHAR(NVL(v.gp_no, v.trans_no)) AS doc_no, TRUNC(v.trans_date) AS dispatch_date, TO_CHAR(c.cont_no) AS contract_no,
+       v.ac AS party_code, v.deliver_to AS deliver_to,
        CASE v.trans_type WHEN 'GPOUT' THEN 'out' ELSE 'in' END AS direction,
        SUM(NVL(v.a,0) + NVL(v.a2,0)) AS fresh_m, SUM(NVL(v.b,0) + NVL(v.c,0) + NVL(v.cp,0)) AS rejected_m,
        SUM(v.total_mtr) AS meters, SUM(v.amt) AS amount
 FROM dostex.fab_gp_v v JOIN dostex.wc_cont_sub_v s ON s.cont_sub_id = v.cont_sub_id JOIN dostex.contm c ON c.cont_id = s.cont_id
 WHERE v.trans_type IN ('GPOUT', 'GPIN') AND v.trans_date >= :since
-GROUP BY NVL(v.gp_no, v.trans_no), TRUNC(v.trans_date), c.cont_no, v.trans_type
+GROUP BY NVL(v.gp_no, v.trans_no), TRUNC(v.trans_date), c.cont_no, v.ac, v.deliver_to, v.trans_type
 """
 
 # Fabric in stock exactly as the ERP's own FABRIC STOCK report shows it: WV_FAB_STOCK_V is a UNION of opening
