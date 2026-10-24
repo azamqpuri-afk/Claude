@@ -66,13 +66,26 @@ def run(a):
                       f"{cur} {amt:,.0f} -> {cur} {new[3]:,.0f} with no late receipt to explain it",
                       "rate edited by hand? check with the store / accountant")
     taken = since[:10]
-    for key, (d, name, m) in old.get("prod", {}).items():
+
+    def by_day_loom(p):                                # the ERP re-keys production across shift/quality as it finalises,
+        out = {}                                       # so compare at day+loom level - otherwise every reshuffle looks
+        for key, (d, name, m) in p.items():            # like a "deleted" row (~20-28 false findings a day).
+            loom = key.split("|")[1]
+            k = (d, loom)
+            if k in out:
+                out[k][1] += m or 0
+            else:
+                out[k] = [name, m or 0]
+        return out
+
+    oldp, newp = by_day_loom(old.get("prod", {})), by_day_loom(prod)
+    for (d, loom), (name, m) in oldp.items():
         if (datetime.fromisoformat(taken) - datetime.fromisoformat(d)).days <= 3:
             continue                                  # recent days are still being keyed
-        new = prod.get(key)
+        new = newp.get((d, loom))
         if new is None:
-            a.add("WATCH", "Edits", f"proddel-{key}", f"{name} production of {d} ({m:,.0f} m) is no longer in the ERP",
+            a.add("WATCH", "Edits", f"proddel-{d}-{loom}", f"{name} production of {d} ({m:,.0f} m) is no longer in the ERP",
                   "deleted after it was entered")
-        elif abs(new[2] - m) >= 1:
-            a.add("WATCH", "Edits", f"prodchg-{key}-{round(new[2])}", f"{name} production of {d} changed {m:,.0f} -> {new[2]:,.0f} m",
+        elif abs(new[1] - m) >= 5:                    # a few meters of rounding on re-batching is not an edit
+            a.add("WATCH", "Edits", f"prodchg-{d}-{loom}-{round(new[1])}", f"{name} production of {d} changed {m:,.0f} -> {new[1]:,.0f} m",
                   "changed days after it was entered - a correction, or an edit to check")

@@ -88,7 +88,7 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
     now = datetime.now().isoformat(sep=" ", timespec="seconds")
     result, failed = {}, []
     for e in schema.ENTITIES:
-        if entities and e.name not in entities:
+        if entities is not None and e.name not in entities:   # None = every entity; [] = none (never "all")
             continue
         if e.name not in erp.mapping.entities:
             log(f"  {e.name:<17} skipped (not in mapping)")
@@ -101,6 +101,13 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
             result[e.name] = None
             failed.append(e.name)
             continue
+        if e.date_column:
+            # a windowed sync only OWNS rows inside its window; drop any the query returned that fall before it
+            # (e.g. all-time 'opening' rows) - the delete below only clears the window, so inserting them would
+            # duplicate them on every run. The daily full-history sync (since = 1900) keeps everything.
+            di = e.column_names.index(e.date_column)
+            s = since.isoformat()
+            rows = [r for r in rows if r[di] is None or str(r[di]) >= s]
         with con:
             if e.date_column:
                 con.execute(f"DELETE FROM {e.name} WHERE {e.date_column} >= ?", (since.isoformat(),))

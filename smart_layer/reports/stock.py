@@ -117,9 +117,10 @@ def _last_issue(con, code):
                           WHERE item_code = ? AND qty > 0 ORDER BY doc_date DESC, doc_no DESC LIMIT 1""", (code,)).fetchone()
 
 
-def new_zero(con, cfg, as_of=None, remember=True):
+def new_zero(con, cfg, as_of=None, remember=False):
     """Items that were in stock at the previous check and are at zero now.
-    The first run only records the current state (nothing is 'new' yet)."""
+    The first run only records the current state (nothing is 'new' yet). remember=True (only the daily push) moves
+    the baseline forward; dashboard views and manual runs leave it, so opening the report never uses up the alert."""
     as_of = as_of or date.today()
     items = _status_rows(con, as_of, int(cfg["reports"]["tracked_issue_days"]))
     now = {r["item_code"]: r["stock"] for r in items}

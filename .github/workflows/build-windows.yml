@@ -50,6 +50,9 @@ jobs:
         run: |
           test -n "$SMARTLAYER_MAPPING_KEY" || { echo "::error::Add the repository secret SMARTLAYER_MAPPING_KEY (python tools/issue_license.py mapkey shows it)."; exit 1; }
           printf 'MAPPING_KEY = "%s"\n' "$SMARTLAYER_MAPPING_KEY" > smart_layer/_buildkey.py
+          # A mill's own ERP mapping is delivered to that mill's install; it must NOT ship in the general build to
+          # every customer. Keep only the demo here; drop each real mill's mapping before sealing.
+          rm -f mappings/dost_textiles_oracle.toml
           python tools/pack_mappings.py
           rm -f mappings/*.toml                        # ship only the sealed .map, never the plain SQL
 

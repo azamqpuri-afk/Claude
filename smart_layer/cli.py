@@ -97,20 +97,30 @@ def cmd_sync(cfg, args):
     if args.live:                                    # the 5-minute refresh: only the fast, window-safe entities
         days = int(cfg["sync"].get("live_days", 3))  # (LIVE_ENTITIES) - ledgers, attendance and month-end history
         ent = [x for x in args.entities if x in store.LIVE_ENTITIES] if args.entities else list(store.LIVE_ENTITIES)
-        print(f"Live sync from {e.mapping.name} (last {days} days: {', '.join(ent)})")  # are left to the daily sync
-        res = store.sync(_store(cfg), e, days, entities=ent, full_history=(), fabric_history=False)
-        return 1 if res.get("_failed") else 0
+        if args.entities and not ent:                # asked for entities, none are live-safe -> do nothing (never "all")
+            print("Nothing to sync: none of the named data sets are refreshed by the live sync.")
+            return 0
+        print(f"Live sync from {e.mapping.name} (last {days} days: {', '.join(ent)})")  # rest are left to the daily sync
+        store.sync(_store(cfg), e, days, entities=ent, full_history=(), fabric_history=False)
+        return 0
     print(f"Syncing from {e.mapping.name} (last {cfg['sync']['history_days']} days; full history for yarn and fabric)")
     res = store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities,
                      full_history=cfg["sync"].get("full_history", store.FULL_HISTORY))
-    return 1 if res.get("_failed") else 0
+    # a single failed data set is a WARNING (sync already logged it), not a hard stop: the day's audit, alerts and
+    # reports still run on the data we DO have (e.g. the scoreboard PC being off must not skip everything else).
+    # Only a total connection failure stops the run, and that raises from _open_erp above.
+    return 0
 
 
 def cmd_report(cfg, args):
     from . import report_registry
+    from .reports import stock
     con = _store(cfg)
     day = date.fromisoformat(args.date) if args.date else None
-    rep = report_registry.build(con, cfg, args.name, day)
+    if args.name == "zero":                              # only the daily push moves the "newly at zero" baseline
+        rep = stock.new_zero(con, cfg, day, remember=bool(args.push))
+    else:
+        rep = report_registry.build(con, cfg, args.name, day)
     print(rep.text())
     tag = report_registry.report_day(args.name, day).isoformat()
     out_dir = cfg.path(cfg["reports"]["output_dir"])

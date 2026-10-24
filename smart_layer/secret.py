@@ -75,13 +75,16 @@ def _dpapi(data, unprotect):
         buf = ctypes.create_string_buffer(b, len(b))
         return BLOB(len(b), ctypes.cast(buf, ctypes.POINTER(ctypes.c_char)))
 
+    # CRYPTPROTECT_LOCAL_MACHINE: seal to the MACHINE, not the logged-in account, so the scheduled tasks (which run
+    # as SYSTEM) can read the password that the admin sealed during setup. Without this every task stops at startup.
+    LOCAL_MACHINE = 0x4
     src, out = blob(data), BLOB()
     fn = ctypes.windll.crypt32.CryptUnprotectData if unprotect else ctypes.windll.crypt32.CryptProtectData
-    args = ([ctypes.byref(src), None, None, None, None, 0, ctypes.byref(out)] if unprotect
-            else [ctypes.byref(src), u"Smart Layer ERP password", None, None, None, 0, ctypes.byref(out)])
+    args = ([ctypes.byref(src), None, None, None, None, LOCAL_MACHINE, ctypes.byref(out)] if unprotect
+            else [ctypes.byref(src), u"Smart Layer ERP password", None, None, None, LOCAL_MACHINE, ctypes.byref(out)])
     if not fn(*args):
         raise OSError("Windows could not " + ("read" if unprotect else "seal") + " the sealed password "
-                      "(a copy from another computer or account cannot be read here).")
+                      "(a copy from another computer cannot be read here).")
     try:
         return ctypes.string_at(out.pbData, out.cbData)
     finally:
