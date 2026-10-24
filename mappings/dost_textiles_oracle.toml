@@ -238,16 +238,25 @@ HAVING SUM(NVL(v.bags * NVL(v.cone_pbag, 1), 0) + NVL(v.cones, 0)) <> 0
 [entities.beams]
 sql = """
 SELECT v.beam_code AS beam_no, 'on_loom' AS status, TO_CHAR(v.set_no) AS set_no, TO_CHAR(v.cont_no) AS contract_no,
-       TO_CHAR(v.lcode) AS loom_code, e.ends AS ends, v.actual_length AS set_length_m, v.beam_prod AS woven_m,
-       v.blength AS length_left_m, TRUNC(v.td) AS mounted_date
+       TO_CHAR(v.lcode) AS loom_code, NULL AS sizer_name, e.ends AS ends, v.actual_length AS set_length_m, v.beam_prod AS woven_m,
+       v.blength AS length_left_m, TRUNC(v.td) AS mounted_date, NULL AS received_date, v.bwidth AS bwidth
 FROM dostex.wv_beam_atloom_v v
 LEFT JOIN (SELECT b.setno, MAX(d.ends) ends FROM dostex.wybeams b JOIN dostex.wytd d ON d.trans_no = b.trans_no AND d.sr_no = b.ref_sr
            GROUP BY b.setno) e ON e.setno = v.set_no
 UNION ALL
-SELECT s.beam_code, 'sized_waiting', TO_CHAR(s.setno), TO_CHAR(s.cont_no), NULL, e.ends, s.blength, NULL, s.blength, NULL
+SELECT s.beam_code, 'sized_waiting', TO_CHAR(s.setno), TO_CHAR(s.cont_no), NULL, NULL, e.ends, s.blength, NULL, s.blength, NULL, NULL, NULL
 FROM (SELECT DISTINCT beam_code, cont_no, blength, setno FROM dostex.beams_stock_v) s
 LEFT JOIN (SELECT b.setno, MAX(d.ends) ends FROM dostex.wybeams b JOIN dostex.wytd d ON d.trans_no = b.trans_no AND d.sr_no = b.ref_sr
            GROUP BY b.setno) e ON e.setno = s.setno
+"""
+
+# Empty beams out with each sizer, from the ERP's own view (WV_EMPTY_BEAM_STOCK_V): +1 per empty beam sent out,
+# -1 per empty or sized beam returned. One row per sizer (AN).
+[entities.empty_beam_stock]
+sql = """
+SELECT a.an AS party_name, SUM(v.beams) AS beams
+FROM dostex.wv_empty_beam_stock_v v LEFT JOIN dostex.ach a ON a.ac = v.ac
+GROUP BY a.an HAVING SUM(v.beams) <> 0
 """
 
 # Beam movements: sized beams (WYBEAMS + WYTM), empty beams to / from sizers (WV_GP_BEAMSM/D), beams on / off looms (WPRDTD).

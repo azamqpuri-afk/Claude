@@ -40,6 +40,17 @@ path = "demo_scoreboard.db"
 copy_first = true
 """)
     cfg = config.load(tmp / "config.toml")
+    # the demo DB built here is not the hash-locked shipped demo, so install a wildcard test licence for the
+    # server tests (the dashboard server refuses to serve data without a valid licence).
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from smart_layer import licence
+    priv = Ed25519PrivateKey.generate()
+    pub = tmp / "licence_key.pub"
+    pub.write_bytes(priv.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo))
+    licence.PUBLIC_KEY_FILE = pub
+    from datetime import date as _date
+    licence.install(cfg, licence.new_licence("Test Mill", "*", _date(2099, 1, 1), priv))
     mapping = erp.Mapping(cfg.path(cfg["erp"]["mapping"]))
     e = erp.ERP(*erp.connect(cfg["erp"], cfg.base_dir), mapping, cfg["sources"], cfg.base_dir)
     con = store.open_store(cfg.path(cfg["store"]["path"]))

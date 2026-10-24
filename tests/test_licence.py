@@ -91,12 +91,22 @@ def test_install_from_code_and_file(keys, mill, tmp_path):
 
 
 def test_demo_needs_no_licence(tmp_path):
+    import shutil
+    from pathlib import Path
+    ref = Path(licence.__file__).resolve().parent.parent / "demo" / "demo_erp.db"  # the exact shipped demo DB
+    shutil.copy(ref, tmp_path / "demo_erp.db")
+    (tmp_path / "config.toml").write_text('[erp]\ndriver = "sqlite"\npath = "demo_erp.db"\nmapping = "x.toml"\n')
+    assert licence.status(config.load(tmp_path / "config.toml")).state == "demo"
+
+
+def test_hand_built_marker_file_is_not_demo(tmp_path):
+    # a hand-built SQLite file with the demo marker added must NOT run unlicensed - it isn't the shipped demo file
     import sqlite3
     db = tmp_path / "demo_erp.db"
     sqlite3.connect(db).executescript(
         "CREATE TABLE _smartlayer_demo (token TEXT); INSERT INTO _smartlayer_demo VALUES ('Sitara-Weaving-demo-v1');")
     (tmp_path / "config.toml").write_text('[erp]\ndriver = "sqlite"\npath = "demo_erp.db"\nmapping = "x.toml"\n')
-    assert licence.status(config.load(tmp_path / "config.toml")).state == "demo"
+    assert licence.status(config.load(tmp_path / "config.toml")).state == "missing"
 
 
 def test_renamed_real_db_is_not_demo(tmp_path):

@@ -227,8 +227,17 @@ ENTITIES += (
          C("woven_m", "REAL", "Fabric woven from this beam so far (meters)"),
          C("length_left_m", "REAL", "Warp length still on the beam, if the ERP tracks it"),
          C("mounted_date", "DATE", "Date put on the loom"),
-         C("received_date", "DATE", "Date received back from the sizer")),
+         C("received_date", "DATE", "Date received back from the sizer"),
+         C("bwidth", "REAL", "Panels across the beam (3 for a 3-panel beam, 1 otherwise) - set length x bwidth = fabric length")),
         key=("beam_no",),
+    ),
+    Entity(
+        "empty_beam_stock",
+        "Empty beams out at each sizer, from the ERP's own empty-beam-stock view (+1 per empty sent, -1 per empty or "
+        "sized beam back). One row per sizer.",
+        (C("party_name", "TEXT", "Sizer the empty beams are with", True),
+         C("beams", "REAL", "Net number of empty beams currently with this sizer")),
+        key=("party_name",),
     ),
     Entity(
         "beam_movements",

@@ -22,7 +22,7 @@ from datetime import date, timedelta
 from ..reports import Report
 
 DEFAULTS = {"warn_days": 15, "urgent_days": 5, "rate_days": 30, "ends_tolerance": 5, "default_shrinkage_pct": 7,
-            "sizer_return_days": 30, "own_beam_sizers": [],
+            "sizer_return_days": 30, "own_beam_sizers": [], "beam_aliases": {},
             "shrink_min_pct": 1, "shrink_max_pct": 15}   # real shrinkage is ~1-12% by quality; outside = cut/on-loom beam
 
 
@@ -43,6 +43,11 @@ def learned_shrinkage(con, default_pct, lo=0.01, hi=0.20):
     """Shrinkage (warp length -> fabric) learned from genuinely finished beams: the median per contract, per
     quality (construction), and mill-wide. Beams still on a loom, and any outside the sane band `lo`..`hi`
     (a half-woven or cut beam looks like huge 'shrinkage'), are left out - they are not finished shrinkage."""
+    # panels per beam, by contract (3 for a 3-panel beam): sized length x bwidth = the fabric length a full beam
+    # yields. Without it, a 3-panel beam's woven meters (3x the single-panel warp length) looks like huge negative
+    # "shrinkage" and is dropped, so wide cloth fell back to the mill average and its beam-end alerts fired early.
+    bw = {str(c): (w or 1) for c, w in con.execute(
+        "SELECT contract_no, MAX(bwidth) FROM beams WHERE bwidth IS NOT NULL GROUP BY contract_no")}
     per_c = defaultdict(list)
     for cno, length, woven in con.execute("""
             SELECT m.contract_no, COALESCE(m.length_m, s.length_m), m.woven_m FROM beam_movements m
@@ -51,6 +56,8 @@ def learned_shrinkage(con, default_pct, lo=0.01, hi=0.20):
             WHERE m.move_type = 'from_loom_finished' AND m.woven_m > 0
               AND NOT EXISTS (SELECT 1 FROM beams b WHERE b.status = 'on_loom'
                               AND b.beam_no = m.beam_no AND b.set_no = m.set_no)"""):
+        panels = bw.get(str(cno), 1) or 1
+        length = (length or 0) * panels                   # BLENGTH x BWIDTH = full fabric length the beam yields
         if length and length > 0 and woven and woven > 0:
             s = 1 - woven / length
             if lo <= s <= hi:

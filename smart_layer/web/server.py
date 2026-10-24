@@ -35,6 +35,7 @@ ENTITY_LABELS = {
     "beams": "Beams", "beam_movements": "Beam movements", "loom_monitor": "Loom monitor",
     "employees": "Employees", "payroll": "Payroll", "employee_loans": "Employee loans", "gate_passes": "Gate passes",
     "yarn_stock": "Yarn stock (count-wise)", "fabric_stock": "Fabric stock", "attendance": "Attendance (last present)",
+    "empty_beam_stock": "Empty beams at sizers",
 }
 
 
@@ -150,6 +151,85 @@ class App:
         return {"answer": answer, "queries": queries}
 
 
+def _static_response(name):
+    """A bundled static file (Chart.js etc.) from web/static - offline, no CDN. Returns (code, body, ctype, headers)."""
+    name = name.replace("\\", "/").lstrip("/")
+    if "/" in name or ".." in name:
+        return 404, {"error": "not found"}, "application/json", {}
+    p = Path(__file__).with_name("static") / name
+    if not p.is_file():
+        return 404, {"error": "not found"}, "application/json", {}
+    ctype = {"js": "application/javascript; charset=utf-8", "css": "text/css; charset=utf-8",
+             "woff2": "font/woff2", "svg": "image/svg+xml"}.get(name.rsplit(".", 1)[-1], "application/octet-stream")
+    return 200, p.read_bytes(), ctype, {"Cache-Control": "max-age=86400"}
+
+
+def get_response(app, path, query, check_licence=True):
+    """Shared GET routing for the dashboard API, used by BOTH the on-prem server and the cloud (one App per tenant).
+    The caller does its own authentication first. Returns (code, body, ctype, headers); body is bytes (page / static
+    / download) or a dict (sent as JSON)."""
+    from .. import PRODUCT, licence, report_registry
+    from ..reports import fmt as cell
+    if path in ("/", "/index.html"):
+        return 200, PAGE.read_bytes(), "text/html; charset=utf-8", {}
+    if path.startswith("/static/"):
+        return _static_response(path[len("/static/"):])
+    if path == "/api/licence":
+        st = licence.status(app.cfg)
+        return 200, {"state": st.state, "message": st.message, "allowed": st.allowed,
+                     "warning": st.warning, "machine": licence.machine_id()}, "application/json", {}
+    if path == "/api/reports":
+        return 200, {"reports": [{"name": n, "label": label} for n, label in report_registry.menu()]}, "application/json", {}
+    if path in ("/api/data", "/api/report", "/api/entities", "/api/browse", "/api/ledger",
+                "/api/finance/parties", "/api/finance/daily"):
+        if check_licence:
+            st = licence.status(app.cfg)
+            if not st.allowed:
+                return 403, {"licence": st.message, "machine": licence.machine_id()}, "application/json", {}
+        params = {k: _unquote(v) for p in query.split("&") if "=" in p for k, v in [p.split("=", 1)]}
+        if path == "/api/entities":
+            return 200, {"entities": app.entities()}, "application/json", {}
+        if path == "/api/browse":
+            data = app.browse(params.get("entity", ""), params.get("q", ""), params.get("sort", ""),
+                              params.get("dir", "desc"), params.get("limit", 200), params.get("offset", 0))
+            return (200, data, "application/json", {}) if data else (404, {"error": "unknown data set"}, "application/json", {})
+        if path == "/api/ledger":
+            led = app.ledger(params.get("account", ""))
+            return (200, led, "application/json", {}) if led else (404, {"error": "unknown account"}, "application/json", {})
+        if path == "/api/finance/parties":
+            return 200, app.fin_parties(params.get("group", "all"), params.get("q", "")), "application/json", {}
+        try:
+            day = date.fromisoformat(params["date"]) if params.get("date") else None
+        except ValueError:
+            return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
+        if path == "/api/finance/daily":
+            return 200, app.fin_daily(day), "application/json", {}
+        if path == "/api/data":
+            return 200, app.data(day), "application/json", {}
+        name, fmt = params.get("name", ""), params.get("fmt", "json")   # a report
+        if name not in report_registry.REPORTS:
+            return 404, {"error": "unknown report"}, "application/json", {}
+        rep, on = app.report(name, day)
+        tag = on.isoformat()
+        if fmt == "csv":
+            import csv
+            import io
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(rep.columns)
+            w.writerows(rep.rows)
+            return 200, buf.getvalue().encode("utf-8-sig"), "text/csv; charset=utf-8", {"Content-Disposition": f'attachment; filename="{name}_{tag}.csv"'}
+        if fmt == "pdf":
+            import tempfile
+            with tempfile.TemporaryDirectory() as tmp:
+                p = rep.write_pdf(tmp, f"{name}_{tag}.pdf", app.cfg["company"]["name"], PRODUCT)
+                body = Path(p).read_bytes()
+            return 200, body, "application/pdf", {"Content-Disposition": f'attachment; filename="{name}_{tag}.pdf"'}
+        return 200, {"title": rep.title, "columns": rep.columns, "summary": rep.summary,
+                     "rows": [[cell(v) for v in r] for r in rep.rows], "date": tag}, "application/json", {}
+    return 404, {"error": "not found"}, "application/json", {}
+
+
 def handler(app):
     class Handler(BaseHTTPRequestHandler):
         server_version = "SmartLayer"
@@ -189,60 +269,28 @@ def handler(app):
             if not self._authorised():
                 return self._deny()
             path, _, query = self.path.partition("?")
-            if path in ("/", "/index.html"):
-                return self._send(200, PAGE.read_bytes(), "text/html; charset=utf-8")
-            if path.startswith("/static/"):
-                return self._static(path[len("/static/"):])
-            if path == "/api/licence":
-                from .. import licence
-                st = licence.status(app.cfg)
-                return self._send(200, {"state": st.state, "message": st.message, "allowed": st.allowed,
-                                        "warning": st.warning, "machine": licence.machine_id()})
-            if path == "/api/reports":
-                from .. import report_registry
-                return self._send(200, {"reports": [{"name": n, "label": label} for n, label in report_registry.menu()]})
-            if path in ("/api/data", "/api/report", "/api/entities", "/api/browse",
-                        "/api/ledger", "/api/finance/parties", "/api/finance/daily"):
-                from .. import licence
-                st = licence.status(app.cfg)
-                if not st.allowed:
-                    return self._send(403, {"licence": st.message, "machine": licence.machine_id()})
-                params = {k: _unquote(v) for p in query.split("&") if "=" in p for k, v in [p.split("=", 1)]}
-                if path == "/api/entities":
-                    return self._send(200, {"entities": app.entities()})
-                if path == "/api/browse":
-                    data = app.browse(params.get("entity", ""), params.get("q", ""), params.get("sort", ""),
-                                      params.get("dir", "desc"), params.get("limit", 200), params.get("offset", 0))
-                    return self._send(200, data) if data else self._send(404, {"error": "unknown data set"})
-                if path == "/api/ledger":
-                    led = app.ledger(params.get("account", ""))
-                    return self._send(200, led) if led else self._send(404, {"error": "unknown account"})
-                if path == "/api/finance/parties":
-                    return self._send(200, app.fin_parties(params.get("group", "all"), params.get("q", "")))
-                try:
-                    day = date.fromisoformat(params["date"]) if params.get("date") else None
-                except ValueError:
-                    return self._send(400, {"error": "date must be YYYY-MM-DD"})
-                if path == "/api/finance/daily":
-                    return self._send(200, app.fin_daily(day))
-                if path == "/api/data":
-                    return self._send(200, app.data(day))
-                return self._report(app, params.get("name", ""), params.get("fmt", "json"), day)
-            self._send(404, {"error": "not found"})
+            self._emit(*get_response(app, path, query))
+
+        def _emit(self, code, body, ctype, headers):
+            """Send a (code, body, ctype, headers) tuple from get_response: body is bytes or a JSON-able object."""
+            raw = body if isinstance(body, (bytes, bytearray)) else json.dumps(body, default=str).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
+            if "Cache-Control" not in (headers or {}):
+                self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
 
         def _static(self, name):
-            """Serve a bundled static file (Chart.js etc.) from web/static - offline, no CDN."""
-            name = name.replace("\\", "/").lstrip("/")
-            if "/" in name or ".." in name:
-                return self._send(404, {"error": "not found"})
-            p = Path(__file__).with_name("static") / name
-            if not p.is_file():
-                return self._send(404, {"error": "not found"})
-            ctype = {"js": "application/javascript; charset=utf-8", "css": "text/css; charset=utf-8",
-                     "woff2": "font/woff2", "svg": "image/svg+xml"}.get(name.rsplit(".", 1)[-1], "application/octet-stream")
-            self.send_response(200)
+            code, body, ctype, headers = _static_response(name)
+            if not isinstance(body, (bytes, bytearray)):
+                return self._send(code, body)
+            self.send_response(code)
             self.send_header("Content-Type", ctype)
-            body = p.read_bytes()
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "max-age=86400")
             self.end_headers()

@@ -110,6 +110,20 @@ def test_full_cloud_flow(cloud, mill_zip):
     assert _get(f"{url}/{mid}/", auth=f"owner:{view}")[0] == 200
     assert b"<html" in _get(f"{url}/{mid}/", auth=f"owner:{view}")[1]
 
+    # the report / browse / finance tabs and static assets now work on the cloud (were 404 before)
+    assert _get(f"{url}/{mid}/api/reports", auth=f"owner:{view}")[0] == 200
+    s, b = _get(f"{url}/{mid}/api/report?name=stock&fmt=json", auth=f"owner:{view}")
+    assert s == 200 and "columns" in json.loads(b)
+    assert _get(f"{url}/{mid}/api/entities", auth=f"owner:{view}")[0] == 200
+    assert _get(f"{url}/{mid}/api/finance/parties?group=customer", auth=f"owner:{view}")[0] == 200
+    assert _get(f"{url}/{mid}/static/chart.min.js", auth=f"owner:{view}")[0] == 200
+    # licence is a cloud stub for GET and refused for POST
+    assert json.loads(_get(f"{url}/{mid}/api/licence", auth=f"owner:{view}")[1])["allowed"] is True
+    assert _post(f"{url}/{mid}/api/licence", b"{}",
+                 {"Authorization": "Basic " + base64.b64encode(f"owner:{view}".encode()).decode()})[0] == 403
+    # tabs still need the view password
+    assert _get(f"{url}/{mid}/api/report?name=stock&fmt=json")[0] == 401
+
     # unknown mill is a 404
     assert _get(f"{url}/nope/api/data", auth=f"owner:{view}")[0] == 404
 

@@ -142,14 +142,30 @@ def licence_path(cfg):
 DEMO_TOKEN = "Sitara-Weaving-demo-v1"
 
 
+def _sha256(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def is_demo(cfg):
-    """True only for the bundled fictional demo data - checked by a marker, not just the file name, so a real
-    ERP copy renamed to demo_erp.db does not slip past the licence."""
+    """True ONLY for the exact fictional demo database that ships with the app. The configured ERP file must be a
+    byte-for-byte copy of the shipped demo/demo_erp.db (hash-locked) AND carry the demo marker. So a real ERP -
+    even one renamed to demo_erp.db, or a hand-built SQLite file with the marker table added - cannot run unlicensed."""
     e = cfg["erp"]
     if e.get("driver") != "sqlite":
         return False
     p = cfg.path(str(e.get("path", "")))
-    if not Path(p).exists():
+    ref = Path(__file__).resolve().parent.parent / "demo" / "demo_erp.db"     # the shipped demo DB (bundled at build)
+    if not Path(p).exists() or not ref.exists():
+        return False
+    try:
+        if _sha256(p) != _sha256(ref):                   # not the shipped demo file -> needs a licence
+            return False
+    except OSError:
         return False
     import sqlite3
     try:

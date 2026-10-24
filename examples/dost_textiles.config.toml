@@ -176,6 +176,8 @@ urgent_days = 5
 rate_days = 30
 ends_tolerance = 5                 # 8,855 / 8,856-end sets count as the same (63_beam_backup_alert.py)
 own_beam_sizers = ["Hiba"]         # parties that bring their own beams - left out of the sizer ledger
+# a beam that went out under one number and came back under another is the same physical beam
+beam_aliases = { "00336" = "00214" }
 
 [yarn]
 # 52/1 and 54/1 CTN are the same yarn commercially - show them as one line in the count-wise stock list.

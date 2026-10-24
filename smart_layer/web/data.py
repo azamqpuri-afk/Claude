@@ -311,25 +311,25 @@ def build(con, cfg, as_of=None):
 
 def _beam_stock(con, cfg):
     """Counts of beams by where they are now - for the Weaving tab's beam-stock panel.
-    on_loom / sized_waiting come from the beam snapshot. 'at sizer' is counted by QUANTITY per sizer (sent minus
-    back, where 'back' includes beams returned SIZED) - not by beam number, because sizers swap physical beams and
-    a number-based count over-states it badly. 'empty in mill' comes from the beam snapshot's own status."""
-    from ..textile.beams import is_own_sizer, settings
+    on_loom / sized_waiting come from the beam snapshot. 'at sizer' is read from the ERP's own empty-beam-stock
+    view (empty_beam_stock entity). 'empty in mill' = a beam whose LATEST movement is off-loom (finished or cut)
+    with nothing after it, collapsed by beam aliases (a beam that went out under one number and came back under
+    another is the same physical beam)."""
+    from ..textile.beams import settings
+    t = settings(cfg)
     counts = dict(con.execute("SELECT status, COUNT(*) FROM beams GROUP BY status"))
-    own = settings(cfg)["own_beam_sizers"]
-    sent, back = {}, {}
-    for sizer, mt in con.execute("""SELECT party_name, move_type FROM beam_movements
-            WHERE move_type IN ('empty_to_sizer', 'empty_from_sizer', 'sized_received')"""):
-        if is_own_sizer(sizer, own):
-            continue
-        if mt == "empty_to_sizer":
-            sent[sizer] = sent.get(sizer, 0) + 1
-        else:                                            # came back - empty OR sized
-            back[sizer] = back.get(sizer, 0) + 1
-    at_sizer = sum(max(sent.get(s, 0) - back.get(s, 0), 0) for s in set(sent) | set(back))
+    at_sizer = con.execute("SELECT COALESCE(SUM(beams), 0) FROM empty_beam_stock").fetchone()[0] or 0
+    alias = {str(k): str(v) for k, v in (t.get("beam_aliases") or {}).items()}
+    last = {}
+    for beam, mt in con.execute("""SELECT beam_no, move_type FROM beam_movements
+            WHERE beam_no IS NOT NULL AND move_type IN ('to_loom', 'from_loom_finished', 'from_loom_cut',
+                  'empty_to_sizer', 'empty_from_sizer', 'sized_received', 'sized_sent_out')
+            ORDER BY move_date, rowid"""):
+        last[alias.get(beam, beam)] = mt                 # latest movement for each physical beam wins
+    empty_in_mill = sum(1 for mt in last.values() if mt in ("from_loom_finished", "from_loom_cut"))
     return {"on_loom": counts.get("on_loom", 0), "sized_waiting": counts.get("sized_waiting", 0),
-            "empty_in_mill": counts.get("empty_in_mill", 0),
-            "at_sizer": at_sizer,
+            "empty_in_mill": empty_in_mill or counts.get("empty_in_mill", 0),
+            "at_sizer": round(at_sizer),
             "sent_out": counts.get("sent_out", 0)}
 
 

@@ -25,6 +25,8 @@ from pathlib import Path
 from smart_layer import config as sl_config
 from smart_layer import store as sl_store
 from smart_layer.web import data as sl_data
+from smart_layer.web.server import App as SlApp
+from smart_layer.web.server import get_response
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "smart_layer" / "web" / "dashboard.html"
 MAX_UPLOAD = 300 * 1024 * 1024
@@ -39,7 +41,17 @@ class Cloud:
         self.tenants.mkdir(parents=True, exist_ok=True)
         self.locks = {}
         self.sessions = {}
+        self.apps = {}                                    # one smart_layer dashboard App per mill, cached
         self.guard = threading.Lock()
+
+    def app_for(self, mill_id):
+        """A cached on-prem-style App for this tenant, so the cloud serves every dashboard tab (reports, browse,
+        ledger, finance) with exactly the same code as the on-prem server. Each call still reads the current store.db."""
+        with self.guard:
+            app = self.apps.get(mill_id)
+            if app is None:
+                app = self.apps[mill_id] = SlApp(self.tenant_cfg(mill_id))
+            return app
 
     def _lock(self, mill_id):
         with self.guard:
@@ -59,6 +71,8 @@ class Cloud:
                         tmp = d / (base + ".tmp")
                         tmp.write_bytes(z.read(name))
                         tmp.replace(d / base)
+        with self.guard:
+            self.apps.pop(mill_id, None)                   # a new config.toml may have arrived; rebuild the App lazily
         self.reg.mark_upload(mill_id)
 
     def tenant_cfg(self, mill_id):
@@ -158,26 +172,37 @@ def handler(app):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            if parts == [mill_id]:                                   # /<mill>/  -> the dashboard page
-                if not self._view_ok(mill_id):
-                    return self._deny()
-                return self._send(200, DASHBOARD.read_bytes(), "text/html; charset=utf-8")
-            if parts[:2] == [mill_id, "api"] and parts[2:] == ["licence"]:
+            # everything under /<mill>/ needs the mill's view password
+            if not self._view_ok(mill_id):
+                return self._deny()
+            # the cloud is pre-authorised (no per-mill licence check here); keep the licence endpoint as a stub
+            if parts[1:] == ["api", "licence"]:
                 return self._send(200, {"state": "cloud", "allowed": True, "warning": False, "message": "", "machine": ""})
-            if parts[:2] == [mill_id, "api"] and parts[2:] == ["data"]:
-                if not self._view_ok(mill_id):
-                    return self._deny()
-                if not (app.tenant_dir(mill_id) / "store.db").exists():
-                    return self._send(503, {"error": "no data uploaded for this mill yet"})
-                params = dict(p.split("=", 1) for p in query.split("&") if "=" in p)
-                try:
-                    day = date.fromisoformat(params["date"]) if params.get("date") else None
-                    return self._send(200, app.data(mill_id, day))
-                except ValueError:
-                    return self._send(400, {"error": "date must be YYYY-MM-DD"})
-                except FileNotFoundError:
-                    return self._send(503, {"error": "no data uploaded for this mill yet"})
-            return self._send(404, {"error": "not found"})
+            subpath = "/" + "/".join(parts[1:])                      # strip the /<mill> prefix
+            # data-bearing endpoints need an uploaded store; the page and static files do not
+            needs_data = subpath not in ("/", "/index.html") and not subpath.startswith("/static/")
+            if needs_data and not (app.tenant_dir(mill_id) / "store.db").exists():
+                return self._send(503, {"error": "no data uploaded for this mill yet"})
+            try:
+                # hand off to the SAME routing the on-prem dashboard uses, so every tab works on the cloud
+                self._emit(*get_response(app.app_for(mill_id), subpath, query, check_licence=False))
+            except FileNotFoundError:
+                self._send(503, {"error": "no data uploaded for this mill yet"})
+            except Exception as e:
+                self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
+
+        def _emit(self, code, body, ctype, headers):
+            raw = body if isinstance(body, (bytes, bytearray)) else json.dumps(body, default=str).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(raw)))
+            self.send_header("X-Content-Type-Options", "nosniff")
+            for k, v in (headers or {}).items():
+                self.send_header(k, v)
+            if "Cache-Control" not in (headers or {}):
+                self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(raw)
 
         def do_POST(self):
             parts, _, _ = self._parts()
@@ -212,6 +237,9 @@ def handler(app):
                     return self._send(200, app.ask(mill_id, str(body.get("session", "default"))[:64], q))
                 except Exception as e:
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
+            if parts[1:] == ["api", "licence"]:
+                self._drain(length)
+                return self._send(403, {"error": "the licence cannot be changed on the cloud"})
             self._drain(length)
             return self._send(404, {"error": "not found"})
 
