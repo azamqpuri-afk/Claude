@@ -15,7 +15,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from smart_layer import __version__  # noqa: E402
 
-INCLUDE = ["smart_layer", "mappings", "docs", "demo/build_demo_erp.py", "config.example.toml", "config.demo.toml",
+INCLUDE = ["smart_layer", "mappings", "docs", "demo/build_demo_erp.py", "demo/demo_erp.db", "demo/demo_scoreboard.db",
+           "config.example.toml", "config.demo.toml",
            "requirements.txt", "README.md", "LICENSE.txt", "Install Smart Layer.bat", "install_windows.ps1",
            "uninstall_windows.ps1", "run_daily.ps1", "run_live.ps1", "run_dashboard.ps1"]
 EXCLUDE_NAMES = {"dost_textiles_oracle.toml", "FEATURE_COVERAGE.md", "LICENSING.md", "PROTECTING_THE_CODE.md", "__pycache__", ".env", "config.toml"}

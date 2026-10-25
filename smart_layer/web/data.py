@@ -301,7 +301,7 @@ def build(con, cfg, as_of=None):
                    for s in sorted(sizing, key=lambda s: -s["loss_pct"])],
         "sizing_limit": float(t["sizing_loss_pct"]),
         "beams": beam_rows, "beam_warn_days": float(bt["warn_days"]),
-        "beam_stock": _beam_stock(con, cfg),
+        "beam_stock": _beam_stock(con, cfg, as_of),
         "charts": _chart_series(con, as_of),
         "fin": fin_mod.overview(con),
         "weaving": _weaving(con, as_of),
@@ -309,26 +309,36 @@ def build(con, cfg, as_of=None):
     }
 
 
-def _beam_stock(con, cfg):
+def _beam_stock(con, cfg, as_of=None):
     """Counts of beams by where they are now - for the Weaving tab's beam-stock panel.
     on_loom / sized_waiting come from the beam snapshot. 'at sizer' is read from the ERP's own empty-beam-stock
-    view (empty_beam_stock entity). 'empty in mill' = a beam whose LATEST movement is off-loom (finished or cut)
-    with nothing after it, collapsed by beam aliases (a beam that went out under one number and came back under
-    another is the same physical beam)."""
+    view (positive balances only). 'empty in mill' = a beam that came OFF a loom (finished or cut) and since then
+    has NOT gone to a sizer and has NOT been re-mounted - collapsed by beam aliases, past an ignore list, and aged
+    out after [beams].empty_age_out_days so decade-old stale numbers do not pile up."""
     from ..textile.beams import settings
     t = settings(cfg)
+    as_of = as_of or date.today()
     counts = dict(con.execute("SELECT status, COUNT(*) FROM beams GROUP BY status"))
-    at_sizer = con.execute("SELECT COALESCE(SUM(beams), 0) FROM empty_beam_stock").fetchone()[0] or 0
+    at_sizer = con.execute("SELECT COALESCE(SUM(CASE WHEN beams > 0 THEN beams ELSE 0 END), 0) FROM empty_beam_stock").fetchone()[0] or 0
     alias = {str(k): str(v) for k, v in (t.get("beam_aliases") or {}).items()}
-    last = {}
-    for beam, mt in con.execute("""SELECT beam_no, move_type FROM beam_movements
-            WHERE beam_no IS NOT NULL AND move_type IN ('to_loom', 'from_loom_finished', 'from_loom_cut',
-                  'empty_to_sizer', 'empty_from_sizer', 'sized_received', 'sized_sent_out')
+    ignore = {str(b) for b in (t.get("ignore_beams") or [])}
+    floor = (as_of - timedelta(days=int(t.get("empty_age_out_days", 120)))).isoformat()
+    latest = {}                                          # beam -> {move_type: latest date}
+    for beam, mt, dd in con.execute("""SELECT beam_no, move_type, move_date FROM beam_movements
+            WHERE beam_no IS NOT NULL AND move_type IN ('to_loom', 'from_loom_finished', 'from_loom_cut', 'empty_to_sizer')
             ORDER BY move_date, rowid"""):
-        last[alias.get(beam, beam)] = mt                 # latest movement for each physical beam wins
-    empty_in_mill = sum(1 for mt in last.values() if mt in ("from_loom_finished", "from_loom_cut"))
+        latest.setdefault(alias.get(beam, beam), {})[mt] = dd    # ordered: last date per type wins
+    empty = 0
+    for b, mv in latest.items():
+        if b in ignore:
+            continue
+        off = max(mv.get("from_loom_finished", ""), mv.get("from_loom_cut", ""))
+        # came off a loom, not sent to a sizer since (a tie on the same day means it went to the sizer), not
+        # re-mounted since, and recent enough not to be a stale number from years ago
+        if off and off > mv.get("empty_to_sizer", "") and off > mv.get("to_loom", "") and off >= floor:
+            empty += 1
     return {"on_loom": counts.get("on_loom", 0), "sized_waiting": counts.get("sized_waiting", 0),
-            "empty_in_mill": empty_in_mill or counts.get("empty_in_mill", 0),
+            "empty_in_mill": empty or counts.get("empty_in_mill", 0),
             "at_sizer": round(at_sizer),
             "sent_out": counts.get("sent_out", 0)}
 

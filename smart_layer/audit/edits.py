@@ -13,7 +13,7 @@ entries (meters per day, loom, shift, quality). The next day every change is rep
 The first run only takes the snapshot.
 """
 
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from ..store import get_state, set_state
 
@@ -33,10 +33,11 @@ def run(a):
         FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
         WHERE p.prod_date >= date(?, '-60 days') GROUP BY p.prod_date, p.loom_code, p.shift, p.quality""", a.window[1])}
     old = get_state(a.con, "edit_snapshot")
-    # ONLY the daily audit updates the baseline. Dashboard loads and the 5-minute urgent check compare against it
-    # read-only - otherwise the snapshot would be rewritten constantly (and opening an old date would wipe it,
-    # making the next daily audit report everything since as "deleted").
-    if a.persist:
+    # ONLY the daily audit updates the baseline, and only when auditing a day AT OR AFTER the baseline's day - so
+    # re-running an audit for an OLD date (or a dashboard load / the 5-minute urgent check) never moves the baseline
+    # backwards and makes the next daily audit report everything since as "deleted".
+    prev_day = (old or {}).get("taken", "")[:10]
+    if a.persist and a.window[1] >= (prev_day or a.window[1]):
         set_state(a.con, "edit_snapshot", {"taken": now, "issues": issues, "prod": prod})
     if not old:
         return
@@ -79,7 +80,10 @@ def run(a):
         return out
 
     oldp, newp = by_day_loom(old.get("prod", {})), by_day_loom(prod)
+    window_from = (date.fromisoformat(a.window[1]) - timedelta(days=60)).isoformat()   # we only re-read 60 days of production
     for (d, loom), (name, m) in oldp.items():
+        if d < window_from:
+            continue                                  # older than the window we re-read - absence is not a deletion
         if (datetime.fromisoformat(taken) - datetime.fromisoformat(d)).days <= 3:
             continue                                  # recent days are still being keyed
         new = newp.get((d, loom))

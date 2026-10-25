@@ -101,15 +101,21 @@ def cmd_sync(cfg, args):
             print("Nothing to sync: none of the named data sets are refreshed by the live sync.")
             return 0
         print(f"Live sync from {e.mapping.name} (last {days} days: {', '.join(ent)})")  # rest are left to the daily sync
-        store.sync(_store(cfg), e, days, entities=ent, full_history=(), fabric_history=False)
-        return 0
+        return _sync_exit(store.sync(_store(cfg), e, days, entities=ent, full_history=(), fabric_history=False))
     print(f"Syncing from {e.mapping.name} (last {cfg['sync']['history_days']} days; full history for yarn and fabric)")
     res = store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities,
                      full_history=cfg["sync"].get("full_history", store.FULL_HISTORY))
-    # a single failed data set is a WARNING (sync already logged it), not a hard stop: the day's audit, alerts and
-    # reports still run on the data we DO have (e.g. the scoreboard PC being off must not skip everything else).
-    # Only a total connection failure stops the run, and that raises from _open_erp above.
-    return 0
+    return _sync_exit(res)
+
+
+def _sync_exit(res):
+    """0 = everything synced, 2 = SOME data sets failed (the day's work still runs on the data we have), 1 = EVERY
+    data set failed (treat as a hard failure - usually the ERP is unreachable or the login is wrong)."""
+    failed = res.get("_failed") or []
+    done = [k for k, v in res.items() if k != "_failed" and v is not None]
+    if not failed:
+        return 0
+    return 1 if not done else 2
 
 
 def cmd_report(cfg, args):

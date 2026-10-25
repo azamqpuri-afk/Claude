@@ -109,6 +109,29 @@ def test_hand_built_marker_file_is_not_demo(tmp_path):
     assert licence.status(config.load(tmp_path / "config.toml")).state == "missing"
 
 
+def test_demo_erp_with_real_store_is_not_demo(tmp_path):
+    # the genuine demo ERP, but the local STORE was synced from a real ERP mapping -> must NOT run unlicensed
+    import shutil
+    import sqlite3
+    from pathlib import Path
+    ref = Path(licence.__file__).resolve().parent.parent / "demo" / "demo_erp.db"
+    shutil.copy(ref, tmp_path / "demo_erp.db")
+    store = sqlite3.connect(tmp_path / "store.db")
+    store.executescript("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT);")
+    store.execute("INSERT INTO state VALUES ('synced_mapping', ?)", ('"dost_textiles_oracle"',))
+    store.commit()
+    store.close()
+    (tmp_path / "config.toml").write_text('[erp]\ndriver = "sqlite"\npath = "demo_erp.db"\nmapping = "x.toml"\n[store]\npath = "store.db"\n')
+    assert licence.status(config.load(tmp_path / "config.toml")).state == "missing"
+
+
+def test_sync_exit_codes():
+    from smart_layer.cli import _sync_exit
+    assert _sync_exit({"a": 5, "b": 3, "_failed": []}) == 0          # all ok
+    assert _sync_exit({"a": None, "b": None, "_failed": ["a", "b"]}) == 1   # everything failed
+    assert _sync_exit({"a": 5, "b": None, "_failed": ["b"]}) == 2    # some failed
+
+
 def test_renamed_real_db_is_not_demo(tmp_path):
     import sqlite3
     db = tmp_path / "demo_erp.db"                       # a real ERP copy renamed to look like the demo

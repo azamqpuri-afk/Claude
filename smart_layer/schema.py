@@ -202,6 +202,7 @@ ENTITIES = (
         (C("doc_no", "TEXT", "Gate pass / invoice number", True),
          C("dispatch_date", "DATE", "Date", True),
          C("contract_no", "TEXT", "Contract", True),
+         C("quality", "TEXT", "Sub-quality of the cloth on this gate pass (a contract can run more than one)"),
          C("party_code", "TEXT", "Account the gate pass is billed to (the contract party, or a mill rejection store)"),
          C("deliver_to", "TEXT", "Deliver-to text on the gate pass"),
          C("direction", "TEXT", "'out' = delivered to the party, 'in' = returned to the mill", True),

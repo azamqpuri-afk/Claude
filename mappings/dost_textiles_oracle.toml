@@ -176,13 +176,13 @@ WHERE m.td >= :since
 [entities.fabric_dispatches]
 sql = """
 SELECT TO_CHAR(NVL(v.gp_no, v.trans_no)) AS doc_no, TRUNC(v.trans_date) AS dispatch_date, TO_CHAR(c.cont_no) AS contract_no,
-       v.ac AS party_code, v.deliver_to AS deliver_to,
+       s.quality AS quality, v.ac AS party_code, v.deliver_to AS deliver_to,
        CASE v.trans_type WHEN 'GPOUT' THEN 'out' ELSE 'in' END AS direction,
        SUM(NVL(v.a,0) + NVL(v.a2,0)) AS fresh_m, SUM(NVL(v.b,0) + NVL(v.c,0) + NVL(v.cp,0)) AS rejected_m,
        SUM(v.total_mtr) AS meters, SUM(v.amt) AS amount
 FROM dostex.fab_gp_v v JOIN dostex.wc_cont_sub_v s ON s.cont_sub_id = v.cont_sub_id JOIN dostex.contm c ON c.cont_id = s.cont_id
 WHERE v.trans_type IN ('GPOUT', 'GPIN') AND v.trans_date >= :since
-GROUP BY NVL(v.gp_no, v.trans_no), TRUNC(v.trans_date), c.cont_no, v.ac, v.deliver_to, v.trans_type
+GROUP BY NVL(v.gp_no, v.trans_no), TRUNC(v.trans_date), c.cont_no, s.quality, v.ac, v.deliver_to, v.trans_type
 """
 
 # Fabric in stock exactly as the ERP's own FABRIC STOCK report shows it: WV_FAB_STOCK_V is a UNION of opening
@@ -255,9 +255,9 @@ LEFT JOIN (SELECT b.setno, MAX(d.ends) ends FROM dostex.wybeams b JOIN dostex.wy
 # -1 per empty or sized beam returned. One row per sizer (AN).
 [entities.empty_beam_stock]
 sql = """
-SELECT a.an AS party_name, SUM(v.beams) AS beams
-FROM dostex.wv_empty_beam_stock_v v LEFT JOIN dostex.ach a ON a.ac = v.ac
-GROUP BY a.an HAVING SUM(v.beams) <> 0
+SELECT v.an AS party_name, SUM(v.beams) AS beams
+FROM dostex.wv_empty_beam_stock_v v
+GROUP BY v.an HAVING SUM(v.beams) <> 0
 """
 
 # Beam movements: sized beams (WYBEAMS + WYTM), empty beams to / from sizers (WV_GP_BEAMSM/D), beams on / off looms (WPRDTD).
@@ -356,9 +356,12 @@ LEFT JOIN payroll.segments sg ON sg.seg_id = e.seg_id
 # `check` reports this entity failing, change DATED here to the real column (no rebuild needed) - active staff then
 # falls back to the paid-in-last-2-periods rule until it is correct, so nothing else breaks.
 [entities.attendance]
+# NOT bound to :since - attendance is a snapshot (each sync replaces it whole), so a short-window sync must still
+# read a useful span or it would wipe the table. Always read the last 120 days of presence, regardless of the
+# sync window, and keep each employee's most recent present day.
 sql = """
 SELECT emp_code, MAX(TRUNC(dated)) AS last_present
-FROM payroll.in_out WHERE attendance_type = 'P' AND dated >= :since
+FROM payroll.in_out WHERE attendance_type = 'P' AND dated >= :today - 120
 GROUP BY emp_code
 """
 

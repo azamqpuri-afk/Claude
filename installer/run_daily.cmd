@@ -5,7 +5,8 @@ if not exist output mkdir output
 set LOG=output\daily_run_log.txt
 echo ==== %date% %time% ==== >> "%LOG%"
 SmartLayer.exe licence check --push >> "%LOG%" 2>&1 || (echo no valid licence - nothing run >> "%LOG%" & exit /b 1)
-SmartLayer.exe sync >> "%LOG%" 2>&1 || (echo sync failed - reports skipped >> "%LOG%" & exit /b 1)
+SmartLayer.exe sync >> "%LOG%" 2>&1
+if errorlevel 2 (echo WARNING: some data sets did not sync - running on the data we have >> "%LOG%") else if errorlevel 1 (echo sync failed completely - reports skipped >> "%LOG%" & exit /b 1)
 SmartLayer.exe audit --csv --pdf --push >> "%LOG%" 2>&1
 SmartLayer.exe report zero --push >> "%LOG%" 2>&1
 SmartLayer.exe report production --csv --pdf >> "%LOG%" 2>&1

@@ -151,31 +151,60 @@ def _sha256(path):
     return h.hexdigest()
 
 
+# SHA-256 of the exact demo database that ships with the app (demo/demo_erp.db). Baked in so the check does not
+# depend on a reference file being present (the compiled build may not carry one). Regenerating the demo DB changes
+# this; the shipped file is fixed in git.
+DEMO_SHA256 = "53da92ce009165aad183fc275eab9c6eff082b7294c0757c479fde570a29f2f7"
+_demo_hash_cache = {}
+
+
 def is_demo(cfg):
-    """True ONLY for the exact fictional demo database that ships with the app. The configured ERP file must be a
-    byte-for-byte copy of the shipped demo/demo_erp.db (hash-locked) AND carry the demo marker. So a real ERP -
-    even one renamed to demo_erp.db, or a hand-built SQLite file with the marker table added - cannot run unlicensed."""
+    """True ONLY for the exact fictional demo database that ships with the app. The configured ERP file must hash to
+    DEMO_SHA256 AND carry the demo marker, AND the local store must not have been synced from a real ERP mapping -
+    so a real ERP (even renamed), a hand-built marker file, or the demo ERP with the store pointed at real data all
+    need a licence."""
+    import sqlite3
     e = cfg["erp"]
     if e.get("driver") != "sqlite":
         return False
     p = cfg.path(str(e.get("path", "")))
-    ref = Path(__file__).resolve().parent.parent / "demo" / "demo_erp.db"     # the shipped demo DB (bundled at build)
-    if not Path(p).exists() or not ref.exists():
+    if not Path(p).exists():
         return False
     try:
-        if _sha256(p) != _sha256(ref):                   # not the shipped demo file -> needs a licence
+        st = Path(p).stat()
+        ck = (str(p), st.st_mtime, st.st_size)
+        h = _demo_hash_cache.get(ck) or _demo_hash_cache.setdefault(ck, _sha256(p))
+        if h != DEMO_SHA256:
             return False
     except OSError:
         return False
-    import sqlite3
     try:
         con = sqlite3.connect(f"file:{p}?mode=ro", uri=True)
         try:
-            return con.execute("SELECT token FROM _smartlayer_demo").fetchone()[0] == DEMO_TOKEN
+            if con.execute("SELECT token FROM _smartlayer_demo").fetchone()[0] != DEMO_TOKEN:
+                return False
         finally:
             con.close()
     except sqlite3.Error:
         return False
+    # the dashboard reads the local STORE, not the ERP file: if that store was built from a real ERP mapping, this
+    # is not a demo however the ERP path is set (blocks pointing the demo ERP at a real synced store).
+    try:
+        sp = cfg.path(str((cfg["store"] or {}).get("path", "")))
+        if Path(sp).exists():
+            sc = sqlite3.connect(f"file:{sp}?mode=ro", uri=True)
+            try:
+                row = sc.execute("SELECT value FROM state WHERE key = 'synced_mapping'").fetchone()
+            finally:
+                sc.close()
+            if row:
+                import json
+                m = json.loads(row[0])
+                if m and str(m) != "demo_sqlite":
+                    return False
+    except (sqlite3.Error, ValueError, OSError):
+        pass
+    return True
 
 
 def status(cfg, today=None):

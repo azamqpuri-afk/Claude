@@ -100,13 +100,17 @@ class Config:
         return p if p.is_absolute() else self.base_dir / p
 
 
-def load(path="config.toml"):
+def load(path="config.toml", expand=True):
+    """Load a config. expand=False is for UNTRUSTED configs (e.g. a tenant's uploaded config.toml on the cloud):
+    it does NOT read a .env and does NOT fill in ${VARS}, so a tenant file can never pull a value out of the
+    server's own environment (which could leak the cloud's API key or other secrets into the mill's dashboard)."""
     path = Path(path).resolve()
     if not path.exists():
         raise FileNotFoundError(f"{path} not found - run  python -m smart_layer setup  (or copy config.example.toml)")
-    _load_dotenv(path.parent / ".env")
+    if expand:
+        _load_dotenv(path.parent / ".env")
     try:
         data = tomllib.loads(read_text_any(path))
     except tomllib.TOMLDecodeError as e:
         raise SystemExit(f"{path.name} has a mistake: {e}. Tip: Windows paths need single quotes, e.g. 'C:\\oracle\\bin'")
-    return Config(_merge(DEFAULTS, _expand(data)), path.parent)
+    return Config(_merge(DEFAULTS, _expand(data) if expand else data), path.parent)

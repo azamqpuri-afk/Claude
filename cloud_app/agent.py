@@ -27,7 +27,7 @@ def sync_local(cfg):
     e = sl_erp.ERP(*sl_erp.connect(cfg["erp"], cfg.base_dir), mapping, cfg["sources"], cfg.base_dir)
     con = sl_store.open_store(cfg.path(cfg["store"]["path"]))
     try:
-        sl_store.sync(con, e, int(cfg["sync"]["history_days"]), log=print)
+        return sl_store.sync(con, e, int(cfg["sync"]["history_days"]), log=print)
     finally:
         con.close()
 
@@ -56,10 +56,20 @@ def main(argv=None):
     p.add_argument("--mill", required=True, help="the mill id given by Azam Puri")
     p.add_argument("--token", required=True, help="the upload token given by Azam Puri")
     p.add_argument("--no-sync", action="store_true", help="upload the existing store without re-syncing first")
+    p.add_argument("--force", action="store_true", help="upload even if some data sets failed to sync")
     a = p.parse_args(argv)
     cfg = sl_config.load(a.config)
     if not a.no_sync:
-        sync_local(cfg)
+        res = sync_local(cfg)
+        failed = (res or {}).get("_failed") or []
+        done = [k for k, v in (res or {}).items() if k != "_failed" and v is not None]
+        if failed and not done:
+            print(f"Sync failed completely ({', '.join(failed)}) - NOT uploading stale data.")
+            return 1
+        if failed and not a.force:                        # some sets failed: don't quietly ship a partial store
+            print(f"WARNING: {len(failed)} data set(s) did not sync: {', '.join(failed)}. "
+                  "Not uploading (use --force to upload anyway, or fix the mapping first).")
+            return 2
     status = push(a.url, a.mill, a.token, make_zip(cfg))
     print("Uploaded." if status == 200 else f"Upload returned {status}")
     return 0 if status == 200 else 1

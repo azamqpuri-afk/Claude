@@ -7,8 +7,6 @@ service_account*.json
 # local data, reports and caches - never commit business data
 data/
 output/
-demo/demo_erp.db
-demo/demo_scoreboard.db
 __pycache__/
 *.pyc
 .pytest_cache/

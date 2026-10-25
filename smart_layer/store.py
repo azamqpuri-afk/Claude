@@ -121,6 +121,7 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
         log(f"  {e.name:<17} {len(rows):>8,} rows")
     if fabric_history:
         _sync_fabric_history(con, erp, now, log, entities)
+    set_state(con, "synced_mapping", getattr(erp, "mapping", None) and erp.mapping.name)   # for the demo-licence guard
     if failed:
         log(f"  WARNING: {len(failed)} data set(s) did not sync and still hold OLD data: {', '.join(failed)}")
     result["_failed"] = failed

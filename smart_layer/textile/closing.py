@@ -60,21 +60,37 @@ def contract_rows(con, method, as_of):
 
     # fabric delivered to the PARTY, all grades net of returns: only gate passes billed to the contract's party,
     # plus a GPIN marked "...ADJUS..." (a stock-adjustment return the party made, booked to the mill store).
-    party_meters = defaultdict(float)
-    for cno, pcode, deliver, direction, m in con.execute("""SELECT contract_no, party_code, deliver_to, direction, SUM(meters)
-            FROM fabric_dispatches WHERE dispatch_date <= ? GROUP BY contract_no, party_code, deliver_to, direction""", (d,)):
+    # A closing counts ONLY the fabric billed to the contract's OWN party. Fabric billed to a different party is
+    # NOT silently dropped - it is listed as an exception (see third_party_deliveries) for the owner to settle.
+    # The mill's own accounts (rejection / store) and any "...ADJUS..." stock-adjustment gate pass (either
+    # direction) are the mill's, never the party's.
+    mill_accounts = {str(a) for a in cfg.get("mill_accounts", ["200105006", "300308001"])}
+    party_meters = defaultdict(float)                     # per contract (for warp)
+    pm_subq = defaultdict(float)                          # per (contract, sub-quality) (weft can differ by sub-quality)
+    for cno, quality, pcode, deliver, direction, m in con.execute("""SELECT contract_no, quality, party_code, deliver_to, direction, SUM(meters)
+            FROM fabric_dispatches WHERE dispatch_date <= ? GROUP BY contract_no, quality, party_code, deliver_to, direction""", (d,)):
+        dl = str(deliver or "").upper()
+        if "ADJUS" in dl:
+            continue                                      # stock adjustment - the mill's, not the party's, either way
         cp = party_of.get(str(cno))
-        to_party = pcode is not None and cp is not None and str(pcode) == str(cp)
-        is_return_adjust = direction == "in" and "ADJUS" in str(deliver or "").upper()
-        if to_party or is_return_adjust:
-            party_meters[str(cno)] += (m or 0) * (1 if direction == "out" else -1)
-    for cno, m in owner_ret.items():
+        if pcode is not None and cp is not None and str(pcode) == str(cp):
+            signed = (m or 0) * (1 if direction == "out" else -1)
+            party_meters[str(cno)] += signed
+            pm_subq[(str(cno), str(quality or ""))] += signed
+        # billed to a mill rejection/store account or marked REJECTION -> mill's own; a different real party -> an
+        # exception the owner settles separately. Neither is counted here.
+    for cno, m in owner_ret.items():                     # a genuine party return the owner knows of, not yet in the ERP
         party_meters[str(cno)] -= m
+        subs = [k for k in pm_subq if k[0] == str(cno)]
+        if subs:
+            pm_subq[max(subs, key=lambda k: pm_subq[k])] -= m
 
-    # fresh fabric in stock per contract = stock - C - CP (C and CP in stock are mill rejection, not the party's)
-    fresh_stock = defaultdict(float)
-    for cno, meters, cm, cpm in con.execute("SELECT contract_no, SUM(meters), SUM(c_m), SUM(cp_m) FROM fabric_stock GROUP BY contract_no"):
-        fresh_stock[str(cno)] += (meters or 0) - (cm or 0) - (cpm or 0)
+    # fresh fabric in stock = stock - C - CP (C and CP in stock are mill rejection, not the party's), per contract and sub-quality
+    fresh_stock, fs_subq = defaultdict(float), defaultdict(float)
+    for cno, quality, meters, cm, cpm in con.execute("SELECT contract_no, quality, SUM(meters), SUM(c_m), SUM(cp_m) FROM fabric_stock GROUP BY contract_no, quality"):
+        fresh = (meters or 0) - (cm or 0) - (cpm or 0)
+        fresh_stock[str(cno)] += fresh
+        fs_subq[(str(cno), str(quality or ""))] += fresh
 
     # warp still tied up in beams (fabric-meters-equivalent), per contract; shrinkage is learned per beam set
     by_c, by_q, mill_shrink, qual = learned_shrinkage(con, cfg.get("default_shrinkage_pct", 7))
@@ -101,16 +117,16 @@ def contract_rows(con, method, as_of):
         fix = method.contract_overrides(cno)
         epi, ppi, width = fix.get("ends_per_inch", epi), fix.get("picks_per_inch", ppi), fix.get("width_in", width)
         wy, fy = fix.get("warp_yarn", wy), fix.get("weft_yarn", fy)
-        for qk, ycode in weft_by_q.items():                       # the sub-quality's real weft (ERP's is blank)
-            if qk in str(quality or ""):
-                fy = ycode
-                break
+
+        def sub_weft(subq):                                       # the weft a sub-quality really uses (ERP master blank)
+            for qk, ycode in weft_by_q.items():
+                if qk in str(subq or ""):
+                    return ycode
+            return fy
         s = method.settings(cno, party)
         allow = 1 + float(s["wastage_allowance_pct"]) / 100
         warp_lbm = method.weight("warp", s, epi, width, method.closing_count("warp", wy, wc, s))
-        weft_lbm = method.weight("weft", s, ppi, width, method.closing_count("weft", fy, fc, s))
-        wg, fg = method.group(wy), method.group(fy)
-        missing = [side for side, lbm in (("warp", warp_lbm), ("weft", weft_lbm)) if lbm is None]
+        wg = method.group(wy)
         pm, fs = party_meters.get(cno, 0.0), fresh_stock.get(cno, 0.0)
         bag = float(s["bag_lb"])
 
@@ -119,11 +135,21 @@ def contract_rows(con, method, as_of):
             used[wg] += pm * warp_lbm * allow                     # warp yarn in the fabric delivered to the party
             if wip_on:
                 used[wg] += fs * warp_lbm * allow + (warp_loom_m.get(cno, 0) + sized_m.get(cno, 0)) * warp_lbm
-        if weft_lbm is not None:
-            used[fg] += pm * weft_lbm * allow
-            if wip_on:
-                used[fg] += fs * weft_lbm * allow
-        groups = {wg, fg} | {g for (c, g) in recv if c == cno} | {g for (c, g) in in_hand if c == cno} | {g for (c, g) in at_sizer if c == cno}
+        # weft: charge each sub-quality to the weft it really uses (31/34 -> 125), not one weft for the whole contract
+        subqs = {q for (c, q) in pm_subq if c == cno} | {q for (c, q) in fs_subq if c == cno} or {str(quality or "")}
+        weft_missing = False
+        for subq in subqs:
+            sfy = sub_weft(subq)
+            wlbm = method.weight("weft", s, ppi, width, method.closing_count("weft", sfy, fc, s))
+            if wlbm is None:
+                weft_missing = True
+                continue
+            wm = pm_subq.get((cno, subq), 0.0) + (fs_subq.get((cno, subq), 0.0) if wip_on else 0.0)
+            if subq == str(quality or "") and not pm_subq and not fs_subq:
+                wm = pm + (fs if wip_on else 0.0)                 # no sub-quality rows: fall back to the contract total
+            used[method.group(sfy)] += wm * wlbm * allow
+        missing = (["warp"] if warp_lbm is None else []) + (["weft"] if weft_missing else [])
+        groups = {wg} | {method.group(sub_weft(q)) for q in subqs} | {g for (c, g) in recv if c == cno} | {g for (c, g) in in_hand if c == cno} | {g for (c, g) in at_sizer if c == cno}
         last = woven.get(cno)
         status = "running" if last and last >= (as_of - timedelta(days=30)).isoformat() else "finished" if last else "no production"
         for g in sorted(groups, key=str):
@@ -147,6 +173,49 @@ def contract_rows(con, method, as_of):
     return rows
 
 
+def third_party_deliveries(con, method, as_of):
+    """Fabric of a contract delivered/billed to a DIFFERENT party than the contract's own (not the mill's
+    rejection/store accounts, not an ADJUS stock correction). These are kept OUT of the party's closing and listed
+    so the owner can settle each one (e.g. move yarn to that party's account). Returns rows with a bag equivalent."""
+    d = as_of.isoformat()
+    cfg = method.cfg
+    mill_accounts = {str(a) for a in cfg.get("mill_accounts", ["200105006", "300308001"])}
+    info = {}                                             # contract -> (own party code, warp+weft lb/m, bag_lb, own party name)
+    pname = {str(c): n for c, n in con.execute("SELECT party_code, COALESCE(party_name, party_code) FROM parties")}
+    for cno, pcode, pn, epi, ppi, width, wy, wc, fy, fc in con.execute("""SELECT contract_no, party_code,
+            COALESCE(c.party_name, p.party_name, c.party_code), ends_per_inch, picks_per_inch, width_in,
+            warp_yarn, warp_count, weft_yarn, weft_count FROM contracts c LEFT JOIN parties p USING (party_code)"""):
+        cno = str(cno)
+        s = method.settings(cno, pn)
+        fix = method.contract_overrides(cno)
+        epi, ppi, width = fix.get("ends_per_inch", epi), fix.get("picks_per_inch", ppi), fix.get("width_in", width)
+        wlbm = method.weight("warp", s, epi, width, method.closing_count("warp", fix.get("warp_yarn", wy), wc, s)) or 0
+        flbm = method.weight("weft", s, ppi, width, method.closing_count("weft", fix.get("weft_yarn", fy), fc, s)) or 0
+        info[cno] = (str(pcode) if pcode is not None else None, wlbm + flbm, float(s["bag_lb"]), pn)
+    agg = defaultdict(lambda: [0.0, 0.0, ""])             # (contract, other party) -> [out m, back m, deliver_to]
+    for cno, pcode, deliver, direction, m in con.execute("""SELECT contract_no, party_code, deliver_to, direction, SUM(meters)
+            FROM fabric_dispatches WHERE dispatch_date <= ? GROUP BY contract_no, party_code, deliver_to, direction""", (d,)):
+        cno, dl = str(cno), str(deliver or "").upper()
+        own = info.get(cno, (None,))[0]
+        if "ADJUS" in dl or "REJECTION" in dl or pcode is None or str(pcode) in mill_accounts:
+            continue
+        if own is not None and str(pcode) == own:
+            continue                                      # the contract's own party - that is the closing itself
+        a = agg[(cno, str(pcode))]
+        a[0 if direction == "out" else 1] += m or 0
+        if deliver:
+            a[2] = deliver
+    rows = []
+    for (cno, pcode), (out, back, deliver) in sorted(agg.items(), key=lambda kv: (-abs(kv[1][0] - kv[1][1]), kv[0])):
+        if out < 1 and back < 1:
+            continue
+        _, lbm, bag, own_name = info.get(cno, (None, 0, 100, None))
+        net = out - back
+        rows.append(dict(contract=cno, own_party=own_name, party=pname.get(pcode) or deliver or pcode,
+                         out_m=out, back_m=back, net_m=net, bags=(net * lbm / bag if lbm else None)))
+    return rows
+
+
 def _yarn_label(method, code, names):
     for g in method.cfg["yarn_groups"]:
         if str(g[0]) == str(code) and len(g) > 1:
@@ -165,20 +234,42 @@ def contract_closing(con, cfg, as_of=None, party=None):
         rows = [r for r in rows if party.lower() in (r["party"] or "").lower()]
     cur = cfg["company"]["currency"]
     incomplete = [r for r in rows if r.get("pre_go_live")]
-    by_party = defaultdict(lambda: [0.0, 0.0])
+    # one balance line per PARTY and YARN - never add different yarns into one bag total (bags of 30/1 and 12/1 are
+    # not the same thing). A rupee total across a party's yarns is fine and is shown as a sub-total per party.
+    by_py = defaultdict(lambda: [0.0, 0.0])
     for r in rows:
         if r.get("pre_go_live"):
             continue                                # started in the old ERP: history incomplete, keep out of the totals
-        by_party[r["party"]][0] += r["balance_bags"]
-        by_party[r["party"]][1] += r["value"] or 0
+        by_py[(r["party"], r["yarn_name"])][0] += r["balance_bags"]
+        by_py[(r["party"], r["yarn_name"])][1] += r["value"] or 0
     summary = [f"Party yarn balances as at {as_of:%d-%b-%Y} (+ = we hold the party's yarn, - = party is short):"]
     if incomplete:
         summary.append(f"{len({r['contract'] for r in incomplete})} contract(s) started in the previous ERP are listed "
                        "but NOT counted in the totals above - their yarn/fabric history is incomplete here.")
-    summary += [f"  {p}: {b:+,.1f} bags" + (f" ({cur} {v:+,.0f})" if v else "") for p, (b, v) in sorted(by_party.items())]
+    last_party = None
+    for (p, y), (b, v) in sorted(by_py.items()):
+        if p != last_party:
+            tot_v = sum(vv for (pp, _), (_, vv) in by_py.items() if pp == p)
+            summary.append(f"  {p}:" + (f"  (net {cur} {tot_v:+,.0f})" if tot_v else ""))
+            last_party = p
+        summary.append(f"      {y}: {b:+,.1f} bags" + (f" ({cur} {v:+,.0f})" if v else ""))
+    # Fabric of a contract billed to ANOTHER party: not in the closing above; listed so the owner can settle each.
+    exc = third_party_deliveries(con, method, as_of)
+    if party:
+        exc = [e for e in exc if party.lower() in (str(e.get("own_party") or "")).lower()]
+    if exc:
+        summary.append("Fabric of a contract delivered/billed to ANOTHER party (not counted above - settle separately):")
+        for e in exc:
+            line = f"      c{e['contract']} ({e['own_party']}) -> {e['party']}: {e['out_m']:,.0f} m out"
+            if e["back_m"]:
+                line += f", {e['back_m']:,.0f} m back"
+            if e["bags"] is not None:
+                line += f"  (~{e['bags']:+,.1f} bags of yarn)"
+            summary.append(line)
     s = method.settings()
-    summary.append(f"Method: {s['basis']} meters, rejection charged to {s['rejection_charged_to']}, divisor {s['divisor']:g}, "
-                   f"bag {s['bag_lb']:g} lb, allowance {s['wastage_allowance_pct']:g}% (party / contract overrides apply).")
+    summary.append(f"Method: dispatched meters, divisor {s['divisor']:g}, bag {s['bag_lb']:g} lb, "
+                   f"allowance {s['wastage_allowance_pct']:g}%, WIP {'on' if method.cfg.get('wip', True) else 'off'} "
+                   f"(party / contract overrides apply).")
     return Report(f"Contract closing - {as_of:%d-%b-%Y}",
                   ["Contract", "Party", "Status", "Yarn", "Meters", "Received bags", "Used bags", "Balance bags",
                    f"Value {cur}", "Note"],

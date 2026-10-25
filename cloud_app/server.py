@@ -79,7 +79,7 @@ class Cloud:
         d = self.tenant_dir(mill_id)
         cfg_path = d / "config.toml"
         if cfg_path.exists():
-            cfg = sl_config.load(cfg_path)
+            cfg = sl_config.load(cfg_path, expand=False)   # untrusted tenant file: never fill ${VARS} from the cloud env
         else:
             cfg = sl_config.Config(sl_config._merge(sl_config.DEFAULTS, {}), d)
         cfg.data.setdefault("store", {})["path"] = str((d / "store.db").resolve())   # read the tenant's store

@@ -57,11 +57,13 @@ yarn_groups = [["6", "18"], ["102", "120"]]
 wip = true
 # the 76x66 31/34 sub-quality really wefts yarn 125 (the ERP's WC_CONT_SUB_V weft column is blank for it)
 weft_yarn_by_quality = { "31/34" = "125" }
-# erp_start_date = "2023-01-01"               # Dost ERP go-live; contracts before it are incomplete here
-# exclude_contracts = ["1", "28"]             # 122" contracts closed in the previous system
+erp_start_date = "2023-10-01"               # Dost ERP go-live; contracts before it are incomplete here
+exclude_contracts = ["1", "28"]             # 122" contracts closed in the previous system
 # contract_min = 37                           # to reconcile a single party range (e.g. the owner's 30/1 PC closing)
 # contract_max = 75
-# owner_return_meters = { "70" = 382 }        # party returns the owner knows of that are not yet entered in the ERP
+# owner_return_meters = { }                  # genuine party returns not yet in the ERP (the c29 382 m is an ADJUS,
+                                              # handled automatically as a mill stock adjustment, not a party return)
+# mill_accounts = ["200105006", "300308001"] # rejection / store accounts - fabric billed to these stays the mill's
 
 # Closing counts and rates per lb by ERP yarn code (Dost Textiles, from 48_contract_closing.py)
 [closing.yarns."91"]        # 12/1 CTN
@@ -95,7 +97,7 @@ warp_closing_count = 30
 weft_closing_count = 31
 rate_per_lb = 440
 [closing.yarns."98"]        # 36/2 VA
-warp_closing_count = 16
+warp_closing_count = 17
 weft_closing_count = 17
 rate_per_lb = 350
 [closing.yarns."4"]         # 40/1 CTN

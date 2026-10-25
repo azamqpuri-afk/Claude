@@ -20,9 +20,12 @@ if ((Run @("licence", "check", "--push")) -ne 0) {
     "no valid licence - nothing run (see the message above)" | Out-File $log -Append -Encoding utf8
     exit 1
 }
-if ((Run @("sync")) -ne 0) {
-    "sync failed - reports skipped" | Out-File $log -Append -Encoding utf8
+$sync = Run @("sync")
+if ($sync -eq 1) {                                   # every data set failed (ERP unreachable / bad login): stop
+    "sync failed completely - reports skipped" | Out-File $log -Append -Encoding utf8
     exit 1
+} elseif ($sync -eq 2) {                             # some data sets failed: carry on with the data we have
+    "WARNING: some data sets did not sync - running on the data we have (see the lines above)" | Out-File $log -Append -Encoding utf8
 }
 Run @("audit", "--csv", "--pdf", "--push") | Out-Null
 Run @("report", "zero", "--push") | Out-Null

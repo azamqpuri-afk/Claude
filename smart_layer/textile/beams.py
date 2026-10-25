@@ -22,7 +22,7 @@ from datetime import date, timedelta
 from ..reports import Report
 
 DEFAULTS = {"warn_days": 15, "urgent_days": 5, "rate_days": 30, "ends_tolerance": 5, "default_shrinkage_pct": 7,
-            "sizer_return_days": 30, "own_beam_sizers": [], "beam_aliases": {},
+            "sizer_return_days": 30, "own_beam_sizers": [], "beam_aliases": {}, "ignore_beams": [], "empty_age_out_days": 120,
             "shrink_min_pct": 1, "shrink_max_pct": 15}   # real shrinkage is ~1-12% by quality; outside = cut/on-loom beam
 
 
