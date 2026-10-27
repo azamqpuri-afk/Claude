@@ -72,7 +72,9 @@ owner_return_meters = { "72" = 382 }
                                             # rejection (DELIVER_TO contains REJECT) or this account - a store-account
                                             # line that names a real customer is listed as an exception, not dropped
 
-# Closing counts and rates per lb by ERP yarn code (Dost Textiles, from 48_contract_closing.py)
+# Closing counts and rates per lb by ERP yarn code (Dost Textiles, from 48_contract_closing.py).
+# These warp/weft closing counts can also be edited in the dashboard's Contract-closing screen and saved; a save
+# writes them to closing_counts.local.toml next to this file (this file is never rewritten), with the date and who.
 [closing.yarns."91"]        # 12/1 CTN
 weft_closing_count = 11
 rate_per_lb = 275

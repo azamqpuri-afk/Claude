@@ -67,7 +67,7 @@ class Cloud:
             with zipfile.ZipFile(io.BytesIO(raw)) as z:
                 for name in z.namelist():
                     base = Path(name).name
-                    if base in ("store.db", "config.toml") and base == name:   # no paths, no traversal
+                    if base in ("store.db", "config.toml", "closing_counts.local.toml") and base == name:   # no paths, no traversal
                         tmp = d / (base + ".tmp")
                         tmp.write_bytes(z.read(name))
                         tmp.replace(d / base)

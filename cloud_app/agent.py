@@ -39,6 +39,9 @@ def make_zip(cfg):
         cfg_file = cfg.base_dir / "config.toml"
         if cfg_file.exists():
             z.write(cfg_file, "config.toml")              # settings only; secrets live in .env, which is NOT sent
+        side = cfg.base_dir / "closing_counts.local.toml"
+        if side.exists():
+            z.write(side, "closing_counts.local.toml")    # so the cloud closing uses the counts edited on-prem
     return buf.getvalue()
 
 

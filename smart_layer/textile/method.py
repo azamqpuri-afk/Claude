@@ -101,6 +101,8 @@ class Method:
     def __init__(self, closing_cfg):
         self.cfg = {**DEFAULT_CLOSING, **(closing_cfg or {})}
         self._formulas = {}
+        self.count_overrides = {}                          # {yarn code/group: {warp_closing_count, weft_closing_count}}:
+                                                           # a what-if count typed in the dashboard, winning over config
         self.weight("warp", self.cfg, 80, 60, 40)          # fail early on a bad formula
 
     def settings(self, contract_no=None, party=None):
@@ -136,6 +138,11 @@ class Method:
         return self.cfg["yarns"].get(str(code), {}) if code is not None else {}
 
     def closing_count(self, side, yarn_code, count, s):
+        if yarn_code is not None:                          # a dashboard what-if count wins over config, for this run only
+            for key in (str(yarn_code), self.group(yarn_code)):
+                ov = self.count_overrides.get(key)
+                if ov and ov.get(f"{side}_closing_count") is not None:
+                    return float(ov[f"{side}_closing_count"])
         y = {**self.yarn(yarn_code), **s.get("_yarns", {}).get(str(yarn_code), {})}
         own = y.get(f"{side}_closing_count", y.get("closing_count"))
         if own:

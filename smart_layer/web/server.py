@@ -107,6 +107,31 @@ class App:
         finally:
             con.close()
 
+    def closing(self, day, party, overrides):
+        """The contract-closing report, optionally recomputed with per-yarn what-if closing counts (not saved)."""
+        from ..textile import closing as cl
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return cl.contract_closing(con, self.cfg, day, party or None, overrides or None)
+        finally:
+            con.close()
+
+    def closing_counts(self, day, party):
+        """The warp/weft closing counts in effect for a party's closing, prefilled for the editable dashboard panel."""
+        from ..textile import closing as cl
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return cl.closing_counts(con, self.cfg, day, party or None)
+        finally:
+            con.close()
+
+    def save_closing_counts(self, counts, who, party):
+        """Persist edited closing counts to the side file next to config.toml and apply them to this running server."""
+        from .. import config as cfgmod
+        res = cfgmod.save_closing_counts(self.cfg.base_dir, counts, who, party)
+        cfgmod.merge_closing_counts(self.cfg.data, {"yarns": res.get("yarns", {})})   # take effect without a restart
+        return res
+
     def ledger(self, account):
         from . import finance
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -164,11 +189,60 @@ def _static_response(name):
     return 200, p.read_bytes(), ctype, {"Cache-Control": "max-age=86400"}
 
 
+def _parse_counts(text):
+    """Edited closing counts from the ?counts= query (JSON {code: {warp_closing_count, weft_closing_count}}).
+    Bad or out-of-range values are dropped; an empty / broken string gives no overrides."""
+    if not text:
+        return {}
+    try:
+        raw = json.loads(text)
+    except (ValueError, TypeError):
+        return {}
+    out = {}
+    if isinstance(raw, dict):
+        for code, vals in list(raw.items())[:300]:
+            if not isinstance(vals, dict):
+                continue
+            keep = {}
+            for k in ("warp_closing_count", "weft_closing_count"):
+                v = vals.get(k)
+                try:
+                    if v not in (None, "", "-") and 0 < float(v) <= 500:
+                        keep[k] = float(v)
+                except (TypeError, ValueError):
+                    pass
+            if keep:
+                out[str(code)] = keep
+    return out
+
+
+def _report_body(app, rep, name, tag, fmt, cell):
+    """Turn a built Report into a (code, body, ctype, headers) response in json / csv / pdf. Shared by the report
+    endpoint and the recomputed-closing endpoint so they render and download identically."""
+    from .. import PRODUCT
+    if fmt == "csv":
+        import csv
+        import io
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(rep.columns)
+        w.writerows(rep.rows)
+        return 200, buf.getvalue().encode("utf-8-sig"), "text/csv; charset=utf-8", {"Content-Disposition": f'attachment; filename="{name}_{tag}.csv"'}
+    if fmt == "pdf":
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            p = rep.write_pdf(tmp, f"{name}_{tag}.pdf", app.cfg["company"]["name"], PRODUCT)
+            body = Path(p).read_bytes()
+        return 200, body, "application/pdf", {"Content-Disposition": f'attachment; filename="{name}_{tag}.pdf"'}
+    return 200, {"title": rep.title, "columns": rep.columns, "summary": rep.summary,
+                 "rows": [[cell(v) for v in r] for r in rep.rows], "date": tag}, "application/json", {}
+
+
 def get_response(app, path, query, check_licence=True):
     """Shared GET routing for the dashboard API, used by BOTH the on-prem server and the cloud (one App per tenant).
     The caller does its own authentication first. Returns (code, body, ctype, headers); body is bytes (page / static
     / download) or a dict (sent as JSON)."""
-    from .. import PRODUCT, licence, report_registry
+    from .. import licence, report_registry
     from ..reports import fmt as cell
     if path in ("/", "/index.html"):
         return 200, PAGE.read_bytes(), "text/html; charset=utf-8", {}
@@ -181,7 +255,7 @@ def get_response(app, path, query, check_licence=True):
     if path == "/api/reports":
         return 200, {"reports": [{"name": n, "label": label} for n, label in report_registry.menu()]}, "application/json", {}
     if path in ("/api/data", "/api/report", "/api/entities", "/api/browse", "/api/ledger",
-                "/api/finance/parties", "/api/finance/daily"):
+                "/api/finance/parties", "/api/finance/daily", "/api/closing", "/api/closing/counts"):
         if check_licence:
             st = licence.status(app.cfg)
             if not st.allowed:
@@ -206,27 +280,17 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.fin_daily(day), "application/json", {}
         if path == "/api/data":
             return 200, app.data(day), "application/json", {}
+        if path == "/api/closing/counts":
+            return 200, app.closing_counts(day, params.get("party", "")), "application/json", {}
+        if path == "/api/closing":                      # the closing report, recomputed with edited counts
+            overrides = _parse_counts(params.get("counts", ""))
+            rep = app.closing(day, params.get("party", ""), overrides)
+            return _report_body(app, rep, "closing", (day or date.today()).isoformat(), params.get("fmt", "json"), cell)
         name, fmt = params.get("name", ""), params.get("fmt", "json")   # a report
         if name not in report_registry.REPORTS:
             return 404, {"error": "unknown report"}, "application/json", {}
         rep, on = app.report(name, day)
-        tag = on.isoformat()
-        if fmt == "csv":
-            import csv
-            import io
-            buf = io.StringIO()
-            w = csv.writer(buf)
-            w.writerow(rep.columns)
-            w.writerows(rep.rows)
-            return 200, buf.getvalue().encode("utf-8-sig"), "text/csv; charset=utf-8", {"Content-Disposition": f'attachment; filename="{name}_{tag}.csv"'}
-        if fmt == "pdf":
-            import tempfile
-            with tempfile.TemporaryDirectory() as tmp:
-                p = rep.write_pdf(tmp, f"{name}_{tag}.pdf", app.cfg["company"]["name"], PRODUCT)
-                body = Path(p).read_bytes()
-            return 200, body, "application/pdf", {"Content-Disposition": f'attachment; filename="{name}_{tag}.pdf"'}
-        return 200, {"title": rep.title, "columns": rep.columns, "summary": rep.summary,
-                     "rows": [[cell(v) for v in r] for r in rep.rows], "date": tag}, "application/json", {}
+        return _report_body(app, rep, name, on.isoformat(), fmt, cell)
     return 404, {"error": "not found"}, "application/json", {}
 
 
@@ -340,6 +404,19 @@ def handler(app):
                 text = str(json.loads(self.rfile.read(n) or b"{}").get("text", ""))
                 st = licence.install(app.cfg, text)
                 return self._send(200 if st.allowed else 400, {"state": st.state, "message": st.message, "allowed": st.allowed})
+            if self.path == "/api/closing/counts":       # save edited closing counts (dashboard password already checked)
+                from .. import licence
+                if not licence.status(app.cfg).allowed:
+                    return self._send(403, {"error": "Licence: " + licence.status(app.cfg).message})
+                try:
+                    n = min(int(self.headers.get("Content-Length", 0)), 100000)
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                    res = app.save_closing_counts(body.get("counts", {}) or {},
+                                                  str(body.get("who", "")).strip()[:60],
+                                                  str(body.get("party", "")).strip()[:80])
+                    return self._send(200, res)
+                except Exception as e:
+                    return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path != "/api/ask":
                 return self._send(404, {"error": "not found"})
             from .. import licence

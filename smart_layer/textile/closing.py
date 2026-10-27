@@ -305,9 +305,38 @@ def _yarn_label(method, code, names):
     return names.get(str(code), names.get(code, code))
 
 
-def contract_closing(con, cfg, as_of=None, party=None):
+def closing_counts(con, cfg, as_of=None, party=None):
+    """The warp/weft closing count (and rate) in effect for each yarn in a party's closing, prefilled from config so
+    the owner can edit them in the dashboard and recompute. One row per yarn group; a count may be blank, meaning the
+    closing derives it from the yarn's own count. Includes the party override if one applies."""
     as_of = as_of or date.today()
     method = Method(cfg["closing"])
+    rows = contract_rows(con, method, as_of)
+    if party:
+        rows = [r for r in rows if party.lower() in (r["party"] or "").lower()]
+    pov = method.settings(party=party).get("_yarns", {})      # per-party closing-count overrides from config
+    seen = {}
+    for r in rows:
+        if r.get("pre_go_live"):
+            continue
+        g = str(r["yarn"])
+        if g in seen:
+            continue
+        base = {**method.yarn(g), **pov.get(g, {})}
+        party_set = g in pov and any(k in pov[g] for k in ("warp_closing_count", "weft_closing_count", "closing_count"))
+        seen[g] = {"yarn": g, "yarn_name": r["yarn_name"],
+                   "warp_closing_count": base.get("warp_closing_count", base.get("closing_count")),
+                   "weft_closing_count": base.get("weft_closing_count", base.get("closing_count")),
+                   "rate_per_lb": base.get("rate_per_lb"), "party_override": party_set}
+    return {"party": party or "", "date": as_of.isoformat(),
+            "yarns": sorted(seen.values(), key=lambda x: (x["yarn_name"] or x["yarn"]))}
+
+
+def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None):
+    as_of = as_of or date.today()
+    method = Method(cfg["closing"])
+    if count_overrides:                                        # dashboard what-if: these counts win over config
+        method.count_overrides = {str(k): dict(v) for k, v in count_overrides.items() if isinstance(v, dict)}
     rows = contract_rows(con, method, as_of)
     if party:
         rows = [r for r in rows if party.lower() in (r["party"] or "").lower()]

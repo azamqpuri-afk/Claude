@@ -294,6 +294,40 @@ def test_yarn_groups_share_one_balance(env):
         con.execute("UPDATE contracts SET weft_yarn = 'Y40' WHERE contract_no = 'CON-41'")
 
 
+def test_closing_count_overrides_change_consumption(env):
+    cfg, con = env
+    base = {r["contract"]: r for r in closing.contract_rows(con, method.Method(cfg["closing"]), END)}["CON-41"]
+    wy = con.execute("SELECT warp_yarn FROM contracts WHERE contract_no = 'CON-41'").fetchone()[0]
+    m = method.Method(cfg["closing"])
+    m.count_overrides = {str(wy): {"warp_closing_count": 1}}       # a tiny count -> far more yarn per meter
+    over = {r["contract"]: r for r in closing.contract_rows(con, m, END)}["CON-41"]
+    assert over["used_bags"] > base["used_bags"]                   # the what-if count flows into the closing
+
+
+def test_closing_counts_prefill_lists_yarns(env):
+    cfg, con = env
+    pre = closing.closing_counts(con, cfg, END)
+    assert pre["yarns"] and all("yarn" in y and "warp_closing_count" in y for y in pre["yarns"])
+    # party filter narrows to that party's yarns only
+    one = closing.closing_counts(con, cfg, END, party="Lahore")
+    assert one["party"] == "Lahore"
+
+
+def test_save_closing_counts_sidecar_merges_on_load(tmp_path):
+    (tmp_path / "config.toml").write_text('[closing]\n[closing.yarns."Y40"]\nwarp_closing_count = 40\n')
+    res = config.save_closing_counts(tmp_path, {"Y40": {"warp_closing_count": 33, "weft_closing_count": 34,
+                                                         "yarn_name": "40/1 CTN"}}, who="Azam")
+    assert res["ok"] and res["saved"] == ["Y40"]
+    side = (tmp_path / "closing_counts.local.toml").read_text()
+    assert "changed" in side and "Azam" in side and "40/1 CTN" in side      # date + who recorded
+    cfg = config.load(tmp_path / "config.toml")
+    assert cfg["closing"]["yarns"]["Y40"]["warp_closing_count"] == 33        # the saved count wins over config.toml
+    assert cfg["closing"]["yarns"]["Y40"]["weft_closing_count"] == 34
+    # a blank or out-of-range count is ignored, never written
+    res2 = config.save_closing_counts(tmp_path, {"Y40": {"warp_closing_count": 9999}, "Y50": {"weft_closing_count": ""}})
+    assert res2["saved"] == [] and "Y50" not in config.load(tmp_path / "config.toml")["closing"]["yarns"]
+
+
 @pytest.mark.parametrize("formula", ["__import__('os').system('x')", "open('f')", "count.real", "[1, 2]", "x + 1"])
 def test_closing_formula_is_arithmetic_only(formula):
     with pytest.raises(method.FormulaError):
@@ -414,6 +448,39 @@ def test_server_reports_menu_and_download(env):
     finally:
         httpd.shutdown()
         cfg.data["serve"] = {}
+
+
+def test_server_closing_counts_endpoints(env):
+    import urllib.parse
+    cfg, con = env
+    cfg.data["serve"] = {"password": "s3cret-pass"}
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), web_server.handler(web_server.App(cfg)))
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    url = f"http://127.0.0.1:{httpd.server_address[1]}"
+    auth = {"Authorization": "Basic " + base64.b64encode(b"o:s3cret-pass").decode()}
+
+    def get(path):
+        return urllib.request.urlopen(urllib.request.Request(url + path, headers=auth))
+
+    try:
+        assert json.loads(get("/api/closing/counts?date=2026-10-02").read())["yarns"]
+        wy = con.execute("SELECT warp_yarn FROM contracts WHERE contract_no = 'CON-41'").fetchone()[0]
+        base = json.loads(get("/api/closing?fmt=json&date=2026-10-02").read())
+        q = urllib.parse.quote(json.dumps({str(wy): {"warp_closing_count": 1}}, separators=(",", ":")))
+        over = json.loads(get(f"/api/closing?fmt=json&date=2026-10-02&counts={q}").read())
+        assert over["rows"] != base["rows"]                     # the what-if count recomputed the closing
+        # save (a yarn code no demo contract uses, so the shared env closing is untouched) writes the side file
+        body = json.dumps({"counts": {"Y_TEST": {"warp_closing_count": 22, "yarn_name": "x"}}, "who": "Azam"}).encode()
+        req = urllib.request.Request(url + "/api/closing/counts", data=body, method="POST",
+                                     headers={**auth, "Content-Type": "application/json"})
+        res = json.loads(urllib.request.urlopen(req).read())
+        assert res["ok"] and res["saved"] == ["Y_TEST"]
+        assert (cfg.base_dir / "closing_counts.local.toml").exists()
+    finally:
+        httpd.shutdown()
+        cfg.data["serve"] = {}
+        cfg.data.get("closing", {}).get("yarns", {}).pop("Y_TEST", None)
+        (cfg.base_dir / "closing_counts.local.toml").unlink(missing_ok=True)
 
 
 def test_server_will_not_open_to_network_without_password(env):

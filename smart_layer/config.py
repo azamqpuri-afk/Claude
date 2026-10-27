@@ -86,6 +86,99 @@ def _merge(base, over):
     return out
 
 
+# --- editable closing counts (saved from the dashboard, kept in a side file so the hand-written config.toml,
+#     with all its comments, is never rewritten) -------------------------------------------------------------
+COUNTS_SIDECAR = "closing_counts.local.toml"
+_COUNT_KEYS = ("warp_closing_count", "weft_closing_count")
+
+
+def merge_closing_counts(data, extra):
+    """Fold the side file's [yarns."<code>"] closing counts into config [closing.yarns] (base defaults for every
+    party). Only the two count keys are taken; a party-specific count in config.toml still wins for that party."""
+    yarns = data.setdefault("closing", {}).setdefault("yarns", {})
+    for code, vals in (extra.get("yarns") or {}).items():
+        if not isinstance(vals, dict):
+            continue
+        entry = yarns.setdefault(str(code), {})
+        for k in _COUNT_KEYS:
+            if k in vals:
+                entry[k] = vals[k]
+    return {str(c): {k: v[k] for k in _COUNT_KEYS if k in v}
+            for c, v in (extra.get("yarns") or {}).items() if isinstance(v, dict)}
+
+
+def _fmt_count(v):
+    f = float(v)
+    return str(int(f)) if f == int(f) else repr(f)
+
+
+def save_closing_counts(config_dir, counts, who="", party="", when=None):
+    """Write edited warp/weft closing counts to the side file next to config.toml, with the date and who changed them.
+    `counts` is {yarn code: {warp_closing_count, weft_closing_count, yarn_name}}; blank / out-of-range values are
+    skipped. Returns {ok, saved:[codes], yarns:{...}, file, when, who}. Never touches config.toml itself."""
+    from datetime import date as _date
+    when = when or _date.today().isoformat()
+    side = Path(config_dir) / COUNTS_SIDECAR
+    existing = {}
+    if side.exists():
+        try:
+            existing = tomllib.loads(read_text_any(side))
+        except tomllib.TOMLDecodeError:
+            existing = {}
+    yarns = {str(k): dict(v) for k, v in (existing.get("yarns") or {}).items() if isinstance(v, dict)}
+    meta = {str(k): dict(v) for k, v in (existing.get("meta") or {}).items() if isinstance(v, dict)}
+    saved = []
+    for code, vals in (counts or {}).items():
+        code, vals = str(code), (vals or {})
+        entry, touched = yarns.get(code, {}), False
+        for k in _COUNT_KEYS:
+            raw = vals.get(k)
+            if raw in (None, "", "-"):
+                continue
+            try:
+                num = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if not 0 < num <= 500:                    # a closing count is a yarn count; anything outside this is a typo
+                continue
+            if entry.get(k) != num:
+                touched = True
+            entry[k] = num
+        if entry:
+            yarns[code] = entry
+        if touched:
+            m = meta.get(code, {})
+            m["changed"] = when
+            if who:
+                m["by"] = who
+            if vals.get("yarn_name"):
+                m["name"] = str(vals["yarn_name"])[:40]
+            meta[code] = m
+            saved.append(code)
+    lines = ["# Closing counts saved from the Smart Layer dashboard. Safe to read, edit or delete.",
+             "# They set the default warp/weft closing count per yarn, on top of config.toml [closing.yarns].",
+             "# A party-specific count in config.toml still wins for that party.", ""]
+    for code in sorted(yarns, key=lambda c: (meta.get(c, {}).get("name") or c)):
+        m = meta.get(code, {})
+        tail = [t for t in (m.get("name"),
+                            ("changed " + m["changed"] + (" by " + m["by"] if m.get("by") else "")) if m.get("changed") else "")
+                if t]
+        lines.append(f'[yarns."{code}"]' + ("  # " + " — ".join(tail) if tail else ""))
+        for k in _COUNT_KEYS:
+            if k in yarns[code]:
+                lines.append(f"{k} = {_fmt_count(yarns[code][k])}")
+        lines.append("")
+    if meta:                                          # keep the audit as data too, so a later save preserves it
+        lines.append("[meta]")
+        for code in sorted(meta):
+            parts = ", ".join(f'{k} = "{val}"' for k, val in meta[code].items())
+            lines.append(f'"{code}" = {{ {parts} }}')
+        lines.append("")
+    side.write_text("\n".join(lines), encoding="utf-8")
+    return {"ok": True, "saved": saved, "yarns": {c: {k: yarns[c][k] for k in _COUNT_KEYS if k in yarns[c]} for c in yarns},
+            "file": side.name, "when": when, "who": who}
+
+
 class Config:
     def __init__(self, data, base_dir):
         self.data = data
@@ -113,4 +206,11 @@ def load(path="config.toml", expand=True):
         data = tomllib.loads(read_text_any(path))
     except tomllib.TOMLDecodeError as e:
         raise SystemExit(f"{path.name} has a mistake: {e}. Tip: Windows paths need single quotes, e.g. 'C:\\oracle\\bin'")
-    return Config(_merge(DEFAULTS, _expand(data) if expand else data), path.parent)
+    merged = _merge(DEFAULTS, _expand(data) if expand else data)
+    side = path.parent / COUNTS_SIDECAR            # closing counts the owner edited in the dashboard, if any
+    if side.exists():
+        try:
+            merge_closing_counts(merged, tomllib.loads(read_text_any(side)))
+        except tomllib.TOMLDecodeError:
+            pass
+    return Config(merged, path.parent)
