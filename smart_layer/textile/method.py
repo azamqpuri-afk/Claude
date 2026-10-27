@@ -48,6 +48,14 @@ DEFAULT_CLOSING = {
     "at_sizer_min_bags": 3,          # ignore tiny yarn-at-sizer balances below this many bags (rounding noise)
     "weft_yarn_by_quality": {},      # {"31/34" = "125"}: the weft the sub-quality really uses (the ERP's is blank)
     "owner_return_meters": {},       # {"70" = 382}: party returns the owner knows of that are not yet in the ERP
+    "mill_accounts": ["300308001"],  # rejection posting account(s); a line is the mill's only when it is a rejection
+    # --- optional overrides the owner uses to match a hand closing (all off by default) ---
+    "physical_in_hand": [],          # [{party = "Haroon", yarn = "109", bags = 0}]: use a physical godown count
+                                     #   per party+yarn instead of the ERP book, which swings a lot
+    "rejection_in_stock_m": {},      # {"Haroon" = 500}: fixed rejection meters in stock per party -> fresh stock =
+                                     #   total fabric stock - this, instead of - C - CP
+    "unentered_weft": False,         # add weft for fabric woven but not yet entered (days since last entry x loom rate)
+    "pooled_shrinkage": False,       # one shrinkage per party+yarn account (pooled, meter-weighted) for the WIP beams
 }
 OVERRIDABLE = ("weight_formula", "divisor", "bag_lb", "count_margin", "basis", "rejection_charged_to",
                "wastage_allowance_pct", "warp_crimp_pct", "weft_crimp_pct")

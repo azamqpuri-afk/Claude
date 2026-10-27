@@ -55,15 +55,22 @@ yarn_groups = [["6", "18"], ["102", "120"]]
 # Deduct the party's yarn still in the mill (fabric in stock, warp on looms, sized beams waiting, yarn at a sizer,
 # loose yarn in hand) from the balance, as well as the fabric delivered. Turn off for a plain delivered-only closing.
 wip = true
+unentered_weft = true              # add weft for fabric woven on a loom but not yet keyed (days since last entry x loom rate)
+pooled_shrinkage = true            # one meter-weighted shrinkage per party+yarn account for the WIP beams
+# owner's physical overrides where the ERP book is unreliable (per party + yarn / per party):
+physical_in_hand = [ { party = "Haroon", yarn = "109", bags = 0 } ]   # physical godown count beats the ERP book
+rejection_in_stock_m = { Haroon = 500 }                               # fixed rejection meters in stock (vs C + CP)
 # the 76x66 31/34 sub-quality really wefts yarn 125 (the ERP's WC_CONT_SUB_V weft column is blank for it)
 weft_yarn_by_quality = { "31/34" = "125" }
 erp_start_date = "2023-10-01"               # Dost ERP go-live; contracts before it are incomplete here
 exclude_contracts = ["1", "28"]             # 122" contracts closed in the previous system
 # contract_min = 37                           # to reconcile a single party range (e.g. the owner's 30/1 PC closing)
 # contract_max = 75
-# owner_return_meters = { }                  # genuine party returns not yet in the ERP (the c29 382 m is an ADJUS,
-                                              # handled automatically as a mill stock adjustment, not a party return)
-# mill_accounts = ["200105006", "300308001"] # rejection / store accounts - fabric billed to these stays the mill's
+# Haroon's genuine fabric return with no GPIN (gate register 2288/2312), separate from the c29 ADJUS stock fix
+owner_return_meters = { "72" = 382 }
+# mill_accounts = ["300308001"]             # rejection posting account; a line is the mill's only when it is a
+                                            # rejection (DELIVER_TO contains REJECT) or this account - a store-account
+                                            # line that names a real customer is listed as an exception, not dropped
 
 # Closing counts and rates per lb by ERP yarn code (Dost Textiles, from 48_contract_closing.py)
 [closing.yarns."91"]        # 12/1 CTN
@@ -191,6 +198,7 @@ ends_tolerance = 5                 # 8,855 / 8,856-end sets count as the same (6
 own_beam_sizers = ["Hiba"]         # parties that bring their own beams - left out of the sizer ledger
 # a beam that went out under one number and came back under another is the same physical beam
 beam_aliases = { "00336" = "00214" }
+ignore_beams = ["00072"]           # a stale beam number the ERP never cleared (last off-loom long ago)
 
 [yarn]
 # 52/1 and 54/1 CTN are the same yarn commercially - show them as one line in the count-wise stock list.

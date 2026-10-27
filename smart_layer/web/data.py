@@ -323,6 +323,11 @@ def _beam_stock(con, cfg, as_of=None):
     alias = {str(k): str(v) for k, v in (t.get("beam_aliases") or {}).items()}
     ignore = {str(b) for b in (t.get("ignore_beams") or [])}
     floor = (as_of - timedelta(days=int(t.get("empty_age_out_days", 120)))).isoformat()
+    # the beam snapshot (WV_BEAM_ATLOOM_V / BEAMS_STOCK_V) is authoritative for where a beam IS now: a beam it shows
+    # on a loom or sized-and-waiting is not empty, whatever its movement dates say (an old off-loom move can be keyed
+    # after a re-mount).
+    held = {alias.get(str(b), str(b)) for (b,) in con.execute(
+        "SELECT beam_no FROM beams WHERE beam_no IS NOT NULL AND status IN ('on_loom', 'sized_waiting')")}
     latest = {}                                          # beam -> {move_type: latest date}
     for beam, mt, dd in con.execute("""SELECT beam_no, move_type, move_date FROM beam_movements
             WHERE beam_no IS NOT NULL AND move_type IN ('to_loom', 'from_loom_finished', 'from_loom_cut', 'empty_to_sizer')
@@ -330,7 +335,7 @@ def _beam_stock(con, cfg, as_of=None):
         latest.setdefault(alias.get(beam, beam), {})[mt] = dd    # ordered: last date per type wins
     empty = 0
     for b, mv in latest.items():
-        if b in ignore:
+        if b in ignore or b in held:
             continue
         off = max(mv.get("from_loom_finished", ""), mv.get("from_loom_cut", ""))
         # came off a loom, not sent to a sizer since (a tie on the same day means it went to the sizer), not

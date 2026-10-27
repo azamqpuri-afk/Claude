@@ -31,6 +31,11 @@ def contract_rows(con, method, as_of):
     owner_ret = {str(k): float(v) for k, v in (cfg.get("owner_return_meters") or {}).items()}
     wip_on = bool(cfg.get("wip", True))
     min_bags = float(cfg.get("at_sizer_min_bags", 3))
+    phys_ih = [(str(x.get("party", "")).lower(), method.group(str(x.get("yarn", ""))), float(x.get("bags", 0)))
+               for x in (cfg.get("physical_in_hand") or [])]          # hook a: physical godown count per party+yarn
+    rej_stock = {str(k).lower(): float(v) for k, v in (cfg.get("rejection_in_stock_m") or {}).items()}  # hook b
+    unentered_on = bool(cfg.get("unentered_weft", False))             # hook c
+    pooled_on = bool(cfg.get("pooled_shrinkage", False))              # hook d
 
     contracts = con.execute("""SELECT contract_no, party_code, COALESCE(c.party_name, p.party_name, c.party_code), quality,
                                       ends_per_inch, picks_per_inch, width_in, warp_yarn, warp_count, weft_yarn, weft_count,
@@ -39,6 +44,8 @@ def contract_rows(con, method, as_of):
     names = {code: name for code, name in con.execute(
         "SELECT yarn_code, MAX(yarn_name) FROM yarn_movements WHERE yarn_name IS NOT NULL GROUP BY yarn_code")}
     party_of = {str(r[0]): r[1] for r in contracts}
+    pname_of = {str(r[0]): r[2] for r in contracts}               # contract -> party NAME (for party-level overrides)
+    acct_of = {str(r[0]): (r[2], method.group(method.contract_overrides(str(r[0])).get("warp_yarn", r[7]))) for r in contracts}
 
     # yarn movements per contract + group: net received (receipts + opening - returns - sale), yarn at sizer, yarn in hand
     recv, at_sizer, in_hand = defaultdict(float), defaultdict(float), defaultdict(float)
@@ -86,18 +93,65 @@ def contract_rows(con, method, as_of):
             pm_subq[max(subs, key=lambda k: pm_subq[k])] -= m
 
     # fresh fabric in stock = stock - C - CP (C and CP in stock are mill rejection, not the party's), per contract and sub-quality
-    fresh_stock, fs_subq = defaultdict(float), defaultdict(float)
+    fresh_stock, fs_subq, full_stock, full_subq = defaultdict(float), defaultdict(float), defaultdict(float), defaultdict(float)
     for cno, quality, meters, cm, cpm in con.execute("SELECT contract_no, quality, SUM(meters), SUM(c_m), SUM(cp_m) FROM fabric_stock GROUP BY contract_no, quality"):
-        fresh = (meters or 0) - (cm or 0) - (cpm or 0)
-        fresh_stock[str(cno)] += fresh
-        fs_subq[(str(cno), str(quality or ""))] += fresh
+        cno, k = str(cno), (str(cno), str(quality or ""))
+        fresh_stock[cno] += (meters or 0) - (cm or 0) - (cpm or 0)
+        fs_subq[k] += (meters or 0) - (cm or 0) - (cpm or 0)
+        full_stock[cno] += (meters or 0)
+        full_subq[k] += (meters or 0)
+    # hook b: when a fixed rejection-in-stock is set for a party, use TOTAL fabric stock minus that fixed meters
+    # (owner's physical rejection figure) instead of - C - CP
+    for psub, rejm in rej_stock.items():
+        cs = [c for c in {c for c, pn in pname_of.items() if psub in (pn or "").lower()} if full_stock.get(c)]
+        for c in cs:
+            fresh_stock[c] = full_stock[c]
+            for key in [key for key in fs_subq if key[0] == c]:
+                fs_subq[key] = full_subq.get(key, 0.0)
+        if cs:
+            big = max(cs, key=lambda c: full_stock[c])
+            fresh_stock[big] -= rejm
+            subs = [key for key in fs_subq if key[0] == big]
+            if subs:
+                fs_subq[max(subs, key=lambda key: fs_subq[key])] -= rejm
 
     # warp still tied up in beams (fabric-meters-equivalent), per contract; shrinkage is learned per beam set
     by_c, by_q, mill_shrink, qual = learned_shrinkage(con, cfg.get("default_shrinkage_pct", 7))
     bw = {str(c): (w or 1) for c, w in con.execute("SELECT contract_no, MAX(bwidth) FROM beams WHERE bwidth IS NOT NULL GROUP BY contract_no")}
 
+    pooled = {}                                           # hook d: one shrinkage per (party, warp yarn) account
+    if pooled_on:
+        num, den = defaultdict(float), defaultdict(float)
+        for cno, length, woven in con.execute("""SELECT m.contract_no, COALESCE(m.length_m, s.length_m), m.woven_m FROM beam_movements m
+                LEFT JOIN (SELECT beam_no, set_no, MAX(length_m) length_m FROM beam_movements WHERE move_type = 'sized_received'
+                           GROUP BY beam_no, set_no) s ON s.beam_no = m.beam_no AND s.set_no = m.set_no
+                WHERE m.move_type = 'from_loom_finished' AND m.woven_m > 0"""):
+            k = acct_of.get(str(cno))
+            L = (length or 0) * bw.get(str(cno), 1)
+            if k and L > 0 and woven and 0.01 <= (1 - woven / L) <= 0.20:
+                num[k] += woven
+                den[k] += L
+        pooled = {k: 1 - num[k] / den[k] for k in den if den[k] > 0}
+
     def shrink_of(cno):
+        if pooled_on and acct_of.get(cno) in pooled:
+            return pooled[acct_of[cno]]
         return by_c.get(cno) if cno in by_c else by_q.get(qual.get(cno), mill_shrink)
+
+    # hook c: weft for fabric woven on a loom but not yet entered (per contract)
+    unentered_m = defaultdict(float)
+    if unentered_on:
+        since30 = (as_of - timedelta(days=30)).isoformat()
+        loom_rate = {str(l): (mm or 0) / 30 for l, mm in con.execute(
+            "SELECT loom_code, SUM(meters) FROM loom_production WHERE prod_date > ? AND prod_date <= ? GROUP BY loom_code", (since30, d))}
+        for cno, loom, mount in con.execute("SELECT contract_no, loom_code, mounted_date FROM beams WHERE status = 'on_loom' AND loom_code IS NOT NULL"):
+            last = con.execute("SELECT MAX(prod_date) FROM loom_production WHERE loom_code = ? AND contract_no = ? AND prod_date <= ?",
+                               (loom, str(cno), d)).fetchone()[0] or mount
+            if not last:
+                continue
+            days = (as_of - date.fromisoformat(str(last)[:10])).days
+            if days > 0:
+                unentered_m[str(cno)] += days * loom_rate.get(str(loom), 0)
 
     warp_loom_m, sized_m = defaultdict(float), defaultdict(float)
     for cno, length, woven in con.execute("SELECT contract_no, set_length_m, woven_m FROM beams WHERE status = 'on_loom'"):
@@ -106,7 +160,7 @@ def contract_rows(con, method, as_of):
         sized_m[str(cno)] += (length or 0) * bw.get(str(cno), 1) * (1 - shrink_of(cno))           # BLENGTH x bwidth
 
     woven = {str(c): last for c, last in con.execute("SELECT contract_no, MAX(prod_date) FROM loom_production WHERE prod_date <= ? GROUP BY contract_no", (d,))}
-    rows = []
+    rows, phys_applied = [], set()
     for (cno, pcode, party, quality, epi, ppi, width, wy, wc, fy, fc, ordered, owner, cdate) in contracts:
         cno = str(cno)
         if owner == "mill" or cno in exclude:
@@ -148,6 +202,10 @@ def contract_rows(con, method, as_of):
             if subq == str(quality or "") and not pm_subq and not fs_subq:
                 wm = pm + (fs if wip_on else 0.0)                 # no sub-quality rows: fall back to the contract total
             used[method.group(sfy)] += wm * wlbm * allow
+        if unentered_on and unentered_m.get(cno):                 # hook c: weft woven but not yet entered (weft only)
+            wlbm_main = method.weight("weft", s, ppi, width, method.closing_count("weft", fy, fc, s))
+            if wlbm_main is not None:
+                used[method.group(fy)] += unentered_m[cno] * wlbm_main * allow
         missing = (["warp"] if warp_lbm is None else []) + (["weft"] if weft_missing else [])
         groups = {wg} | {method.group(sub_weft(q)) for q in subqs} | {g for (c, g) in recv if c == cno} | {g for (c, g) in in_hand if c == cno} | {g for (c, g) in at_sizer if c == cno}
         last = woven.get(cno)
@@ -157,7 +215,15 @@ def contract_rows(con, method, as_of):
                 ah_lb = at_sizer.get((cno, g), 0.0) / KG_PER_LB
                 if abs(ah_lb / bag) >= min_bags:
                     used[g] += ah_lb
-                used[g] += in_hand.get((cno, g), 0.0) / KG_PER_LB
+                # hook a: a physical godown count for this party+yarn replaces the ERP book, applied once per
+                # party+yarn across the party's contracts (the book swings a lot; the physical count is the truth).
+                phys = next((b for ps, yg, b in phys_ih if ps in (party or "").lower() and yg == g), None)
+                if phys is not None:
+                    if (party, g) not in phys_applied:
+                        used[g] += phys * bag
+                        phys_applied.add((party, g))
+                else:
+                    used[g] += in_hand.get((cno, g), 0.0) / KG_PER_LB
             rec_lb, used_lb = recv.get((cno, g), 0.0) / KG_PER_LB, used.get(g, 0.0)
             if abs(rec_lb) < 0.5 and abs(used_lb) < 0.5:
                 continue
@@ -179,7 +245,10 @@ def third_party_deliveries(con, method, as_of):
     so the owner can settle each one (e.g. move yarn to that party's account). Returns rows with a bag equivalent."""
     d = as_of.isoformat()
     cfg = method.cfg
-    mill_accounts = {str(a) for a in cfg.get("mill_accounts", ["200105006", "300308001"])}
+    # A line is the MILL's only when it is a rejection (DELIVER_TO contains REJECT) or the rejection posting account.
+    # A store-account line (e.g. 200105006) that names a real customer in DELIVER_TO is that customer's, and is
+    # listed as an exception under the DELIVER_TO name - not dropped as the mill's.
+    reject_accounts = {str(a) for a in cfg.get("mill_accounts", ["300308001"])}
     info = {}                                             # contract -> (own party code, warp+weft lb/m, bag_lb, own party name)
     pname = {str(c): n for c, n in con.execute("SELECT party_code, COALESCE(party_name, party_code) FROM parties")}
     for cno, pcode, pn, epi, ppi, width, wy, wc, fy, fc in con.execute("""SELECT contract_no, party_code,
@@ -197,21 +266,23 @@ def third_party_deliveries(con, method, as_of):
             FROM fabric_dispatches WHERE dispatch_date <= ? GROUP BY contract_no, party_code, deliver_to, direction""", (d,)):
         cno, dl = str(cno), str(deliver or "").upper()
         own = info.get(cno, (None,))[0]
-        if "ADJUS" in dl or "REJECTION" in dl or pcode is None or str(pcode) in mill_accounts:
-            continue
-        if own is not None and str(pcode) == own:
+        if "ADJUS" in dl or "REJECT" in dl or str(pcode) in reject_accounts:
+            continue                                      # the mill's own stock adjustment / rejection
+        if own is not None and pcode is not None and str(pcode) == own:
             continue                                      # the contract's own party - that is the closing itself
-        a = agg[(cno, str(pcode))]
+        # key by the delivered-to name so a store account billed for several customers lists each one separately
+        who = str(deliver).strip() if deliver else (str(pcode) if pcode is not None else "?")
+        a = agg[(cno, who)]
         a[0 if direction == "out" else 1] += m or 0
         if deliver:
             a[2] = deliver
     rows = []
-    for (cno, pcode), (out, back, deliver) in sorted(agg.items(), key=lambda kv: (-abs(kv[1][0] - kv[1][1]), kv[0])):
+    for (cno, who), (out, back, deliver) in sorted(agg.items(), key=lambda kv: (-abs(kv[1][0] - kv[1][1]), kv[0])):
         if out < 1 and back < 1:
             continue
         _, lbm, bag, own_name = info.get(cno, (None, 0, 100, None))
         net = out - back
-        rows.append(dict(contract=cno, own_party=own_name, party=pname.get(pcode) or deliver or pcode,
+        rows.append(dict(contract=cno, own_party=own_name, party=pname.get(who, who),
                          out_m=out, back_m=back, net_m=net, bags=(net * lbm / bag if lbm else None)))
     return rows
 
