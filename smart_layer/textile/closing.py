@@ -113,7 +113,10 @@ def contract_rows(con, method, as_of):
             fresh_stock[big] -= rejm
             subs = [key for key in fs_subq if key[0] == big]
             if subs:
-                fs_subq[max(subs, key=lambda key: fs_subq[key])] -= rejm
+                # take the rejection out of the contract's OWN-weft cloth, not a sub-quality remapped to another
+                # weft (e.g. 31/34 -> 125), so it reduces the right yarn's stock
+                own = [key for key in subs if not any(qk in key[1] for qk in weft_by_q)]
+                fs_subq[max(own or subs, key=lambda key: fs_subq[key])] -= rejm
 
     # warp still tied up in beams (fabric-meters-equivalent), per contract; shrinkage is learned per beam set
     by_c, by_q, mill_shrink, qual = learned_shrinkage(con, cfg.get("default_shrinkage_pct", 7))
@@ -202,7 +205,7 @@ def contract_rows(con, method, as_of):
             if subq == str(quality or "") and not pm_subq and not fs_subq:
                 wm = pm + (fs if wip_on else 0.0)                 # no sub-quality rows: fall back to the contract total
             used[method.group(sfy)] += wm * wlbm * allow
-        if unentered_on and unentered_m.get(cno):                 # hook c: weft woven but not yet entered (weft only)
+        if unentered_on and wip_on and unentered_m.get(cno):      # hook c: weft woven but not yet entered (weft only; WIP)
             wlbm_main = method.weight("weft", s, ppi, width, method.closing_count("weft", fy, fc, s))
             if wlbm_main is not None:
                 used[method.group(fy)] += unentered_m[cno] * wlbm_main * allow
@@ -249,6 +252,7 @@ def third_party_deliveries(con, method, as_of):
     # A store-account line (e.g. 200105006) that names a real customer in DELIVER_TO is that customer's, and is
     # listed as an exception under the DELIVER_TO name - not dropped as the mill's.
     reject_accounts = {str(a) for a in cfg.get("mill_accounts", ["300308001"])}
+    store_accounts = {str(a) for a in cfg.get("store_accounts", ["200105006"])}   # billed to a store, not a party
     info = {}                                             # contract -> (own party code, warp+weft lb/m, bag_lb, own party name)
     pname = {str(c): n for c, n in con.execute("SELECT party_code, COALESCE(party_name, party_code) FROM parties")}
     for cno, pcode, pn, epi, ppi, width, wy, wc, fy, fc in con.execute("""SELECT contract_no, party_code,
@@ -270,8 +274,12 @@ def third_party_deliveries(con, method, as_of):
             continue                                      # the mill's own stock adjustment / rejection
         if own is not None and pcode is not None and str(pcode) == own:
             continue                                      # the contract's own party - that is the closing itself
-        # key by the delivered-to name so a store account billed for several customers lists each one separately
-        who = str(deliver).strip() if deliver else (str(pcode) if pcode is not None else "?")
+        # key by the BILLED party's name (who it is really for); only for a store account, where many customers
+        # share one account, fall back to the DELIVER_TO name so each customer lists separately
+        if pcode is not None and str(pcode) in store_accounts:
+            who = str(deliver).strip() if deliver else str(pcode)
+        else:
+            who = pname.get(str(pcode)) or (str(deliver).strip() if deliver else "?")
         a = agg[(cno, who)]
         a[0 if direction == "out" else 1] += m or 0
         if deliver:
@@ -282,7 +290,7 @@ def third_party_deliveries(con, method, as_of):
             continue
         _, lbm, bag, own_name = info.get(cno, (None, 0, 100, None))
         net = out - back
-        rows.append(dict(contract=cno, own_party=own_name, party=pname.get(who, who),
+        rows.append(dict(contract=cno, own_party=own_name, party=who, deliver_to=(deliver or "").strip(),
                          out_m=out, back_m=back, net_m=net, bags=(net * lbm / bag if lbm else None)))
     return rows
 
@@ -336,6 +344,8 @@ def contract_closing(con, cfg, as_of=None, party=None):
                 line += f", {e['back_m']:,.0f} m back"
             if e["bags"] is not None:
                 line += f"  (~{e['bags']:+,.1f} bags of yarn)"
+            if e.get("deliver_to") and e["deliver_to"].lower() not in (e["party"] or "").lower():
+                line += f"  [to {e['deliver_to']}]"
             summary.append(line)
     s = method.settings()
     summary.append(f"Method: dispatched meters, divisor {s['divisor']:g}, bag {s['bag_lb']:g} lb, "
