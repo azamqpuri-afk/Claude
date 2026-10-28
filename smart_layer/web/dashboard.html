@@ -818,13 +818,17 @@ $("#rep-print").onclick=()=>window.print();
 
 /* ---------- editable closing counts ---------- */
 var closingYarns=[];
+var SRC={config:"from config", yarn:"yarn default (saved)", party:"party count", derived:"from yarn count"};
+// collect only inputs whose value differs from the prefill (bug 1: never re-save unchanged rows).
+// ids are avoided entirely - rows are found by data-yarn / data-side attributes (bug: a code may contain / or space).
 function editedCounts(){
   var o={};
-  closingYarns.forEach(y=>{
-    var w=$("#cc_"+y.yarn+"_warp"), f=$("#cc_"+y.yarn+"_weft"), e={};
-    if(w&&w.value.trim()!=="") e.warp_closing_count=w.value.trim();
-    if(f&&f.value.trim()!=="") e.weft_closing_count=f.value.trim();
-    if(Object.keys(e).length){ e.yarn_name=y.yarn_name; o[y.yarn]=e; }
+  document.querySelectorAll('#cc-table input[data-yarn]').forEach(function(inp){
+    var v=inp.value.trim(), pre=(inp.getAttribute('data-prefill')||"").trim();
+    if(v===pre) return;                                   // unchanged - skip
+    var code=inp.getAttribute('data-yarn'), side=inp.getAttribute('data-side'), nm=inp.getAttribute('data-name');
+    o[code]=o[code]||{yarn_name:nm};
+    if(v!=="") o[code][side+"_closing_count"]=v;
   });
   return o;
 }
@@ -838,26 +842,33 @@ async function openClosing(){
   await runClosing();
 }
 function renderClosingEditor(){
+  var inp=(y,side)=>{var v=y[side+"_closing_count"]; v=(v==null?"":String(v));
+    return `<input type="number" step="0.5" min="0" data-yarn="${esc(y.yarn)}" data-side="${side}" data-name="${esc(y.yarn_name||y.yarn)}" data-prefill="${esc(v)}" value="${esc(v)}" style="width:72px;padding:5px 7px;border:1px solid var(--line);border-radius:7px;background:var(--field);color:var(--ink)">`;};
   var rows=closingYarns.map(y=>`<tr>
-      <td style="white-space:nowrap">${esc(y.yarn_name||y.yarn)}${y.party_override?' <span class="tag mid" title="A party-specific count in config.toml applies for this party">party</span>':''}</td>
-      <td><input id="cc_${esc(y.yarn)}_warp" type="number" step="0.5" min="0" value="${y.warp_closing_count==null?'':esc(y.warp_closing_count)}" style="width:72px;padding:5px 7px;border:1px solid var(--line);border-radius:7px;background:var(--field);color:var(--ink)"></td>
-      <td><input id="cc_${esc(y.yarn)}_weft" type="number" step="0.5" min="0" value="${y.weft_closing_count==null?'':esc(y.weft_closing_count)}" style="width:72px;padding:5px 7px;border:1px solid var(--line);border-radius:7px;background:var(--field);color:var(--ink)"></td>
-      <td class="muted" style="font-size:12px">${y.rate_per_lb==null?'':('Rs '+esc(y.rate_per_lb)+'/lb')}</td></tr>`).join("");
+      <td style="white-space:nowrap">${esc(y.yarn_name||y.yarn)}</td>
+      <td><span class="tag ${y.source==='party'?'mid':(y.source==='yarn'?'ok':'')}" title="where this count comes from">${esc(SRC[y.source]||y.source)}</span></td>
+      <td>${inp(y,'warp')}</td>
+      <td>${inp(y,'weft')}</td>
+      <td class="muted" style="font-size:12px">${y.rate_per_lb==null?'':('Rs '+esc(y.rate_per_lb)+'/lb')}</td>
+      <td>${y.party_clearable?`<button class="btn ghost" style="padding:3px 8px;font-size:12px" onclick="clearPartyCount('${esc(y.yarn)}')">↺ clear party</button>`:''}</td></tr>`).join("");
+  var hasParty=!!closingParty;
   $("#rep-edit").innerHTML=`<div class="card" style="margin:8px 0;padding:12px 16px">
     <div class="tools" style="margin:0 0 8px;align-items:center;gap:10px;flex-wrap:wrap">
       <b>Closing counts</b>
       <label class="fld">Party <input id="cc-party" placeholder="all parties" value="${esc(closingParty)}" style="min-width:150px"></label>
       <button class="btn" id="cc-recompute">Recompute</button>
       <label class="fld">Changed by <input id="cc-who" placeholder="your name" style="min-width:120px"></label>
-      <button class="btn ghost" id="cc-save">Save to config</button>
+      <button class="btn ghost" id="cc-save-yarn">Save as yarn default</button>
+      <button class="btn ghost" id="cc-save-party" ${hasParty?'':'disabled title="type a party first"'}>Save for this party</button>
       <span class="muted" id="cc-msg" style="font-size:12px"></span>
     </div>
-    <div class="tscroll">${closingYarns.length?`<table><thead><tr><th>Yarn</th><th>Warp count</th><th>Weft count</th><th>Rate</th></tr></thead><tbody>${rows}</tbody></table>`:`<p class="muted" style="margin:4px 0">No yarns to show${closingParty?" for “"+esc(closingParty)+"”":""}. Blank counts are derived from the yarn's own count.</p>`}</div>
-    <p class="muted" style="font-size:12px;margin:8px 0 0">Edit a count and Recompute to see the closing change. Saving sets the yarn's default count for every party (with today's date and your name); a party-specific count already in config.toml still wins for that party.</p>
+    <div class="tscroll" id="cc-table">${closingYarns.length?`<table><thead><tr><th>Yarn</th><th>Count from</th><th>Warp count</th><th>Weft count</th><th>Rate</th><th></th></tr></thead><tbody>${rows}</tbody></table>`:`<p class="muted" style="margin:4px 0">No yarns to show${closingParty?" for “"+esc(closingParty)+"”":""}. Blank counts are derived from the yarn's own count.</p>`}</div>
+    <p class="muted" style="font-size:12px;margin:8px 0 0">Edit a count, then Recompute to preview, or Save. <b>Save as yarn default</b> sets the count for every party; <b>Save for this party</b> sets it for the party above only (it wins over the default). Only the rows you change are saved, with today's date and your name.</p>
   </div>`;
   $("#cc-recompute").onclick=()=>{ closingParty=$("#cc-party").value.trim(); openClosing(); };
   $("#cc-party").addEventListener("keydown",ev=>{ if(ev.key==="Enter"){ closingParty=$("#cc-party").value.trim(); openClosing(); } });
-  $("#cc-save").onclick=saveClosingCounts;
+  $("#cc-save-yarn").onclick=()=>saveClosingCounts("yarn");
+  $("#cc-save-party").onclick=()=>saveClosingCounts("party");
 }
 async function runClosing(){
   $("#rep-msg").textContent="Loading…"; $("#rep-out").innerHTML="";
@@ -867,17 +878,27 @@ async function runClosing(){
     $("#rep-out").innerHTML=table(j.columns, j.rows.map(row=>row.map(c=>statusCell(c))), nums);
   }catch(e){ $("#rep-msg").textContent="Could not reach the server."; }
 }
-async function saveClosingCounts(){
-  var counts=editedCounts(), m=$("#cc-msg");
-  if(!Object.keys(counts).length){ m.textContent="Type a count first."; return; }
+async function postClosingSave(body,m){
   m.textContent="Saving…";
   try{
-    var r=await fetch("api/closing/counts",{method:"POST",headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({counts:counts, who:$("#cc-who").value.trim(), party:closingParty})});
+    var r=await fetch("api/closing/counts",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
     var j=await r.json();
-    if(r.ok&&j.ok){ m.textContent=`Saved ${(j.saved||[]).length} yarn(s) on ${j.date||j.when||""}. Now the default for every party.`; }
-    else m.textContent=j.error||"Could not save.";
+    if(r.ok&&j.ok){
+      var n=(j.saved||[]).length, c=(j.cleared||[]).length, where=j.scope==="party"?("for "+closingParty):"as yarn defaults";
+      m.textContent=(n?`Saved ${n} count(s) ${where} on ${j.when||""}.`:"")+(c?` Cleared ${c} party count(s).`:"")+((!n&&!c)?"No changes to save.":"");
+      await openClosing();                               // reload so sources/values reflect the save
+    } else m.textContent=j.error||"Could not save.";
   }catch(e){ m.textContent="Could not reach the server."; }
+}
+function saveClosingCounts(scope){
+  var m=$("#cc-msg"), counts=editedCounts();
+  if(scope==="party"&&!closingParty){ m.textContent="Type a party first."; return; }
+  if(!Object.keys(counts).length){ m.textContent="Change a count first."; return; }
+  postClosingSave({counts:counts, who:$("#cc-who").value.trim(), party:closingParty, scope:scope}, m);
+}
+function clearPartyCount(code){
+  if(!closingParty) return;
+  postClosingSave({counts:{}, clear:[code], who:$("#cc-who").value.trim(), party:closingParty, scope:"party"}, $("#cc-msg"));
 }
 var brTotal=0;
 async function brRun(){ brTotal=await browseInto($("#br-entity").value,$("#br-q").value.trim(),"#br-out","#br-msg",0,false); $("#br-more").style.display=brTotal>200?"":"none"; }

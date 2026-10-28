@@ -16,21 +16,58 @@ import base64
 import io
 import json
 import os
+import shutil
+import sqlite3
 import threading
+import tomllib
 import zipfile
 from datetime import date
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from smart_layer import config as sl_config
+from smart_layer import schema as sl_schema
 from smart_layer import store as sl_store
 from smart_layer.web import data as sl_data
 from smart_layer.web.server import App as SlApp
 from smart_layer.web.server import get_response
 
 DASHBOARD = Path(__file__).resolve().parents[1] / "smart_layer" / "web" / "dashboard.html"
-MAX_UPLOAD = 300 * 1024 * 1024
+MAX_UPLOAD = 300 * 1024 * 1024                        # compressed body cap
+MAX_UNZIPPED = 600 * 1024 * 1024                      # total uncompressed cap (zip-bomb guard)
+MAX_FILE = 500 * 1024 * 1024                          # single member cap
+ALLOWED_UPLOAD = ("store.db", "config.toml", "closing_counts.local.toml")
 MAX_SESSIONS = 200
+
+
+class UploadError(ValueError):
+    """A tenant upload failed validation; the last good data is kept and the agent is told what was wrong."""
+
+
+def _validate_store_db(path):
+    """The uploaded store must open as SQLite and carry the tables the dashboard reads."""
+    try:
+        con = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    except sqlite3.Error as e:
+        raise UploadError(f"store.db will not open ({e})") from None
+    try:
+        have = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        required = {e.name for e in sl_schema.ENTITIES} | {"sync_log"}
+        missing = sorted(required - have)
+        if missing:
+            raise UploadError("store.db is missing expected tables: " + ", ".join(missing[:6]))
+        con.execute("SELECT 1 FROM sync_log LIMIT 1").fetchone()   # readable, not just present
+    except sqlite3.DatabaseError as e:
+        raise UploadError(f"store.db is not a valid database ({e})") from None
+    finally:
+        con.close()
+
+
+def _validate_toml(path, label):
+    try:
+        tomllib.loads(sl_config.read_text_any(path))
+    except (tomllib.TOMLDecodeError, OSError, UnicodeDecodeError) as e:
+        raise UploadError(f"{label} will not parse ({e})") from None
 
 
 class Cloud:
@@ -61,16 +98,51 @@ class Cloud:
         return self.tenants / mill_id
 
     def save_upload(self, mill_id, raw):
+        """Validate the upload in a staging folder and only swap it in if every check passes, so a bad upload never
+        replaces the mill's last good data. Checks: allowed names only (no paths/traversal), per-file and total size
+        caps, store.db opens with the expected schema, and config.toml / the sidecar parse."""
         with self._lock(mill_id):
             d = self.tenant_dir(mill_id)
             d.mkdir(parents=True, exist_ok=True)
-            with zipfile.ZipFile(io.BytesIO(raw)) as z:
-                for name in z.namelist():
-                    base = Path(name).name
-                    if base in ("store.db", "config.toml", "closing_counts.local.toml") and base == name:   # no paths, no traversal
-                        tmp = d / (base + ".tmp")
-                        tmp.write_bytes(z.read(name))
-                        tmp.replace(d / base)
+            stage = d / ".stage"
+            shutil.rmtree(stage, ignore_errors=True)
+            stage.mkdir()
+            try:
+                got = []
+                with zipfile.ZipFile(io.BytesIO(raw)) as z:
+                    total = 0
+                    for info in z.infolist():
+                        if info.is_dir():
+                            continue
+                        name = info.filename
+                        if name != Path(name).name or name not in ALLOWED_UPLOAD:   # no sub-paths, no traversal, known names only
+                            raise UploadError(f"unexpected file in the upload: {name!r}")
+                        if info.file_size > MAX_FILE:
+                            raise UploadError(f"{name} is too large ({info.file_size // (1024 * 1024)} MB)")
+                        total += info.file_size
+                        if total > MAX_UNZIPPED:
+                            raise UploadError("the upload is too large when unzipped")
+                        (stage / name).write_bytes(z.read(name))
+                        got.append(name)
+                if "store.db" not in got:
+                    raise UploadError("no store.db in the upload")
+                _validate_store_db(stage / "store.db")
+                if (stage / "config.toml").exists():
+                    _validate_toml(stage / "config.toml", "config.toml")
+                if (stage / "closing_counts.local.toml").exists():
+                    _validate_toml(stage / "closing_counts.local.toml", "closing_counts.local.toml")
+                for base in got:                               # all checks passed: swap each file in atomically
+                    if base == "store.db":
+                        for ext in ("-wal", "-shm"):           # stale WAL/shared-memory would shadow the new db
+                            try:
+                                (d / (base + ext)).unlink()
+                            except OSError:
+                                pass
+                    tmp = d / (base + ".new")
+                    (stage / base).replace(tmp)
+                    tmp.replace(d / base)
+            finally:
+                shutil.rmtree(stage, ignore_errors=True)
         with self.guard:
             self.apps.pop(mill_id, None)                   # a new config.toml may have arrived; rebuild the App lazily
         self.reg.mark_upload(mill_id)
@@ -222,6 +294,8 @@ def handler(app):
                     app.save_upload(mill_id, self.rfile.read(length))
                 except zipfile.BadZipFile:
                     return self._send(400, {"error": "upload must be a zip of store.db (+ config.toml)"})
+                except UploadError as e:
+                    return self._send(400, {"error": str(e)})   # last good data kept; agent sees why
                 return self._send(200, {"ok": True})
             if parts[1:] == ["api", "ask"]:
                 if not self._view_ok(mill_id):

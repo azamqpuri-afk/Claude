@@ -297,6 +297,25 @@ def cmd_status(cfg, args):
     return 0
 
 
+def _start_windows_tasks(cfg_path):
+    """After setup (config.toml written), start the compiled product's scheduled tasks. Only for the compiled
+    install, where install_tasks.ps1 sits next to config.toml; a no-op otherwise (e.g. run-from-source)."""
+    import os
+    if os.name != "nt":
+        return
+    import subprocess
+    app_dir = cfg_path.parent
+    script = app_dir / "install_tasks.ps1"
+    if not script.exists():
+        return
+    try:
+        subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(script),
+                        "-AppDir", str(app_dir), "-Start"], timeout=120)
+        print("Started the dashboard and the live sync (scheduled tasks).")
+    except Exception as e:
+        print(f"(Could not start the scheduled tasks automatically: {e})")
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(prog="smart_layer", description=PRODUCT)
     p.add_argument("-c", "--config", default="config.toml")
@@ -332,6 +351,10 @@ def main(argv=None):
     apr.add_argument("--write-draft", metavar="PATH", help="write a draft mapping .toml (for an ERP with no known profile)")
     sub.add_parser("setup")
     sub.add_parser("machine-id")
+    lt = sub.add_parser("logtrim")
+    lt.add_argument("path")
+    lt.add_argument("--max-mb", type=float, default=5)
+    lt.add_argument("--keep-mb", type=float, default=1)
     lc = sub.add_parser("licence")
     lc.add_argument("action", choices=["show", "install", "check"])
     lc.add_argument("value", nargs="?", help="licence file or code (install)")
@@ -346,6 +369,10 @@ def main(argv=None):
     if args.cmd == "machine-id":
         from .licence import machine_id
         print(machine_id())
+        return 0
+    if args.cmd == "logtrim":                            # no config needed: logs exist before setup runs
+        from .logs import trim_log
+        trim_log(args.path, int(args.max_mb * 1024 * 1024), int(args.keep_mb * 1024 * 1024))
         return 0
     if args.cmd == "setup":
         from pathlib import Path
@@ -378,6 +405,7 @@ def main(argv=None):
                 print("Open the dashboard (http://localhost:8080), install the licence, then run:  SmartLayer.exe sync")
             except Exception as e:
                 print(f"\nFirst sync could not finish: {e}\nYou can run it later with:  SmartLayer.exe sync")
+        _start_windows_tasks(cfg_path)                   # config.toml now exists - start the dashboard + live sync
         input("\nPress Enter to close this window.")      # keep the console open so the owner can read the result
         return rc
     cfg = config.load(args.config)

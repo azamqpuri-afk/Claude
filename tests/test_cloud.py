@@ -148,3 +148,38 @@ def test_isolation_between_mills(cloud, mill_zip):
     # Mill B's password cannot read Mill A, and B has no data yet
     assert _get(f"{url}/{a['id']}/api/data", auth=f"o:{b['view_password']}")[0] == 401
     assert _get(f"{url}/{b['id']}/api/data", auth=f"o:{b['view_password']}")[0] == 503
+
+
+def test_upload_validation_rejects_bad_and_keeps_last_good(cloud, mill_zip):
+    app, url = cloud
+    m = app.reg.add("Dost Textiles")
+    mid, token, view = m["id"], m["token"], m["view_password"]
+    hdr = {"Authorization": f"Bearer {token}"}
+    assert _post(f"{url}/{mid}/api/upload", mill_zip, hdr) == (200, {"ok": True})
+    assert _get(f"{url}/{mid}/api/data", auth=f"owner:{view}")[0] == 200
+
+    # a zip carrying an unexpected / path-bearing entry is rejected
+    bad = io.BytesIO()
+    with zipfile.ZipFile(bad, "w") as z:
+        z.writestr("store.db", b"x")
+        z.writestr("evil/../x.txt", b"x")
+    code, body = _post(f"{url}/{mid}/api/upload", bad.getvalue(), hdr)
+    assert code == 400 and "unexpected" in body["error"].lower()
+
+    # a zip whose store.db is not a real database is rejected
+    bad2 = io.BytesIO()
+    with zipfile.ZipFile(bad2, "w") as z:
+        z.writestr("store.db", b"this is not a sqlite database")
+    assert _post(f"{url}/{mid}/api/upload", bad2.getvalue(), hdr)[0] == 400
+
+    # after both rejects, the last good data is still served
+    assert _get(f"{url}/{mid}/api/data", auth=f"owner:{view}")[0] == 200
+
+    # a valid upload that also carries the closing-counts sidecar is accepted
+    good = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(mill_zip)) as src, zipfile.ZipFile(good, "w") as z:
+        for n in src.namelist():
+            z.writestr(n, src.read(n))
+        z.writestr("closing_counts.local.toml", '[yarns."Y40"]\nwarp_closing_count = 33\n')
+    assert _post(f"{url}/{mid}/api/upload", good.getvalue(), hdr) == (200, {"ok": True})
+    assert (app.tenant_dir(mid) / "closing_counts.local.toml").exists()

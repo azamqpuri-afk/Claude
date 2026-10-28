@@ -30,15 +30,26 @@ def open_store(path):
     return con
 
 
-def open_read_only(path):
-    """Read-only connection that also refuses anything except reading (for Claude's SQL)."""
+def open_read_only(path, deny_functions=(), timeout_sec=None):
+    """Read-only connection that also refuses anything except reading (for Claude's SQL).
+
+    deny_functions: SQL functions to block outright (e.g. randomblob/zeroblob, which can allocate huge blobs and
+    hang or exhaust memory). timeout_sec: abort any query that runs longer than this, so one bad question cannot peg
+    the server (via a progress handler - pure wall-clock, no thread)."""
     con = sqlite3.connect(f"file:{Path(path)}?mode=ro", uri=True, timeout=30)
     allowed = {sqlite3.SQLITE_SELECT, sqlite3.SQLITE_READ, sqlite3.SQLITE_FUNCTION, sqlite3.SQLITE_RECURSIVE}
+    deny = {str(f).lower() for f in (deny_functions or ())}
 
-    def authorizer(action, *_):
+    def authorizer(action, arg1, arg2, *_):
+        if action == sqlite3.SQLITE_FUNCTION and arg2 and str(arg2).lower() in deny:
+            return sqlite3.SQLITE_DENY                 # a blocked function (e.g. randomblob) - refuse the whole query
         return sqlite3.SQLITE_OK if action in allowed else sqlite3.SQLITE_DENY
 
     con.set_authorizer(authorizer)
+    if timeout_sec:
+        import time
+        deadline = time.monotonic() + float(timeout_sec)
+        con.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 2000)   # abort a runaway query
     return con
 
 

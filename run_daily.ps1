@@ -42,5 +42,5 @@ if ((Get-Date).Day -eq 1) {
 if ((Get-Date).Day -eq 10) {
     Run @("audit", "--month", (Get-Date).AddMonths(-1).ToString("yyyy-MM"), "--csv", "--pdf", "--push") | Out-Null
 }
-# keep the log from growing for ever
-if ((Get-Item $log).Length -gt 5MB) { Get-Content $log -Tail 5000 | Set-Content $log -Encoding utf8 }
+# keep the log from growing for ever (lock-safe: writes a temp file and renames it over the original)
+& $py -m smart_layer logtrim $log --max-mb 5 --keep-mb 1 | Out-Null

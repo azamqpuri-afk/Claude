@@ -1,6 +1,9 @@
-param([Parameter(Mandatory=$true)][string]$AppDir)
+param([Parameter(Mandatory=$true)][string]$AppDir, [switch]$Start)
 # Schedules the daily run and the always-on dashboard for the compiled product, and opens the firewall port
-# when the dashboard is on the mill network. Run by the installer (SmartLayer.iss) after setup + first sync.
+# when the dashboard is on the mill network.
+# Registering happens during install (no config.toml needed - the run scripts wait for it). The dashboard and
+# live sync are STARTED only with -Start, which the setup wizard calls once it has written config.toml, so no
+# task runs against a missing config.
 $ErrorActionPreference = "Continue"
 
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
@@ -25,8 +28,12 @@ Register-ScheduledTask -TaskName "Smart Layer Dashboard" -Action $dash -Principa
     -Trigger (New-ScheduledTaskTrigger -AtStartup) `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) `
                -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)) | Out-Null
-Stop-ScheduledTask -TaskName "Smart Layer Dashboard" -ErrorAction SilentlyContinue
-Start-ScheduledTask -TaskName "Smart Layer Dashboard"
+
+if ($Start) {                                        # setup has written config.toml - safe to start now
+    Stop-ScheduledTask -TaskName "Smart Layer Dashboard" -ErrorAction SilentlyContinue
+    Start-ScheduledTask -TaskName "Smart Layer Dashboard"
+    Start-ScheduledTask -TaskName "Smart Layer Live" -ErrorAction SilentlyContinue   # first live pull now
+}
 
 # Firewall: only when the owner chose to open the dashboard to the mill network (host 0.0.0.0).
 try {

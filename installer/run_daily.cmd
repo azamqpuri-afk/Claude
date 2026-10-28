@@ -3,6 +3,8 @@ rem Daily run for the compiled product - scheduled by install_tasks.ps1 as "Smar
 cd /d "%~dp0"
 if not exist output mkdir output
 set LOG=output\daily_run_log.txt
+if not exist config.toml (echo %date% %time% no config.toml yet - setup not finished, skipping >> "%LOG%" & exit /b 0)
+SmartLayer.exe logtrim "%LOG%" --max-mb 5 --keep-mb 1
 echo ==== %date% %time% ==== >> "%LOG%"
 SmartLayer.exe licence check --push >> "%LOG%" 2>&1 || (echo no valid licence - nothing run >> "%LOG%" & exit /b 1)
 SmartLayer.exe sync >> "%LOG%" 2>&1

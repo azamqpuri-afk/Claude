@@ -64,7 +64,8 @@ class Assistant:
 
     def run_sql(self, sql):
         a = self.cfg["ask"]
-        con = open_read_only(self.db_path)
+        con = open_read_only(self.db_path, deny_functions=a.get("deny_functions", ("randomblob", "zeroblob")),
+                             timeout_sec=a.get("query_timeout_sec", 8))
         try:
             body = sql.strip().rstrip(";")
             if ";" in body:
@@ -72,6 +73,11 @@ class Assistant:
             cur = con.execute(body)
             cols = [d[0] for d in cur.description or []]
             rows = cur.fetchmany(int(a["max_rows"]) + 1)
+        except sqlite3.OperationalError as e:
+            if "interrupted" in str(e).lower():          # the progress-handler timeout fired
+                raise sqlite3.OperationalError(
+                    f"query took too long (over {a.get('query_timeout_sec', 8)}s) - make it more selective or aggregate in SQL") from None
+            raise
         finally:
             con.close()
         more = len(rows) > int(a["max_rows"])

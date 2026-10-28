@@ -29,6 +29,7 @@ Source: "..\build\app_main.dist\*"; DestDir: "{app}"; Flags: recursesubdirs crea
 Source: "..\installer\run_daily.cmd";     DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\run_live.cmd";      DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\run_dashboard.cmd"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\installer\run_setup.cmd";      DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\install_tasks.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Dirs]
@@ -37,7 +38,8 @@ Name: "{app}\output"; Permissions: users-modify
 
 [Icons]
 Name: "{group}\Smart Layer dashboard"; Filename: "http://localhost:8080"
-Name: "{group}\Smart Layer setup (change answers)"; Filename: "{app}\SmartLayer.exe"; Parameters: "setup"; WorkingDir: "{app}"
+; Setup needs admin (scheduled tasks + firewall), so the shortcut goes through run_setup.cmd, which re-launches elevated.
+Name: "{group}\Smart Layer setup (change answers)"; Filename: "{app}\run_setup.cmd"; WorkingDir: "{app}"
 Name: "{group}\Smart Layer status";    Filename: "{app}\SmartLayer.exe"; Parameters: "status"; WorkingDir: "{app}"
 Name: "{group}\Uninstall Smart Layer"; Filename: "{uninstallexe}"
 
@@ -55,8 +57,24 @@ Filename: "http://localhost:8080"; Description: "Open the dashboard (do this aft
   Flags: postinstall shellexec unchecked skipifsilent
 
 [UninstallRun]
-; Remove the scheduled tasks and the firewall rule (keeps the folder, data and licence).
+; First stop the always-on dashboard and kill SmartLayer.exe so its files are not locked while we remove them.
+Filename: "schtasks.exe"; Parameters: "/End /TN ""Smart Layer Dashboard"""; Flags: runhidden; RunOnceId: "StopDash"
+Filename: "taskkill.exe"; Parameters: "/IM SmartLayer.exe /F /T";           Flags: runhidden; RunOnceId: "KillExe"
+; Then remove the scheduled tasks and the firewall rule (keeps the folder, data and licence).
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Daily"" /F";     Flags: runhidden; RunOnceId: "DelDaily"
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Live"" /F";      Flags: runhidden; RunOnceId: "DelLive"
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Dashboard"" /F"; Flags: runhidden; RunOnceId: "DelDash"
 Filename: "powershell.exe"; Parameters: "-NoProfile -Command ""Get-NetFirewallRule -DisplayName 'Smart Layer Dashboard' -ErrorAction SilentlyContinue | Remove-NetFirewallRule"""; Flags: runhidden; RunOnceId: "DelFw"
+
+[Code]
+// On an upgrade the old dashboard may still be running and holding SmartLayer.exe open, which would block
+// overwriting the files. Stop the task and kill the process before the new files are copied.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Exec('schtasks.exe', '/End /TN "Smart Layer Dashboard"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/IM SmartLayer.exe /F /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(1500);
+  Result := '';
+end;

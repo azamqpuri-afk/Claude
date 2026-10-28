@@ -6,6 +6,8 @@ rem (full history and back-dated edits) and sends the phone alerts.
 cd /d "%~dp0"
 if not exist output mkdir output
 set LOG=output\live_run_log.txt
+if not exist config.toml (echo %date% %time% no config.toml yet - setup not finished, skipping >> "%LOG%" & exit /b 0)
+SmartLayer.exe logtrim "%LOG%" --max-mb 5 --keep-mb 1
 echo ==== %date% %time% ==== >> "%LOG%"
 SmartLayer.exe licence check >nul 2>&1 || (echo no valid licence - live sync skipped >> "%LOG%" & exit /b 1)
 SmartLayer.exe sync --live >> "%LOG%" 2>&1

@@ -328,6 +328,77 @@ def test_save_closing_counts_sidecar_merges_on_load(tmp_path):
     assert res2["saved"] == [] and "Y50" not in config.load(tmp_path / "config.toml")["closing"]["yarns"]
 
 
+def test_closing_counts_yarn_default_and_party_count(tmp_path):
+    (tmp_path / "config.toml").write_text('[closing]\n[closing.yarns."Y40"]\nwarp_closing_count = 40\n')
+    name = 'QADRI TRADERS(EMB)'                               # brackets: the party key must be escaped, not a regex
+    config.save_closing_counts(tmp_path, {"Y40": {"warp_closing_count": 41}}, who="A")            # yarn default
+    config.save_closing_counts(tmp_path, {"Y40": {"warp_closing_count": 51}}, who="A", party=name, scope="party")
+    cfg = config.load(tmp_path / "config.toml")
+    m = method.Method(cfg["closing"])
+    assert m.closing_count("warp", "Y40", 30, m.settings(party=name)) == 51     # the party count wins for that party
+    assert m.closing_count("warp", "Y40", 30, m.settings(party="OTHER")) == 41  # others get the yarn default
+    # clearing the party count falls back to the yarn default
+    config.save_closing_counts(tmp_path, {}, party=name, scope="party", clear=["Y40"])
+    m2 = method.Method(config.load(tmp_path / "config.toml")["closing"])
+    assert m2.closing_count("warp", "Y40", 30, m2.settings(party=name)) == 41
+
+
+def test_closing_counts_only_changed_rows_saved(tmp_path):
+    (tmp_path / "config.toml").write_text('[closing]\n')
+    # a value equal to the current effective value is not written (never freezes config over config.toml)
+    res = config.save_closing_counts(tmp_path, {"Y40": {"warp_closing_count": 40}},
+                                     current={"Y40": {"warp_closing_count": 40, "weft_closing_count": None}})
+    assert res["saved"] == [] and not (tmp_path / "closing_counts.local.toml").read_text().count("Y40")
+
+
+def test_closing_counts_party_name_with_quote_roundtrips(tmp_path):
+    (tmp_path / "config.toml").write_text('[closing]\n')
+    name = 'AB"C\\D & SONS'                                   # quote + backslash must be TOML-escaped
+    config.save_closing_counts(tmp_path, {"Y40": {"warp_closing_count": 52}}, party=name, scope="party")
+    cfg = config.load(tmp_path / "config.toml")               # would raise if the sidecar were invalid TOML
+    m = method.Method(cfg["closing"])
+    assert m.closing_count("warp", "Y40", 30, m.settings(party=name)) == 52
+
+
+def test_broken_sidecar_is_not_overwritten_and_load_survives(tmp_path):
+    (tmp_path / "config.toml").write_text('[closing]\n[closing.yarns."Y40"]\nwarp_closing_count = 40\n')
+    side = tmp_path / "closing_counts.local.toml"
+    side.write_text('[yarns."Y40"]\nwarp_closing_count = ')   # truncated / invalid TOML
+    res = config.save_closing_counts(tmp_path, {"Y40": {"warp_closing_count": 33}})
+    assert res["ok"] is False and "error" in res              # refuses to save
+    assert side.read_text().endswith("= ")                    # the broken file is left untouched (not wiped)
+    cfg = config.load(tmp_path / "config.toml")               # load still works (warns), ignoring the bad sidecar
+    assert cfg["closing"]["yarns"]["Y40"]["warp_closing_count"] == 40
+
+
+def test_whatif_closing_is_labelled(env):
+    cfg, con = env
+    wy = con.execute("SELECT warp_yarn FROM contracts WHERE contract_no = 'CON-41'").fetchone()[0]
+    rep = closing.contract_closing(con, cfg, END, None, {str(wy): {"warp_closing_count": 1}})
+    assert "(what-if)" in rep.title and any("WHAT-IF" in s for s in rep.summary)
+    assert "(what-if)" not in closing.contract_closing(con, cfg, END).title    # the official closing is not labelled
+
+
+def test_log_trim_keeps_tail(tmp_path):
+    from smart_layer.logs import MARKER, trim_log
+    log = tmp_path / "run.log"
+    assert trim_log(log) is False                             # missing file: no-op, no error
+    log.write_bytes(b"".join(b"line %d\n" % i for i in range(300000)))   # a few MB
+    big = log.stat().st_size
+    assert trim_log(log, max_bytes=1_000_000, keep_bytes=200_000) is True
+    out = log.read_bytes()
+    assert len(out) < big and out.startswith(MARKER) and out.rstrip().endswith(b"line 299999")
+    assert trim_log(log, max_bytes=1_000_000, keep_bytes=200_000) is False  # already small enough
+
+
+def test_ask_blocks_dangerous_functions(env):
+    cfg, con = env
+    bot = Assistant(cfg, client=object())                     # run_sql does not use the API client
+    assert json.loads(bot.run_sql("SELECT 1 AS x"))["rows"] == [[1]]
+    with pytest.raises(sqlite3.Error):                        # randomblob is denied by the authorizer
+        bot.run_sql("SELECT randomblob(1000000)")
+
+
 @pytest.mark.parametrize("formula", ["__import__('os').system('x')", "open('f')", "count.real", "[1, 2]", "x + 1"])
 def test_closing_formula_is_arithmetic_only(formula):
     with pytest.raises(method.FormulaError):

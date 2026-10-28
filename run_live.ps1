@@ -16,4 +16,4 @@ if ($LASTEXITCODE -ne 0) { "no valid licence - live sync skipped" | Out-File $lo
 & $py -m smart_layer sync --live 2>&1 | Out-File $log -Append -Encoding utf8
 # urgent, send-once alerts only (loom silent, beam out with no backup, confirmed error, negative stock)
 & $py -m smart_layer audit --push --urgent 2>&1 | Out-File $log -Append -Encoding utf8
-if ((Test-Path $log) -and (Get-Item $log).Length -gt 5MB) { Get-Content $log -Tail 5000 | Set-Content $log -Encoding utf8 }
+& $py -m smart_layer logtrim $log --max-mb 5 --keep-mb 1 | Out-Null   # lock-safe trim (temp file + rename)

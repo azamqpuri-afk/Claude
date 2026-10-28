@@ -45,6 +45,45 @@ class App:
         self.password = str(cfg["serve"].get("password") or "")
         self.sessions = {}
         self.lock = threading.Lock()
+        self._syncing = False
+
+    def kick_first_sync(self):
+        """After a licence is installed from the dashboard, pull the first data in the background if the store is
+        still empty - so the owner sees figures without waiting to run `sync` by hand. Runs at most once at a time."""
+        with self.lock:
+            if self._syncing:
+                return False
+            try:
+                con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+                try:
+                    synced = con.execute("SELECT COUNT(*) FROM sync_log").fetchone()[0]
+                finally:
+                    con.close()
+            except Exception:
+                synced = 0
+            if synced:
+                return False                              # already has data; nothing to kick
+            self._syncing = True
+        threading.Thread(target=self._first_sync, daemon=True).start()
+        return True
+
+    def _first_sync(self):
+        try:
+            from .. import erp as _erp
+            mapping = _erp.Mapping(self.cfg.path(self.cfg["erp"]["mapping"]))
+            e = _erp.ERP(*_erp.connect(self.cfg["erp"], self.cfg.base_dir), mapping, self.cfg["sources"], self.cfg.base_dir)
+            con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+            try:
+                store.sync(con, e, self.cfg["sync"]["history_days"],
+                           full_history=self.cfg["sync"].get("full_history", store.FULL_HISTORY),
+                           log=lambda *_: None)
+            finally:
+                con.close()
+        except Exception:
+            pass                                          # best-effort; the owner can always run `sync` by hand
+        finally:
+            with self.lock:
+                self._syncing = False
 
     def data(self, day):
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -125,11 +164,26 @@ class App:
         finally:
             con.close()
 
-    def save_closing_counts(self, counts, who, party):
-        """Persist edited closing counts to the side file next to config.toml and apply them to this running server."""
+    def save_closing_counts(self, counts, who, party, scope="yarn", clear=()):
+        """Persist edited closing counts to the side file next to config.toml and apply them to this running server.
+        scope 'yarn' saves the yarn default (all parties); 'party' saves for the selected party only. Only counts
+        that differ from the current effective value are written (so an unchanged row never freezes config.toml)."""
         from .. import config as cfgmod
-        res = cfgmod.save_closing_counts(self.cfg.base_dir, counts, who, party)
-        cfgmod.merge_closing_counts(self.cfg.data, {"yarns": res.get("yarns", {})})   # take effect without a restart
+        from ..textile.method import Method
+        method = Method(self.cfg["closing"])
+        if scope == "party":                              # compare against the party's effective count
+            pov = method.settings(party=party).get("_yarns", {})
+            current = {str(c): {**method.yarn(c), **pov.get(str(c), {})} for c in set(counts or {})}
+        else:                                             # compare against the yarn default
+            current = {str(c): dict(method.yarn(c)) for c in set(counts or {})}
+        current = {c: {k: v.get(k, v.get("closing_count")) for k in ("warp_closing_count", "weft_closing_count")}
+                   for c, v in current.items()}
+        res = cfgmod.save_closing_counts(self.cfg.base_dir, counts, who, party, scope=scope, clear=clear, current=current)
+        if res.get("ok") and self.cfg.source_path:        # reload so the saved (and cleared) counts take effect now
+            try:
+                self.cfg = cfgmod.load(self.cfg.source_path)
+            except Exception:
+                pass
         return res
 
     def ledger(self, account):
@@ -285,7 +339,8 @@ def get_response(app, path, query, check_licence=True):
         if path == "/api/closing":                      # the closing report, recomputed with edited counts
             overrides = _parse_counts(params.get("counts", ""))
             rep = app.closing(day, params.get("party", ""), overrides)
-            return _report_body(app, rep, "closing", (day or date.today()).isoformat(), params.get("fmt", "json"), cell)
+            name = "closing-whatif" if overrides else "closing"   # a recomputed PDF/CSV is never named like the real one
+            return _report_body(app, rep, name, (day or date.today()).isoformat(), params.get("fmt", "json"), cell)
         name, fmt = params.get("name", ""), params.get("fmt", "json")   # a report
         if name not in report_registry.REPORTS:
             return 404, {"error": "unknown report"}, "application/json", {}
@@ -403,7 +458,10 @@ def handler(app):
                 n = min(int(self.headers.get("Content-Length", 0)), 20000)
                 text = str(json.loads(self.rfile.read(n) or b"{}").get("text", ""))
                 st = licence.install(app.cfg, text)
-                return self._send(200 if st.allowed else 400, {"state": st.state, "message": st.message, "allowed": st.allowed})
+                started = app.kick_first_sync() if st.allowed else False
+                msg = st.message + (" Fetching the first data now - the dashboard will fill in shortly." if started else "")
+                return self._send(200 if st.allowed else 400, {"state": st.state, "message": msg,
+                                                               "allowed": st.allowed, "first_sync": started})
             if self.path == "/api/closing/counts":       # save edited closing counts (dashboard password already checked)
                 from .. import licence
                 if not licence.status(app.cfg).allowed:
@@ -411,10 +469,13 @@ def handler(app):
                 try:
                     n = min(int(self.headers.get("Content-Length", 0)), 100000)
                     body = json.loads(self.rfile.read(n) or b"{}")
+                    scope = "party" if str(body.get("scope", "yarn")) == "party" else "yarn"
+                    clear = [str(c) for c in (body.get("clear") or [])][:300]
                     res = app.save_closing_counts(body.get("counts", {}) or {},
                                                   str(body.get("who", "")).strip()[:60],
-                                                  str(body.get("party", "")).strip()[:80])
-                    return self._send(200, res)
+                                                  str(body.get("party", "")).strip()[:80],
+                                                  scope=scope, clear=clear)
+                    return self._send(200 if res.get("ok") else 400, res)
                 except Exception as e:
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path != "/api/ask":

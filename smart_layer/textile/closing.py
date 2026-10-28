@@ -277,7 +277,7 @@ def third_party_deliveries(con, method, as_of):
         # key by the BILLED party's name (who it is really for); only for a store account, where many customers
         # share one account, fall back to the DELIVER_TO name so each customer lists separately
         if pcode is not None and str(pcode) in store_accounts:
-            who = str(deliver).strip() if deliver else str(pcode)
+            who = str(deliver).strip() if deliver else (pname.get(str(pcode)) or "store account")
         else:
             who = pname.get(str(pcode)) or (str(deliver).strip() if deliver else "?")
         a = agg[(cno, who)]
@@ -306,15 +306,29 @@ def _yarn_label(method, code, names):
 
 
 def closing_counts(con, cfg, as_of=None, party=None):
-    """The warp/weft closing count (and rate) in effect for each yarn in a party's closing, prefilled from config so
-    the owner can edit them in the dashboard and recompute. One row per yarn group; a count may be blank, meaning the
-    closing derives it from the yarn's own count. Includes the party override if one applies."""
+    """The warp/weft closing count (and rate) in effect for each yarn in a party's closing, prefilled so the owner
+    can edit and recompute. One row per yarn group. For each row:
+      warp/weft_closing_count  the effective count (party count if one applies, else the yarn default)
+      warp/weft_default        the yarn-level default (what a party count would fall back to if cleared)
+      source                   where the effective count comes from: "party", "yarn" (an owner-saved default) or
+                               "config" (config.toml, or derived from the yarn count when blank)
+      party_clearable          a party-specific count for the selected party is saved in the side file (can be cleared)
+    A blank count means the closing derives it from the yarn's own count."""
+    from .. import config as _config
     as_of = as_of or date.today()
     method = Method(cfg["closing"])
     rows = contract_rows(con, method, as_of)
     if party:
         rows = [r for r in rows if party.lower() in (r["party"] or "").lower()]
-    pov = method.settings(party=party).get("_yarns", {})      # per-party closing-count overrides from config
+    pov = method.settings(party=party).get("_yarns", {})      # per-party counts in effect (config + saved)
+    try:
+        side = _config.read_closing_sidecar(cfg.base_dir)
+    except Exception:
+        side = {}
+    saved_yarns = {str(c) for c in (side.get("yarns") or {})}
+    saved_party = {str(c) for name, pv in (side.get("parties") or {}).items()
+                   if party and party.strip().lower() == str(name).strip().lower()
+                   for c in ((pv or {}).get("yarns") or {})}
     seen = {}
     for r in rows:
         if r.get("pre_go_live"):
@@ -322,12 +336,17 @@ def closing_counts(con, cfg, as_of=None, party=None):
         g = str(r["yarn"])
         if g in seen:
             continue
-        base = {**method.yarn(g), **pov.get(g, {})}
-        party_set = g in pov and any(k in pov[g] for k in ("warp_closing_count", "weft_closing_count", "closing_count"))
-        seen[g] = {"yarn": g, "yarn_name": r["yarn_name"],
-                   "warp_closing_count": base.get("warp_closing_count", base.get("closing_count")),
-                   "weft_closing_count": base.get("weft_closing_count", base.get("closing_count")),
-                   "rate_per_lb": base.get("rate_per_lb"), "party_override": party_set}
+        default = method.yarn(g)                              # yarn-level (config.yarns + saved [yarns])
+        eff = {**default, **pov.get(g, {})}                   # party count wins
+        has_party = g in pov and any(k in pov[g] for k in ("warp_closing_count", "weft_closing_count", "closing_count"))
+        has_default = any(k in default for k in ("warp_closing_count", "weft_closing_count", "closing_count"))
+        source = "party" if has_party else ("yarn" if g in saved_yarns else ("config" if has_default else "derived"))
+        seen[g] = {"yarn": g, "yarn_name": r["yarn_name"], "rate_per_lb": eff.get("rate_per_lb"),
+                   "warp_closing_count": eff.get("warp_closing_count", eff.get("closing_count")),
+                   "weft_closing_count": eff.get("weft_closing_count", eff.get("closing_count")),
+                   "warp_default": default.get("warp_closing_count", default.get("closing_count")),
+                   "weft_default": default.get("weft_closing_count", default.get("closing_count")),
+                   "source": source, "party_override": has_party, "party_clearable": g in saved_party}
     return {"party": party or "", "date": as_of.isoformat(),
             "yarns": sorted(seen.values(), key=lambda x: (x["yarn_name"] or x["yarn"]))}
 
@@ -380,7 +399,20 @@ def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None):
     summary.append(f"Method: dispatched meters, divisor {s['divisor']:g}, bag {s['bag_lb']:g} lb, "
                    f"allowance {s['wastage_allowance_pct']:g}%, WIP {'on' if method.cfg.get('wip', True) else 'off'} "
                    f"(party / contract overrides apply).")
-    return Report(f"Contract closing - {as_of:%d-%b-%Y}",
+    whatif = ""
+    if method.count_overrides:                                 # a dashboard recompute: mark it clearly, never hand it out as the real closing
+        names = {code: nm for code, nm in con.execute(
+            "SELECT yarn_code, MAX(yarn_name) FROM yarn_movements WHERE yarn_name IS NOT NULL GROUP BY yarn_code")}
+        parts = []
+        for code, ov in method.count_overrides.items():
+            bits = [f"{side} {float(ov[k]):g}" for side, k in (("warp", "warp_closing_count"), ("weft", "weft_closing_count"))
+                    if ov.get(k) is not None]
+            if bits:
+                parts.append(f"{_yarn_label(method, method.group(code), names)} {', '.join(bits)}")
+        scope = f" for {party}" if party else " (all parties)"
+        summary.insert(0, f"WHAT-IF counts, NOT the official closing{scope}: " + "; ".join(parts))
+        whatif = " (what-if)"
+    return Report(f"Contract closing - {as_of:%d-%b-%Y}{whatif}",
                   ["Contract", "Party", "Status", "Yarn", "Meters", "Received bags", "Used bags", "Balance bags",
                    f"Value {cur}", "Note"],
                   [[r["contract"], r["party"], r["status"], r["yarn_name"], round(r["meters"]), round(r["received_bags"], 1),

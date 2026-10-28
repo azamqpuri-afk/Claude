@@ -73,8 +73,9 @@ owner_return_meters = { "72" = 382 }
                                             # line that names a real customer is listed as an exception, not dropped
 
 # Closing counts and rates per lb by ERP yarn code (Dost Textiles, from 48_contract_closing.py).
-# These warp/weft closing counts can also be edited in the dashboard's Contract-closing screen and saved; a save
-# writes them to closing_counts.local.toml next to this file (this file is never rewritten), with the date and who.
+# These warp/weft closing counts can also be edited in the dashboard's Contract-closing screen and saved. A save
+# writes to closing_counts.local.toml next to this file (this file is never rewritten), with the date and who:
+# "Save as yarn default" sets the count for every party; "Save for this party" sets it for one party (it wins there).
 [closing.yarns."91"]        # 12/1 CTN
 weft_closing_count = 11
 rate_per_lb = 275
