@@ -320,14 +320,18 @@ def closing_counts(con, cfg, as_of=None, party=None):
     rows = contract_rows(con, method, as_of)
     if party:
         rows = [r for r in rows if party.lower() in (r["party"] or "").lower()]
-    pov = method.settings(party=party).get("_yarns", {})      # per-party counts in effect (config + saved)
+    # party counts are per EXACT party name; resolve the filter to the real party name(s) in view. A party-level
+    # count / clear is only meaningful (and only offered) when the filter picks out exactly one real party.
+    matched = sorted({r["party"] for r in rows if r.get("party")})
+    exact = matched[0] if len(matched) == 1 else None
+    pov = method.settings(party=exact).get("_yarns", {}) if exact else {}
     try:
         side = _config.read_closing_sidecar(cfg.base_dir)
     except Exception:
         side = {}
     saved_yarns = {str(c) for c in (side.get("yarns") or {})}
     saved_party = {str(c) for name, pv in (side.get("parties") or {}).items()
-                   if party and party.strip().lower() == str(name).strip().lower()
+                   if exact and exact.strip().lower() == str(name).strip().lower()
                    for c in ((pv or {}).get("yarns") or {})}
     seen = {}
     for r in rows:
@@ -347,7 +351,7 @@ def closing_counts(con, cfg, as_of=None, party=None):
                    "warp_default": default.get("warp_closing_count", default.get("closing_count")),
                    "weft_default": default.get("weft_closing_count", default.get("closing_count")),
                    "source": source, "party_override": has_party, "party_clearable": g in saved_party}
-    return {"party": party or "", "date": as_of.isoformat(),
+    return {"party": party or "", "date": as_of.isoformat(), "matched_parties": matched, "exact_party": exact or "",
             "yarns": sorted(seen.values(), key=lambda x: (x["yarn_name"] or x["yarn"]))}
 
 

@@ -129,7 +129,7 @@ def merge_closing_counts(data, extra):
         clean = {str(c): _only_counts(v) for c, v in pyarns.items() if isinstance(v, dict) and _only_counts(v)}
         if not clean:
             continue
-        match = re.escape(str(name))
+        match = "^" + re.escape(str(name)) + "$"      # the FULL party name, not a substring (anchored, case-insensitive)
         entry = next((p for p in parties if p.get("_sidecar") and p.get("match") == match), None)
         if entry is None:
             entry = {"match": match, "yarns": {}, "_sidecar": True}

@@ -343,6 +343,18 @@ def test_closing_counts_yarn_default_and_party_count(tmp_path):
     assert m2.closing_count("warp", "Y40", 30, m2.settings(party=name)) == 41
 
 
+def test_party_count_matches_exact_name_only(tmp_path):
+    (tmp_path / "config.toml").write_text('[closing]\n[closing.yarns."Y40"]\nwarp_closing_count = 40\n')
+    config.save_closing_counts(tmp_path, {"Y40": {"warp_closing_count": 31}}, party="HAROON FABRIC PVT LTD", scope="party")
+    config.save_closing_counts(tmp_path, {"Y40": {"warp_closing_count": 29}}, party="SB", scope="party")
+    m = method.Method(config.load(tmp_path / "config.toml")["closing"])
+    cc = lambda p: m.closing_count("warp", "Y40", 30, m.settings(party=p))
+    assert cc("HAROON FABRIC PVT LTD") == 31          # the full exact name gets its party count
+    assert cc("HAROON") == 40                         # a shorter name does NOT (not a substring match)
+    assert cc("WAQAS SB") == 40 and cc("AHSAN SB") == 40   # "SB" never leaks into "... SB" parties
+    assert cc("SB") == 29                             # only a party named exactly "SB"
+
+
 def test_closing_counts_only_changed_rows_saved(tmp_path):
     (tmp_path / "config.toml").write_text('[closing]\n')
     # a value equal to the current effective value is not written (never freezes config over config.toml)
