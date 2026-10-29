@@ -480,6 +480,24 @@ def test_overview_fabric_by_quality(env):
     assert fbq == sorted(fbq, key=lambda r: -r["meters"])      # biggest first
 
 
+def test_needs_attention_acknowledge_clears_and_restores(env):
+    cfg, con = env
+    d = web_data.build(con, cfg, END)
+    assert d["findings"], "the demo raises findings"
+    fid = d["findings"][0]["id"]
+    before = len(d["findings"])
+    try:
+        store.set_state(con, "acked", {fid: {"title": "seen it", "at": "now"}})   # mark read
+        d2 = web_data.build(con, cfg, END)
+        assert fid not in {f["id"] for f in d2["findings"]}                  # gone from the strip
+        assert len(d2["findings"]) == before - 1
+        assert any(a["id"] == fid for a in d2["acknowledged"])               # shown under "marked read"
+        store.set_state(con, "acked", {})                                    # restore
+        assert fid in {f["id"] for f in web_data.build(con, cfg, END)["findings"]}
+    finally:
+        store.set_state(con, "acked", {})
+
+
 def test_cash_group_ledger_is_newest_first_and_ties_to_balance(env):
     _, con = env
     L = web_finance.group_ledger(con, "cash")

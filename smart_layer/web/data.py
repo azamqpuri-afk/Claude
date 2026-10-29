@@ -244,11 +244,20 @@ def build(con, cfg, as_of=None):
     while len(finance) > 1 and not (finance[0]["sales"] or finance[0]["expenses"]):
         finance.pop(0)                                 # months before the data starts
 
-    # attention: the day's audit (nothing is pushed or remembered from here)
+    # attention: the day's audit (nothing is pushed or remembered from here). The owner can mark an item "read" to
+    # clear it; acknowledged items (by their stable section|key fingerprint) are kept in the local store's state and
+    # hidden from the strip and the counts until the same item recurs.
+    from .. import store as _store
     a = audit.run(con, cfg, as_of)
     order = {"ACTION": 0, "CONFIRMED": 1, "WATCH": 2, "INFO": 3}
-    findings = [{"severity": f.severity, "section": f.section, "title": f.title, "detail": f.detail}
-                for f in sorted(a.findings, key=lambda f: (order[f.severity], f.section))]
+    acked = _store.get_state(con, "acked", {}) or {}
+    all_findings = [{"id": f"{f.section}|{f.key}", "severity": f.severity, "section": f.section,
+                     "title": f.title, "detail": f.detail}
+                    for f in sorted(a.findings, key=lambda f: (order[f.severity], f.section))]
+    findings = [f for f in all_findings if f["id"] not in acked]
+    live_ids = {f["id"] for f in all_findings}
+    acknowledged = [{"id": fid, "title": (acked[fid] or {}).get("title", ""), "at": (acked[fid] or {}).get("at", "")}
+                    for fid in acked if fid in live_ids]   # only still-relevant acks (resolved ones just drop off)
 
     # stock
     from ..reports.stock import _in_stock_index, _similar_in_stock
@@ -312,7 +321,8 @@ def build(con, cfg, as_of=None):
             "yarn_flags": len(flags),
             "beam_alerts": sum(1 for b in beam_rows if b["alert"]),
         },
-        "production": production, "looms": looms, "finance": finance, "findings": findings, "stock": stock,
+        "production": production, "looms": looms, "finance": finance, "findings": findings,
+        "acknowledged": acknowledged, "stock": stock,
         "closing": [{k: (round(v, 1) if isinstance(v, float) else v) for k, v in r.items() if k != "balance_lb"} for r in crows],
         "pilferage": [{"contract": f["contract"], "party": f["party"], "date": f["date"], "kg": round(f["kg"]),
                        "reasons": f["reasons"]} for f in sorted(flags, key=lambda f: (-len(f["reasons"]), f["date"]))],

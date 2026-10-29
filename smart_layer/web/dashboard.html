@@ -77,7 +77,11 @@
   .strip{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
   .alert{display:flex;align-items:center;gap:11px;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:12px;padding:11px 14px;box-shadow:var(--shadow);cursor:pointer}
   .alert.ACTION{border-left-color:var(--red)} .alert.CONFIRMED{border-left-color:var(--amber)} .alert.WATCH{border-left-color:var(--blue)}
-  .alert .t{font-weight:600;font-size:14px} .alert .d{color:var(--muted);font-size:13px} .alert .go{margin-left:auto;color:var(--teal);font-weight:600;font-size:13px;white-space:nowrap}
+  .alert .t{font-weight:600;font-size:14px} .alert .d{color:var(--muted);font-size:13px} .alert .go{color:var(--teal);font-weight:600;font-size:13px;white-space:nowrap}
+  .alert .ackbtn{margin-left:auto;padding:2px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}
+  .alert .ackbtn:hover{border-color:var(--teal);color:var(--teal)}
+  .ackfoot{font-size:12px;color:var(--muted);padding:4px 2px} .ackfoot a{color:var(--teal);font-weight:600}
+  .ackrow{display:flex;gap:10px;align-items:center;padding:3px 2px;font-size:12.5px} .ackrow .muted{color:var(--muted)} .ackrow a{color:var(--teal);font-weight:600}
   .ok-strip{background:var(--teal-soft);color:var(--teal-deep);border-radius:12px;padding:12px 14px;font-weight:600;font-size:14px;margin-bottom:20px}
   /* cards & charts */
   .cols{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;align-items:start}
@@ -500,8 +504,17 @@ function render(){
     strip.className="ok-strip"; strip.innerHTML="✓ Nothing needs attention today.";
   } else {
     cnt.textContent = fs.length + (fs.length===1?" item":" items");
-    strip.innerHTML = fs.map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">— ${esc(f.detail)}</span>`:""}<span class="go">Open ›</span></div>`).join("");
-    strip.querySelectorAll(".alert").forEach(a=>a.onclick=()=>openFinding(fs[+a.dataset.fi]));
+    var ack=D.acknowledged||[];
+    strip.innerHTML = fs.map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">— ${esc(f.detail)}</span>`:""}<button class="ackbtn" data-ack="${esc(f.id||"")}" data-ackt="${esc(f.title)}" title="I have seen this — clear it">✓ Mark read</button><span class="go">Open ›</span></div>`).join("")
+      + (ack.length?`<div class="ackfoot">${ack.length} marked read · <a href="#" id="ack-show">show</a><div id="ack-list" hidden style="margin-top:4px"></div></div>`:"");
+    strip.querySelectorAll(".alert").forEach(a=>a.onclick=(e)=>{ if(e.target.closest(".ackbtn")) return; openFinding(fs[+a.dataset.fi]); });
+    strip.querySelectorAll(".ackbtn").forEach(bn=>bn.onclick=(e)=>{ e.stopPropagation(); markRead(bn.getAttribute("data-ack"), bn.getAttribute("data-ackt"), false); });
+    var showA=$("#ack-show");
+    if(showA) showA.onclick=(e)=>{ e.preventDefault(); var l=$("#ack-list");
+      if(l.hidden){ l.hidden=false; showA.textContent="hide";
+        l.innerHTML=ack.map(a=>`<div class="ackrow"><span>${esc(a.title||a.id)}</span><span class="muted">${esc(a.at||"")}</span><a href="#" data-unack="${esc(a.id)}">↩ restore</a></div>`).join("");
+        l.querySelectorAll("[data-unack]").forEach(x=>x.onclick=(ev)=>{ ev.preventDefault(); markRead(x.getAttribute("data-unack"), "", true); });
+      } else { l.hidden=true; showA.textContent="show"; } };
     btn.style.display=""; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length);
     btn.onclick=()=>{ attOpen=!attOpen; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length); };
   }
@@ -524,6 +537,13 @@ function render(){
   wireDrills();
   renderWeaving(); renderFinanceTiles(); renderYFTiles();
   buildCharts(curTab);
+}
+
+async function markRead(id, title, undo){
+  if(STATIC_DATA || !id) return;                         // clearing needs the live server
+  try{ await fetch("api/ack",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({id:id, title:title||"", undo:!!undo})}); load(); }   // reload so counts + strip update
+  catch(e){}
 }
 
 /* ---------- Overview drill-downs (drawer) ---------- */

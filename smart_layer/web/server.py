@@ -187,6 +187,22 @@ class App:
                 pass
         return res
 
+    def acknowledge(self, fid, title="", who="", undo=False):
+        """Mark a Needs-attention finding read (or restore it). Kept in the local store's state by its fingerprint,
+        so it stays cleared across refreshes and syncs until the same finding recurs."""
+        from datetime import datetime
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            acked = store.get_state(con, "acked", {}) or {}
+            if undo:
+                acked.pop(fid, None)
+            elif fid:
+                acked[fid] = {"title": str(title)[:200], "by": str(who)[:60], "at": datetime.now().strftime("%Y-%m-%d %H:%M")}
+            store.set_state(con, "acked", acked)
+            return {"ok": True, "count": len(acked)}
+        finally:
+            con.close()
+
     def ledger(self, account):
         from . import finance
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -479,6 +495,17 @@ def handler(app):
                 msg = st.message + (" Fetching the first data now - the dashboard will fill in shortly." if started else "")
                 return self._send(200 if st.allowed else 400, {"state": st.state, "message": msg,
                                                                "allowed": st.allowed, "first_sync": started})
+            if self.path == "/api/ack":                   # mark a Needs-attention finding read (or restore it)
+                from .. import licence
+                if not licence.status(app.cfg).allowed:
+                    return self._send(403, {"error": "Licence: " + licence.status(app.cfg).message})
+                try:
+                    n = min(int(self.headers.get("Content-Length", 0)), 20000)
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                    return self._send(200, app.acknowledge(str(body.get("id", ""))[:200], body.get("title", ""),
+                                                           body.get("who", ""), bool(body.get("undo"))))
+                except Exception as e:
+                    return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path == "/api/closing/counts":       # save edited closing counts (dashboard password already checked)
                 from .. import licence
                 if not licence.status(app.cfg).allowed:
