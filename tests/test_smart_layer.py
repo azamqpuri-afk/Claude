@@ -458,6 +458,39 @@ def test_dashboard_data(env):
     json.dumps(d)                                              # serialisable
 
 
+def test_overview_sales_series_and_average(env):
+    cfg, con = env
+    d = web_data.build(con, cfg, END)
+    sales = d["charts"]["sales"]
+    assert sales and all({"month", "sales", "meters"} <= set(x) for x in sales)
+    assert len(sales) == len(d["finance"]) and sales[-1]["month"] == d["finance"][-1]["month"]
+    k = d["kpis"]
+    # average is of whole months only (the current partial month is excluded) over up to the last 12
+    whole = sales[:-1] if len(sales) > 1 else sales
+    exp = round(sum(x["sales"] for x in whole[-12:]) / len(whole[-12:]))
+    assert k["sales_avg_12m"] == exp and k["sales_avg_months"] == len(whole[-12:])
+    assert "dispatched_avg_12m" in k
+
+
+def test_overview_fabric_by_quality(env):
+    cfg, con = env
+    fbq = web_data.build(con, cfg, END)["yarn_fabric"]["fabric_by_quality"]
+    assert isinstance(fbq, list)
+    assert all(r["meters"] > 1 for r in fbq)
+    assert fbq == sorted(fbq, key=lambda r: -r["meters"])      # biggest first
+
+
+def test_cash_group_ledger_is_newest_first_and_ties_to_balance(env):
+    _, con = env
+    L = web_finance.group_ledger(con, "cash")
+    stored = con.execute("""SELECT COALESCE(SUM(b.balance),0) FROM account_balances b JOIN accounts a USING (account_code)
+                            WHERE a.account_group = 'cash'""").fetchone()[0]
+    assert round(L["balance"]) == round(stored)
+    if L["rows"]:
+        assert round(L["rows"][0]["balance"]) == round(stored)     # newest row carries the current balance
+        assert all(("received" in r and "paid" in r) for r in L["rows"])
+
+
 def test_static_page_embeds_data_safely(env):
     cfg, con = env
     html = static_page(con, cfg, END)
@@ -836,13 +869,13 @@ def test_finance_party_ledger_runs_to_balance(env):
     assert parties and parties[0]["side"] in ("Owes us", "Advance received", "Settled")
     led = web_finance.ledger(con, parties[0]["code"])
     assert led["rows"], "ledger has rows"
-    # running balance of the last row equals the account's stored balance and the header balance
+    # rows are newest-first: the FIRST row's running balance is the current (stored) balance and the header balance
     stored = con.execute("SELECT balance FROM account_balances WHERE account_code = ?", (led["code"],)).fetchone()[0]
-    assert round(led["rows"][-1]["balance"]) == round(stored) == round(led["balance"])
-    # an opening (old-ERP) line, when present, sorts first
+    assert round(led["rows"][0]["balance"]) == round(stored) == round(led["balance"])
+    # an opening (old-ERP) line, when present, is the oldest, so it sorts LAST now
     kinds = [r["kind"] for r in led["rows"]]
     if "opening" in kinds:
-        assert kinds[0] == "opening"
+        assert kinds[-1] == "opening"
 
 
 def test_finance_daily_balances(env):

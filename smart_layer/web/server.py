@@ -202,6 +202,14 @@ class App:
         finally:
             con.close()
 
+    def fin_group(self, group):
+        from . import finance
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return {"ledger": finance.group_ledger(con, group)}
+        finally:
+            con.close()
+
     def fin_daily(self, day):
         from . import finance
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -309,7 +317,7 @@ def get_response(app, path, query, check_licence=True):
     if path == "/api/reports":
         return 200, {"reports": [{"name": n, "label": label} for n, label in report_registry.menu()]}, "application/json", {}
     if path in ("/api/data", "/api/report", "/api/entities", "/api/browse", "/api/ledger",
-                "/api/finance/parties", "/api/finance/daily", "/api/closing", "/api/closing/counts"):
+                "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts"):
         if check_licence:
             st = licence.status(app.cfg)
             if not st.allowed:
@@ -326,6 +334,9 @@ def get_response(app, path, query, check_licence=True):
             return (200, led, "application/json", {}) if led else (404, {"error": "unknown account"}, "application/json", {})
         if path == "/api/finance/parties":
             return 200, app.fin_parties(params.get("group", "all"), params.get("q", "")), "application/json", {}
+        if path == "/api/finance/group":                 # cash/bank transaction history for the Overview drill-down
+            g = params.get("group", "cash")
+            return 200, app.fin_group(g if g in ("cash", "bank") else "cash"), "application/json", {}
         try:
             day = date.fromisoformat(params["date"]) if params.get("date") else None
         except ValueError:

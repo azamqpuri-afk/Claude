@@ -70,6 +70,8 @@
   .tile.accent .lbl,.tile.accent .meta,.tile.accent .val .cur{color:rgba(255,255,255,.85)} .tile.accent .meta b{color:#fff}
   .tile.warn{border-color:var(--amber)} .tile.warn .val{color:var(--amber)}
   .tile.bad{border-color:var(--red)} .tile.bad .val{color:var(--red)}
+  .tile.clickable{cursor:pointer;transition:border-color .12s,transform .12s} .tile.clickable:hover{border-color:var(--teal)} .tile.clickable:active{transform:translateY(1px)}
+  .tile .chev{float:right;color:var(--muted);font-weight:700}
   .asof-tile{font-size:11px;color:var(--muted);margin-top:9px;padding-top:8px;border-top:1px dashed var(--line);display:flex;gap:5px;align-items:center}
   /* attention */
   .strip{display:flex;flex-direction:column;gap:8px;margin-bottom:20px}
@@ -216,10 +218,11 @@
     </div>
     <div class="strip" id="ov-attention" hidden></div>
     <div class="sec">Money</div>
-    <div class="grid g4" id="ov-money" style="margin-bottom:22px"></div>
+    <div class="grid g5" id="ov-money" style="margin-bottom:22px"></div>
     <div class="sec">The mill today</div>
     <div class="grid g5" id="ov-mill" style="margin-bottom:22px"></div>
     <div class="sec">Trends</div>
+    <div class="card" style="margin-bottom:14px"><div class="hd"><h3>Sales — dispatched &amp; billed</h3><span class="count">last 12 months · meters + Rs lac</span></div><div class="cwrap"><canvas id="ovSales"></canvas></div></div>
     <div class="cols">
       <div class="card"><div class="hd"><h3>Sales vs Expenses</h3><span class="count">monthly · Rs lac</span></div><div class="cwrap"><canvas id="ov1"></canvas></div></div>
       <div class="card"><div class="hd"><h3>Receivables vs Payables</h3><span class="count">month-end · Rs lac</span></div><div class="cwrap"><canvas id="ov2"></canvas></div></div>
@@ -358,6 +361,18 @@
   <form id="askForm"><input id="q" placeholder="e.g. cash in hand? yarn at sizers?" autocomplete="off"><button class="btn" type="submit">Ask</button></form>
 </div>
 
+<!-- drill-down drawer (Overview tiles) -->
+<dialog id="drawer" style="max-width:680px">
+  <div style="padding:16px 18px">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      <h3 id="drawer-title" style="margin:0;font-size:16px">Detail</h3>
+      <span style="flex:1"></span>
+      <button class="hbtn" id="drawer-close">✕</button>
+    </div>
+    <div id="drawer-body" style="max-height:68vh;overflow:auto;font-size:13px"></div>
+  </div>
+</dialog>
+
 <!-- licence dialog -->
 <dialog id="licDlg"><div style="padding:18px">
   <h3 style="margin:0 0 8px">Licence</h3>
@@ -434,6 +449,14 @@ function buildCharts(tab){
     var fs=(D.charts&&D.charts.fabric_stock)||[];
     mk("ov4",{type:"line",data:{labels:fs.map(x=>mlabel(x.month)),datasets:[{label:"Fabric stock (m)",data:fs.map(x=>x.meters),borderColor:c.green,tension:.35,pointRadius:2,borderWidth:2.6,fill:false}]},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({beginAtZero:true},grid(c))}}});
+    var sl=(D.charts&&D.charts.sales)||[];
+    mk("ovSales",{data:{labels:sl.map(x=>mlabel(x.month)),datasets:[
+      {type:"bar",label:"Dispatched (m)",data:sl.map(x=>x.meters),backgroundColor:c.teal,borderRadius:4,maxBarThickness:26,yAxisID:"y"},
+      {type:"line",label:"Sales (Rs lac)",data:sl.map(x=>lac(x.sales)),borderColor:c.amber,tension:.35,pointRadius:2,borderWidth:2.6,yAxisID:"y1"}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},
+        scales:{x:grid(c),
+          y:Object.assign({beginAtZero:true,position:"left",title:{display:true,text:"meters",color:c.muted}},grid(c)),
+          y1:{beginAtZero:true,position:"right",grid:{drawOnChartArea:false},ticks:{color:c.muted},title:{display:true,text:"Rs lac",color:c.muted}}}}});
   }
   if(tab==="weaving"){
     var w=D.weaving||{};
@@ -454,8 +477,10 @@ function rebuildCharts(){ Object.keys(charts).forEach(k=>charts[k].destroy()); c
 var rzt; addEventListener("resize",()=>{clearTimeout(rzt);rzt=setTimeout(()=>{Object.values(charts).forEach(ch=>ch.resize());},150);});
 
 /* ---------- render on data ---------- */
-function tile(lbl, val, meta, cls, asof){
-  return `<div class="tile ${cls||""}"><div class="lbl">${lbl}</div><div class="val">${val}</div>${meta?`<div class="meta">${meta}</div>`:""}${asof?`<div class="asof-tile">🕒 ${esc(asof)}</div>`:""}</div>`;
+function tile(lbl, val, meta, cls, asof, drill){
+  var click = drill ? ` clickable" data-drill="${esc(drill)}" role="button" tabindex="0` : "";
+  var chev = drill ? '<span class="chev">›</span>' : "";
+  return `<div class="tile ${cls||""}${click}"><div class="lbl">${lbl}${chev}</div><div class="val">${val}</div>${meta?`<div class="meta">${meta}</div>`:""}${asof?`<div class="asof-tile">🕒 ${esc(asof)}</div>`:""}</div>`;
 }
 function render(){
   if(!D) return;
@@ -478,22 +503,77 @@ function render(){
     btn.style.display=""; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length);
     btn.onclick=()=>{ attOpen=!attOpen; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length); };
   }
-  // money
+  // money (cash / receivable / payable tiles drill into detail)
+  var avgMeta = (k.sales_avg_months? ("avg of "+k.sales_avg_months+" mo · "+num(k.dispatched_avg_12m)+" m/mo") : "last 12 months");
   $("#ov-money").innerHTML =
-    tile("💵 Cash in hand", "Rs "+num(k.cash), "", "", "live") +
+    tile("💵 Cash in hand", "Rs "+num(k.cash), "tap for transactions", "", "live", "cash") +
     tile("🏦 Bank", "Rs "+num(k.bank), "", "", "live") +
-    tile("📥 Receivable", "Rs "+rs(k.receivable), (k.beam_alerts!=null?"":"") , "") +
-    tile("📤 Payable", "Rs "+rs(k.payable), "");
-  // mill
+    tile("📥 Receivable", "Rs "+rs(k.receivable), "tap for parties", "", "", "receivable") +
+    tile("📤 Payable", "Rs "+rs(k.payable), "tap for parties", "", "", "payable") +
+    tile("📈 Avg sales / month", "Rs "+rs(k.sales_avg_12m), avgMeta, "accent");
+  // mill (fabric & yarn tiles drill into detail)
   var yf=D.yarn_fabric||{};
   $("#ov-mill").innerHTML =
     tile("🧵 Meters woven", num(k.meters)+' <span class="cur">m</span>', "today · <b>"+num(k.woven_month)+" m</b> this month","accent") +
     tile("⚙️ Efficiency", (k.eff!=null?k.eff+"%":"–"), "today") +
-    tile("📦 Fabric in stock", num(yf.fabric_m)+' <span class="cur">m</span>', "<b>"+num(yf.fabric_lots)+"</b> lots") +
-    tile("🧶 Yarn in godown", num(yf.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(yf.yarn_hand_cones)+" cones</b> loose · "+num(yf.yarn_counts)+" counts") +
+    tile("📦 Fabric in stock", num(yf.fabric_m)+' <span class="cur">m</span>', "<b>"+num(yf.fabric_lots)+"</b> lots · tap for qualities", "", "", "fabric") +
+    tile("🧶 Yarn in godown", num(yf.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(yf.yarn_hand_cones)+" cones</b> loose · "+num(yf.yarn_counts)+" counts", "", "", "yarn") +
     tile("🚚 Dispatched", num(k.dispatched_month)+' <span class="cur">m</span>', "this month");
+  wireDrills();
   renderWeaving(); renderFinanceTiles(); renderYFTiles();
   buildCharts(curTab);
+}
+
+/* ---------- Overview drill-downs (drawer) ---------- */
+function openDrawer(title, html){ $("#drawer-title").innerHTML=title; $("#drawer-body").innerHTML=html; try{ $("#drawer").showModal(); }catch(e){} }
+$("#drawer-close").onclick=()=>$("#drawer").close();
+$("#drawer").addEventListener("click",e=>{ if(e.target.id==="drawer") $("#drawer").close(); });
+function wireDrills(){
+  document.querySelectorAll('#ov-money [data-drill],#ov-mill [data-drill]').forEach(function(t){
+    var w=t.getAttribute('data-drill');
+    t.onclick=()=>drill(w);
+    t.onkeydown=(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); drill(w); } };
+  });
+}
+function drill(which){
+  if(which==='cash') return drawCash();
+  if(which==='receivable') return drawParties('customer','📥 Receivable — who owes us');
+  if(which==='payable') return drawParties('supplier','📤 Payable — whom we owe');
+  if(which==='fabric') return drawFabric();
+  if(which==='yarn') return drawYarn();
+}
+async function drawCash(){
+  openDrawer("💵 Cash in hand",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see cash transactions.</p>'; return; }
+  try{
+    var j=await (await fetch("api/finance/group?group=cash")).json(), L=j.ledger||{};
+    var head=`<div class="lkpi" style="grid-template-columns:repeat(2,1fr);margin-bottom:10px"><div><div class="t">Cash in hand</div><div class="v">Rs ${num(L.balance)}</div></div><div><div class="t">Transactions</div><div class="v">${num(L.count)}</div></div></div>`;
+    var rows=(L.rows||[]).map(r=>[dshort(r.date), esc(r.voucher_type||""), esc(r.account||""), r.received?num(r.received):"", r.paid?num(r.paid):"", num(r.balance)]);
+    $("#drawer-body").innerHTML=head+(rows.length?table(["Date","Type","Account","In","Out","Balance"],rows,[3,4,5]):'<p class="muted">No cash transactions.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load cash transactions.</p>'; }
+}
+async function drawParties(group,title){
+  openDrawer(title,'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see party details.</p>'; return; }
+  try{
+    var j=await (await fetch("api/finance/parties?group="+encodeURIComponent(group))).json();
+    var ps=(j.parties||[]).filter(p=>Math.round(p.balance)!==0);
+    var rows=ps.map(p=>[esc(p.name||p.code), esc(p.side||""), rs(p.balance), p.last_date?dshort(p.last_date):""]);
+    $("#drawer-body").innerHTML=`<p class="muted" style="margin:0 0 8px">${ps.length} ${group==='customer'?'customers who owe / in advance':'suppliers we owe / in advance'} — open the Finance tab for a party's full ledger.</p>`+(rows.length?table(["Party","","Rs","Last entry"],rows,[2]):'<p class="muted">Nothing outstanding.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load party details.</p>'; }
+}
+function drawFabric(){
+  var q=((D.yarn_fabric||{}).fabric_by_quality)||[];
+  var rows=q.map(r=>[esc(r.quality), num(r.meters)]);
+  openDrawer("📦 Fabric in stock — by quality", rows.length?table(["Quality","Meters"],rows,[1]):'<p class="muted">No fabric in stock.</p>');
+}
+function drawYarn(){
+  var yf=D.yarn_fabric||{}, w=yf.weft_stock||[], s=yf.sizing_stock||[];
+  var wr=w.map(r=>[esc(r.count), esc(r.brand||""), num(r.bags), num(r.cones)]);
+  var sr=s.map(r=>[esc(r.party||""), esc(r.count), esc(r.brand||""), num(r.bags), num(r.cones)]);
+  var html=`<div class="sec" style="margin:2px 0 6px">Weft godown — count &amp; brand</div>`+(wr.length?table(["Count","Brand","Bags","Cones"],wr,[2,3]):'<p class="muted">—</p>');
+  if(sr.length) html+=`<div class="sec" style="margin:14px 0 6px">At sizing — by party</div>`+table(["Party","Count","Brand","Bags","Cones"],sr,[3,4]);
+  openDrawer("🧶 Yarn in godown — count-wise", html);
 }
 
 /* ---------- weaving ---------- */

@@ -146,6 +146,7 @@ def ledger(con, account_code):
             seen_month = mkey
     if rows:
         series.append({"date": rows[-1]["date"], "balance": round(run)})
+    rows.reverse()                                       # show newest first (running balance already computed per row)
     return {
         "code": account_code, "name": name, "group": group,
         "balance": round(run), "side": _side(group, run),
@@ -195,6 +196,25 @@ def daily(con, day):
         "cash_move": round(move.get("cash", 0) or 0), "bank_move": round(move.get("bank", 0) or 0),
         "entries": entries,
     }
+
+
+def group_ledger(con, group="cash", limit=300):
+    """Recent transactions across every account in one group (e.g. all cash accounts), newest first, with a running
+    group balance. Used by the Overview 'Cash in hand' drill-down - the history of cash in and out."""
+    total = con.execute("""SELECT COALESCE(SUM(b.balance), 0) FROM account_balances b JOIN accounts a USING (account_code)
+                           WHERE a.account_group = ?""", (group,)).fetchone()[0] or 0
+    raw = con.execute("""SELECT l.voucher_date, l.voucher_type, l.voucher_no, a.account_name, l.narration, COALESCE(l.amount, 0)
+                         FROM ledger_entries l JOIN accounts a USING (account_code)
+                         WHERE a.account_group = ? AND l.voucher_kind <> 'opening'
+                         ORDER BY l.voucher_date, l.voucher_type, l.voucher_no, l.rowid""", (group,)).fetchall()
+    run = round(total - sum(r[5] for r in raw))          # balance before the first transaction shown
+    rows = []
+    for vdate, vtype, vno, acc, narr, amt in raw:
+        run += amt
+        rows.append({"date": vdate, "voucher_type": vtype, "voucher_no": vno, "account": acc, "narration": narr,
+                     "received": round(amt) if amt > 0 else 0, "paid": round(-amt) if amt < 0 else 0, "balance": round(run)})
+    rows.reverse()                                       # newest first for display
+    return {"group": group, "balance": round(total), "count": len(rows), "rows": rows[:int(limit)]}
 
 
 def overview(con):

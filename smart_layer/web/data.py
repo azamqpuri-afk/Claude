@@ -146,6 +146,10 @@ def _yarn_fabric(con, cfg, as_of):
     fab_total = sum((r[0] or 0) for r in frows)
     fab_anomalies = sum(1 for r in frows if (r[0] or 0) < -1)
     lots = sum(1 for r in frows if (r[0] or 0) > 1)
+    # fabric in stock split by quality (for the Overview fabric-stock drill-down); only lines that net to real stock
+    fab_by_quality = sorted(({"quality": (q or "—"), "meters": round(m or 0)}
+                             for q, m in con.execute("SELECT quality, SUM(meters) FROM fabric_stock GROUP BY quality")
+                             if (m or 0) > 1), key=lambda r: -r["meters"])
 
     # Count-wise loose-yarn stock, exactly as the mill's "Weft Stock Detail" / "Yarn Stock At Sizing" report:
     # one row per count + brand + packing, net total cones split back into bags and loose cones (sign preserved).
@@ -191,7 +195,7 @@ def _yarn_fabric(con, cfg, as_of):
             "weft_stock": weft, "sizing_stock": sizing,
             "weft_total": {"bags": wb, "cones": wc}, "sizing_total": {"bags": sb, "cones": sc},
             "yarn_counts": weft_counts, "fabric_m": round(fab_total), "fabric_lots": lots,
-            "fabric_anomalies": fab_anomalies}
+            "fabric_anomalies": fab_anomalies, "fabric_by_quality": fab_by_quality}
 
 
 def build(con, cfg, as_of=None):
@@ -274,6 +278,20 @@ def build(con, cfg, as_of=None):
                               FROM fabric_dispatches WHERE dispatch_date BETWEEN ? AND ?""", m_start, d)
     woven_month = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", m_start, d)
 
+    # Sales trend for the Overview: billed revenue (Rs, from the ledger) and dispatched meters, per month.
+    disp_by_month = dict(con.execute("""SELECT strftime('%Y-%m', dispatch_date),
+                                        SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters)
+                                        FROM fabric_dispatches WHERE dispatch_date >= ? AND dispatch_date <= ? GROUP BY 1""",
+                                     (months[0] + "-01", d)))
+    sales_series = [{"month": f["month"], "sales": f["sales"], "meters": round(disp_by_month.get(f["month"], 0) or 0)}
+                    for f in finance]
+    # average sales / month over the last 12 (available) months - excludes the current partial month so the
+    # average is of whole months only
+    whole = sales_series[:-1] if len(sales_series) > 1 else sales_series
+    last12 = whole[-12:]
+    avg_sales = round(sum(x["sales"] for x in last12) / len(last12)) if last12 else 0
+    avg_meters = round(sum(x["meters"] for x in last12) / len(last12)) if last12 else 0
+
     return {
         "product": PRODUCT, "company": cfg["company"]["name"], "currency": cur, "as_of": d,
         "synced_at": _one(con, "SELECT MAX(synced_at) FROM sync_log") or None,
@@ -286,6 +304,7 @@ def build(con, cfg, as_of=None):
             "cash": round(group_balance("cash")), "bank": round(group_balance("bank")),
             "receivable": round(group_balance("customer")), "payable": round(-group_balance("supplier")),
             "sales_month": finance[-1]["sales"], "expenses_month": finance[-1]["expenses"],
+            "sales_avg_12m": avg_sales, "dispatched_avg_12m": avg_meters, "sales_avg_months": len(last12),
             "out_of_stock": sum(1 for r in items if r["status"] == "OUT OF STOCK"),
             "low_stock": sum(1 for r in items if r["status"] == "LOW STOCK"),
             "action": sum(1 for f in findings if f["severity"] == "ACTION"),
@@ -302,7 +321,7 @@ def build(con, cfg, as_of=None):
         "sizing_limit": float(t["sizing_loss_pct"]),
         "beams": beam_rows, "beam_warn_days": float(bt["warn_days"]),
         "beam_stock": _beam_stock(con, cfg, as_of),
-        "charts": _chart_series(con, as_of),
+        "charts": {**_chart_series(con, as_of), "sales": sales_series},
         "fin": fin_mod.overview(con),
         "weaving": _weaving(con, as_of),
         "yarn_fabric": _yarn_fabric(con, cfg, as_of),
