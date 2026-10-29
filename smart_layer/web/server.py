@@ -92,12 +92,13 @@ class App:
         finally:
             con.close()
 
-    def report(self, name, day):
-        """A built report plus the day it is actually for (so the file name and on-screen title agree)."""
+    def report(self, name, day, d0=None, d1=None):
+        """A built report plus the day it is actually for (so the file name and on-screen title agree). d0/d1 are an
+        optional From/To filter; the To date (or `day`) is the report's as-of."""
         from .. import report_registry
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
-            return report_registry.build(con, self.cfg, name, day), report_registry.report_day(name, day)
+            return report_registry.build(con, self.cfg, name, day, d0, d1), report_registry.report_day(name, d1 or day)
         finally:
             con.close()
 
@@ -355,7 +356,12 @@ def get_response(app, path, query, check_licence=True):
         name, fmt = params.get("name", ""), params.get("fmt", "json")   # a report
         if name not in report_registry.REPORTS:
             return 404, {"error": "unknown report"}, "application/json", {}
-        rep, on = app.report(name, day)
+        try:                                            # optional From/To filter (To, or ?date=, is the as-of)
+            d0 = date.fromisoformat(params["from"]) if params.get("from") else None
+            d1 = date.fromisoformat(params["to"]) if params.get("to") else None
+        except ValueError:
+            return 400, {"error": "from/to must be YYYY-MM-DD"}, "application/json", {}
+        rep, on = app.report(name, day, d0, d1)
         return _report_body(app, rep, name, on.isoformat(), fmt, cell)
     return 404, {"error": "not found"}, "application/json", {}
 

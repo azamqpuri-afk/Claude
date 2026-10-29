@@ -19,6 +19,8 @@ REPORTS = {
     "production":   (production.daily_production,   "Production on the day (per loom)", True),
     "value":        (production.production_value,   "Production value (earnings per loom / contract)", True),
     "closing":      (closing.contract_closing,      "Contract closing (party yarn balance)", False),
+    "trial-balance": (finance.trial_balance,         "Finance: trial balance check (as of the To date)", False),
+    "unbalanced":   (finance.unbalanced,             "Finance: unbalanced entries (debit ≠ credit)", False),
     "pilferage":    (pilferage.pilferage,           "Yarn: pilferage check", True),
     "beams":        (beams.beam_report,             "Beams on looms (days left, backups)", False),
     "sizers":       (beams.sizer_ledger,            "Empty beams with sizers (by quantity)", False),
@@ -38,10 +40,17 @@ REPORTS = {
 
 NAMES = list(REPORTS)
 
+# reports that take a from/to window (builder signature (con, cfg, d0, d1)); everything else takes a single as-of day.
+RANGE = {"unbalanced"}
 
-def build(con, cfg, name, day=None):
-    """The Report for one name. `day` defaults per the report (yesterday for a day report, today for a position)."""
-    return REPORTS[name][0](con, cfg, report_day(name, day))
+
+def build(con, cfg, name, day=None, d0=None, d1=None):
+    """The Report for one name. A range report uses d0/d1 (To defaults to today, From to a year before). Every other
+    report is a single-day / position report and uses the To date as its as-of (falling back to its own default)."""
+    builder = REPORTS[name][0]
+    if name in RANGE:
+        return builder(con, cfg, d0, d1 or day)
+    return builder(con, cfg, report_day(name, d1 or day))
 
 
 def report_day(name, day=None):

@@ -123,12 +123,14 @@ def cmd_report(cfg, args):
     from .reports import stock
     con = _store(cfg)
     day = date.fromisoformat(args.date) if args.date else None
+    d0 = date.fromisoformat(args.from_) if getattr(args, "from_", None) else None
+    d1 = date.fromisoformat(args.to) if getattr(args, "to", None) else None
     if args.name == "zero":                              # only the daily push moves the "newly at zero" baseline
         rep = stock.new_zero(con, cfg, day, remember=bool(args.push))
     else:
-        rep = report_registry.build(con, cfg, args.name, day)
+        rep = report_registry.build(con, cfg, args.name, day, d0, d1)
     print(rep.text())
-    tag = report_registry.report_day(args.name, day).isoformat()
+    tag = report_registry.report_day(args.name, d1 or day).isoformat()
     out_dir = cfg.path(cfg["reports"]["output_dir"])
     if args.csv:
         print("\nSaved", rep.write_csv(out_dir, f"{args.name}_{tag}.csv"))
@@ -329,6 +331,8 @@ def main(argv=None):
     r = sub.add_parser("report")
     r.add_argument("name", choices=report_registry.NAMES)
     r.add_argument("--date")
+    r.add_argument("--from", dest="from_", metavar="YYYY-MM-DD", help="range start (for period reports)")
+    r.add_argument("--to", metavar="YYYY-MM-DD", help="range end / as-of date")
     r.add_argument("--csv", action="store_true")
     r.add_argument("--pdf", action="store_true")
     r.add_argument("--push", action="store_true")

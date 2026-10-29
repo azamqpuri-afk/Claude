@@ -878,6 +878,37 @@ def test_finance_party_ledger_runs_to_balance(env):
         assert kinds[-1] == "opening"
 
 
+def test_trial_balance_and_unbalanced_reports(env):
+    from smart_layer.reports import finance as fin_rep
+    cfg, con = env
+    acc = con.execute("SELECT account_code FROM accounts LIMIT 1").fetchone()[0]
+    # a clean ledger: trial balance agrees and the detection report is empty
+    tb = fin_rep.trial_balance(con, cfg, END)
+    assert tb.columns[-1].startswith("Difference") and any("Trial balance:" in s for s in tb.summary)
+    base_unbal = len(fin_rep.unbalanced(con, cfg, date(2025, 1, 1), END).rows)
+    # plant one voucher whose single line does not net to zero, then it must be detected
+    con.execute("""INSERT INTO ledger_entries (voucher_id, voucher_no, voucher_type, voucher_kind, voucher_date, account_code, amount)
+                   VALUES ('TB-TEST', '9999', 'JV', 'journal', ?, ?, 12345)""", (END.isoformat(), acc))
+    try:
+        unb = fin_rep.unbalanced(con, cfg, date(2025, 1, 1), END)
+        assert len(unb.rows) == base_unbal + 1
+        planted = [r for r in unb.rows if r[2] == "9999"][0]
+        assert planted[-1] == 12345                           # the out-of-balance difference
+        tb2 = fin_rep.trial_balance(con, cfg, END)
+        assert any("OUT OF BALANCE" in s for s in tb2.summary) # the check now fails
+        assert any(r[2] == "9999" for r in tb2.rows)          # and the culprit voucher is listed
+    finally:
+        con.execute("DELETE FROM ledger_entries WHERE voucher_id = 'TB-TEST'")
+
+
+def test_report_range_filter_routes_through_build(env):
+    cfg, con = env
+    # the From/To window reaches the range report; a tiny window yields no (or fewer) unbalanced vouchers
+    wide = report_registry.build(con, cfg, "unbalanced", d0=date(2020, 1, 1), d1=END)
+    narrow = report_registry.build(con, cfg, "unbalanced", d0=END, d1=END)
+    assert "2020" in wide.title and len(narrow.rows) <= len(wide.rows)
+
+
 def test_finance_daily_balances(env):
     _, con = env
     # the demo's last ledger day

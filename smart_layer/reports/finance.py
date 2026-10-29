@@ -10,7 +10,7 @@ Opening-balance vouchers are left out of the P&L.
 """
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, timedelta
 
 from . import Report
 
@@ -98,3 +98,58 @@ def parties(con, cfg, as_of=None):
     return Report(f"Party balances - {as_of:%d-%b-%Y}", ["", "Party", "Type", f"Balance {cur}", "Last entry", "Days since"], rows,
                   [f"Receivable {cur} {rec:,.0f} from {sum(1 for r in rows if r[0] == 'Receivable')} parties; "
                    f"payable {cur} {pay:,.0f} to {sum(1 for r in rows if r[0] == 'Payable')}."])
+
+
+def _tolerance(cfg):
+    return float((cfg["audit"] or {}).get("trial_balance_tolerance", 10) or 0)
+
+
+def _unbalanced_vouchers(con, where, params):
+    """Vouchers whose ledger lines do not net to zero (debits != credits) - a data-entry error. Returns
+    [date, voucher_type, voucher_no, lines, debit, credit, difference], biggest out-of-balance first."""
+    rows = con.execute(f"""
+        SELECT voucher_date, MAX(voucher_type), MAX(voucher_no), COUNT(*),
+               SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),
+               SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), SUM(amount)
+        FROM ledger_entries WHERE {where} GROUP BY voucher_id
+        HAVING ABS(SUM(amount)) > ?
+        ORDER BY ABS(SUM(amount)) DESC, voucher_date DESC""", params).fetchall()
+    return [[vd, vt, vno, n, round(dr or 0), round(cr or 0), round(diff or 0)] for vd, vt, vno, n, dr, cr, diff in rows]
+
+
+def trial_balance(con, cfg, as_of=None):
+    """Trial-balance check as of a date: total debits vs total credits, the difference, and - the part that matters -
+    the unbalanced vouchers that break it. A healthy ledger balances to zero and lists no vouchers."""
+    as_of = as_of or date.today()
+    d, cur, tol = as_of.isoformat(), cfg["company"]["currency"], _tolerance(cfg)
+    debit = credit = 0.0
+    for (bal,) in con.execute("SELECT SUM(amount) FROM ledger_entries WHERE voucher_date <= ? GROUP BY account_code", (d,)):
+        bal = bal or 0
+        if bal > 0:
+            debit += bal
+        else:
+            credit += -bal
+    diff = debit - credit                                # = sum of every unbalanced voucher's net amount
+    rows = _unbalanced_vouchers(con, "voucher_date <= ?", (d, tol))
+    verdict = "BALANCED" if abs(diff) <= tol else f"OUT OF BALANCE by {cur} {abs(diff):,.0f}"
+    summary = [f"As at {as_of:%d-%b-%Y}: total debits {cur} {debit:,.0f}, total credits {cur} {credit:,.0f}.",
+               f"Trial balance: {verdict} (tolerance {cur} {tol:g})."]
+    summary.append(f"{len(rows)} unbalanced voucher(s) shown below - these are what make the books not tie out."
+                   if rows else "No unbalanced vouchers: every voucher's debits equal its credits.")
+    return Report(f"Trial balance check - {as_of:%d-%b-%Y}",
+                  ["Date", "Type", "Voucher", "Lines", f"Debit {cur}", f"Credit {cur}", f"Difference {cur}"], rows, summary)
+
+
+def unbalanced(con, cfg, d0=None, d1=None):
+    """Every voucher in the period whose debits do not equal its credits (detection report)."""
+    d1 = d1 or date.today()
+    d0 = d0 or (d1 - timedelta(days=365))
+    cur, tol = cfg["company"]["currency"], _tolerance(cfg)
+    rows = _unbalanced_vouchers(con, "voucher_date BETWEEN ? AND ?", (d0.isoformat(), d1.isoformat(), tol))
+    net = sum(r[6] for r in rows)
+    summary = [f"{d0:%d-%b-%Y} to {d1:%d-%b-%Y}: {len(rows)} voucher(s) where debits do not equal credits"
+               + (f", out of balance by {cur} {net:,.0f} in total." if rows else " - the books are clean for this period.")]
+    if rows:
+        summary.append("Each line is a data-entry error to fix in the ERP: the voucher's debit and credit sides differ.")
+    return Report(f"Unbalanced entries - {d0:%d-%b-%Y} to {d1:%d-%b-%Y}",
+                  ["Date", "Type", "Voucher", "Lines", f"Debit {cur}", f"Credit {cur}", f"Difference {cur}"], rows, summary)

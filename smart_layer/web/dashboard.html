@@ -332,6 +332,8 @@
     <div class="card"><div class="hd"><h3>Reports</h3>
       <div class="tools" style="margin:0">
         <label class="fld">Report <select id="rep-name"></select></label>
+        <label class="fld">From <input type="date" id="rep-from"></label>
+        <label class="fld">To <input type="date" id="rep-to"></label>
         <button class="btn" id="rep-view">View</button>
         <button class="btn ghost" id="rep-pdf">⤓ PDF</button>
         <button class="btn ghost" id="rep-csv">⤓ CSV</button>
@@ -873,7 +875,9 @@ var CLOSING=false, closingParty="";
 function repUrl(fmt){
   var d=$("#day").value, dq=d?`&date=${d}`:"";
   if(CLOSING) return `api/closing?fmt=${fmt}&party=${encodeURIComponent(closingParty)}&counts=${encodeURIComponent(JSON.stringify(editedCounts()))}`+dq;
-  return `api/report?name=${encodeURIComponent($("#rep-name").value)}&fmt=${fmt}`+dq;
+  var f=($("#rep-from")||{}).value, t=($("#rep-to")||{}).value;   // optional From/To filter; empty = report's own default
+  var rq=(f?`&from=${f}`:"")+(t?`&to=${t}`:"");
+  return `api/report?name=${encodeURIComponent($("#rep-name").value)}&fmt=${fmt}`+dq+rq;
 }
 async function initReports(){
   if(STATIC_DATA) return;
@@ -882,6 +886,7 @@ async function initReports(){
 }
 $("#rep-view").onclick=()=>{ var n=$("#rep-name").value; loadReportNamed(n); };
 $("#rep-name").onchange=()=>{ if($("#rep-name").value!=="closing"){ CLOSING=false; $("#rep-edit").innerHTML=""; } };
+["#rep-from","#rep-to"].forEach(s=>{ var el=$(s); if(el) el.onchange=()=>{ var n=$("#rep-name").value; if(n) loadReportNamed(n); }; });
 async function loadReportNamed(name){
   if(name==="closing"){ CLOSING=true; return openClosing(); }
   CLOSING=false; $("#rep-edit").innerHTML="";
