@@ -1180,3 +1180,28 @@ def test_grants_exclude_non_erp_sources(capsys):
     assert "dostex." in out                                       # real ERP tables are granted
     assert "grant select on loomstat" not in out                 # Access scoreboard tables are NOT
     assert "grant select on rtlsum" not in out
+
+
+def test_short_history_entities_are_pruned(tmp_path):
+    from datetime import date as _d, timedelta as _t
+    con = store.open_store(tmp_path / "p.db")
+    old = (_d.today() - _t(days=60)).isoformat()
+    recent = (_d.today() - _t(days=1)).isoformat()
+    with con:
+        con.execute("INSERT INTO loom_stops (stop_date,loom_code,stop_time,restart_time) VALUES (?,?,?,?)",
+                    (old, "2", old + " 10:00:00", old + " 10:01:00"))
+
+    class FM:
+        name = "f"; entities = {"loom_stops": "x"}; source = {}
+
+    class FE:
+        def __init__(s): s.mapping = FM()
+        def fetch(s, n, since, as_of=None):
+            return iter([(recent, "2", recent + " 10:00:00", recent + " 10:01:00", None, None)])
+
+    store.sync(con, FE(), 400, entities=["loom_stops"], full_history=(), fabric_history=False, log=lambda *_: None)
+    dates = [r[0] for r in con.execute("SELECT stop_date FROM loom_stops")]
+    cap = (_d.today() - _t(days=14)).isoformat()
+    assert dates == [recent]                                      # old row pruned, recent kept
+    assert all(x >= cap for x in dates)
+    con.close()

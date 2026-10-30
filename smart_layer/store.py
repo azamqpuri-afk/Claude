@@ -179,6 +179,10 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
                 con.execute(f"DELETE FROM {e.name}")
             marks = ", ".join("?" * len(e.columns))
             con.executemany(f"INSERT INTO {e.name} VALUES ({marks})", rows)
+            # short-history entities (e.g. the huge raw loom stop log) are PRUNED to their cap: the windowed delete
+            # above only clears the window, so rows older than the cap would otherwise pile up for ever.
+            if e.date_column and e.name in short_history:
+                con.execute(f"DELETE FROM {e.name} WHERE {e.date_column} < ?", (since.isoformat(),))
             con.execute("INSERT INTO sync_log VALUES (?, ?, ?, ?)",
                         (e.name, now, since.isoformat() if e.date_column else None, len(rows)))
         result[e.name] = len(rows)

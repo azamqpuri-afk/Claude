@@ -20,8 +20,11 @@ function Resolve-Principal($name) {
     $ex = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     if ($ex -and $ex.Principal -and $ex.Principal.UserId) {
         try {
-            return New-ScheduledTaskPrincipal -UserId $ex.Principal.UserId -LogonType $ex.Principal.LogonType `
-                   -RunLevel $ex.Principal.RunLevel
+            # A stored-password logon (LogonType Password) cannot be re-registered without the password, so the
+            # Register would fail; run as the signed-in user instead (Interactive, no password needed).
+            $lt = "$($ex.Principal.LogonType)"
+            if ($lt -eq "Password") { $lt = "Interactive" }
+            return New-ScheduledTaskPrincipal -UserId $ex.Principal.UserId -LogonType $lt -RunLevel $ex.Principal.RunLevel
         } catch { return $principal }
     }
     return $principal
@@ -69,7 +72,9 @@ try {
 # Dashboard: always on. AtStartup fires for SYSTEM (runs with no session); an Interactive principal has no session
 # at boot, so it must start AtLogOn instead - otherwise the dashboard never comes up on an Interactive install.
 $dashPrin = Resolve-Principal "Smart Layer Dashboard"
-$dashTrigger = if ("$($dashPrin.LogonType)" -eq "Interactive") { New-ScheduledTaskTrigger -AtLogOn } `
+# AtLogOn must be scoped to the task's own user: unscoped it needs elevation (Access denied otherwise) and would
+# fire at ANY user's logon. SYSTEM has no logon session, so it starts AtStartup instead.
+$dashTrigger = if ("$($dashPrin.LogonType)" -eq "Interactive") { New-ScheduledTaskTrigger -AtLogOn -User $dashPrin.UserId } `
                else { New-ScheduledTaskTrigger -AtStartup }
 Register-ScheduledTask -TaskName "Smart Layer Dashboard" -Action (New-RunAction $dashPrin "$AppDir\run_dashboard.cmd") `
     -Principal $dashPrin -Force -Trigger $dashTrigger `
