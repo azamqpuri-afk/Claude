@@ -112,7 +112,7 @@ def _unbalanced_vouchers(con, where, params):
                SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END),
                SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), SUM(amount)
         FROM ledger_entries WHERE {where} GROUP BY voucher_id
-        HAVING ABS(SUM(amount)) > ?
+        HAVING ABS(SUM(amount)) > ? AND ABS(SUM(amount)) >= 0.5
         ORDER BY ABS(SUM(amount)) DESC, voucher_date DESC""", params).fetchall()
     return [[vd, vt, vno, n, round(dr or 0), round(cr or 0), round(diff or 0)] for vd, vt, vno, n, dr, cr, diff in rows]
 
@@ -139,7 +139,7 @@ def trial_balance(con, cfg, as_of=None):
     # vouchers out of balance but within tolerance are not listed; note them so the rows reconcile to the difference
     un, ut = con.execute("""SELECT COUNT(*), COALESCE(SUM(ABS(s)), 0) FROM
                             (SELECT SUM(amount) s FROM ledger_entries WHERE voucher_date <= ?
-                             GROUP BY voucher_id HAVING ABS(SUM(amount)) > 0 AND ABS(SUM(amount)) <= ?)""", (d, tol)).fetchone()
+                             GROUP BY voucher_id HAVING ABS(SUM(amount)) >= 0.5 AND ABS(SUM(amount)) <= ?)""", (d, tol)).fetchone()
     if un:
         summary.append(f"(+ {un} voucher(s) under the {cur} {tol:g} tolerance totalling {cur} {ut:,.0f}, not listed.)")
     return Report(f"Trial balance check - {as_of:%d-%b-%Y}",

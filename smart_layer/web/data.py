@@ -308,7 +308,10 @@ def build(con, cfg, as_of=None):
     # it is queried separately from the 12-month chart above.
     yy = as_of.year * 12 + as_of.month - 1
     avg_keys = [f"{(yy - j) // 12:04d}-{(yy - j) % 12 + 1:02d}" for j in range(12, 0, -1)]   # 12 whole months before this one
-    data_start = finance[0]["month"] if finance else avg_keys[0]
+    # bound by the REAL first ledger month (not the 12-month chart window, which would drop a valid month), so the
+    # average covers a full 12 complete months whenever the ledger goes back that far
+    first_month = _one(con, "SELECT MIN(voucher_date) FROM ledger_entries WHERE voucher_kind <> 'opening'") or ""
+    data_start = str(first_month)[:7] or avg_keys[0]
     keys = [k for k in avg_keys if k >= data_start]            # don't dilute the average with months before go-live
     arev = dict(con.execute("""SELECT strftime('%Y-%m', l.voucher_date),
                    -SUM(CASE WHEN a.account_group = 'revenue' THEN l.amount ELSE 0 END)

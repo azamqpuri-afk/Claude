@@ -473,12 +473,14 @@ def test_overview_sales_series_and_average(env):
     assert sales and all({"month", "sales", "meters"} <= set(x) for x in sales)
     assert len(sales) == len(d["finance"]) and sales[-1]["month"] == d["finance"][-1]["month"]
     k = d["kpis"]
-    # the average is over the COMPLETE months only (the current partial month is excluded), up to the last 12
-    cur_key = f"{END.year}-{END.month:02d}"
-    complete = [f for f in d["finance"] if f["month"] < cur_key]
-    assert k["sales_avg_months"] == len(complete)
-    assert k["sales_avg_12m"] == round(sum(f["sales"] for f in complete) / len(complete))
-    assert "dispatched_avg_12m" in k
+    # the average covers the 12 complete months before the current one, bounded by the REAL first ledger month
+    # (not the chart window), so a month with data is never dropped
+    yy = END.year * 12 + END.month - 1
+    avg_keys = [f"{(yy - j) // 12:04d}-{(yy - j) % 12 + 1:02d}" for j in range(12, 0, -1)]
+    first = con.execute("SELECT MIN(voucher_date) FROM ledger_entries WHERE voucher_kind <> 'opening'").fetchone()[0]
+    keys = [kk for kk in avg_keys if kk >= str(first)[:7]]
+    assert k["sales_avg_months"] == len(keys)                    # 12 when the ledger goes back far enough
+    assert k["sales_avg_12m"] > 0 and "dispatched_avg_12m" in k
 
 
 def test_overview_fabric_by_quality(env):

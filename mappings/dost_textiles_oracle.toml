@@ -57,9 +57,10 @@ FROM dostex.ach WHERE ac LIKE '3003%' OR ac LIKE '2001%'
 [entities.accounts]
 sql = """
 SELECT a.ac AS account_code, a.an AS account_name,
-       -- AR Textiles is a long-term payable (loan), NOT a trade supplier, so it is kept OUT of Accounts Payable to
-       -- give a real payables figure. Matched at a word boundary so names like "BAZAR TEXTILE" are not caught.
-       -- If the ERP name differs, pin it by exact code instead, e.g.  WHEN a.ac = '2001xxx' THEN 'liability'
+       -- AR Textile (account 300306004, a 3003 customer-side account) is a long-term payable (a loan), so it is
+       -- reclassified to 'liability' to keep it OUT of Receivable / advances-received and show it under Accrued -
+       -- giving a real receivables picture. Matched at a word boundary so names like "BAZAR TEXTILE" are not caught.
+       -- To pin it exactly instead, use the code, e.g.  WHEN a.ac IN ('300306004', '300306009') THEN 'liability'
        CASE WHEN REGEXP_LIKE(a.an, '(^| )AR[ .]*TEXTILE', 'i') THEN 'liability'
             WHEN a.ac LIKE '300801%' THEN 'cash'
             WHEN a.ac LIKE '3008%'   THEN 'bank'
