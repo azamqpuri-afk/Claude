@@ -112,7 +112,7 @@ def _cmd_sync(cfg, args):
             return 0
         print(f"Live sync from {e.mapping.name} (last {days} days: {', '.join(ent)})")  # rest are left to the daily sync
         return _sync_exit(store.sync(_store(cfg), e, days, entities=ent, full_history=(), fabric_history=False,
-                                     short_history=short))
+                                     short_history=short, track_changes=True))
     print(f"Syncing from {e.mapping.name} (last {cfg['sync']['history_days']} days; full history for yarn and fabric)")
     res = store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities,
                      full_history=cfg["sync"].get("full_history", store.FULL_HISTORY), short_history=short)

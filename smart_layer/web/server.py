@@ -156,7 +156,7 @@ class App:
                                          full_history=self.cfg["sync"].get("full_history", store.FULL_HISTORY), log=lambda *_: None)
                     else:                                 # the light live sync: fast-changing entities, last few days
                         res = store.sync(con, e, int(self.cfg["sync"].get("live_days", 3)), entities=list(store.LIVE_ENTITIES),
-                                         full_history=(), fabric_history=False, log=lambda *_: None)
+                                         full_history=(), fabric_history=False, log=lambda *_: None, track_changes=True)
                     failed = res.get("_failed") or []
                     if failed:
                         err = "Some data sets did not sync: " + ", ".join(failed)

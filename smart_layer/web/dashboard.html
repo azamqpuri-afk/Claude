@@ -202,7 +202,13 @@
   .fx.roll .spin{transform-origin:center;animation:rollspin 2.2s linear}
   @keyframes rollspin{to{transform:rotate(540deg)}}
   @keyframes rollfade{0%{opacity:0;transform:scale(.8)}15%{opacity:1}85%{opacity:1}100%{opacity:0}}
-  @media (prefers-reduced-motion: reduce){ .fx{display:none!important} .tile.flash,.tile.flash.bad{animation:none} }
+  .fx.box{animation:boxslide 2s cubic-bezier(.4,0,.2,1) forwards}
+  @keyframes boxslide{0%{opacity:0;transform:translateX(-60px)}15%{opacity:1}80%{opacity:1;transform:translateX(90px)}100%{opacity:0;transform:translateX(96px)}}
+  .fx .gate{position:absolute;left:230px;top:-2px;font-size:9px;font-weight:700;color:var(--muted)}
+  .fx .road{position:absolute;left:-10px;top:26px;width:300px;border-top:2px dashed var(--line)}
+  .strip.pulse,.sec.pulse{animation:attpulse 1.4s ease}
+  @keyframes attpulse{0%,30%{box-shadow:0 0 0 2px color-mix(in srgb,var(--red) 60%,transparent);border-radius:12px}100%{box-shadow:none}}
+  @media (prefers-reduced-motion: reduce){ .fx{display:none!important} .tile.flash,.tile.flash.bad,.strip.pulse,.sec.pulse{animation:none} }
 </style>
 </head>
 <body>
@@ -1316,8 +1322,20 @@ function tileEl(drill){ return document.querySelector(`#ov-money [data-drill="${
 function flash(el, bad){ if(!el) return; el.classList.remove("flash","bad"); void el.offsetWidth; el.classList.add("flash"); if(bad) el.classList.add("bad"); }
 function layerPos(el){ var L=$("#anim-layer"); if(!el) return {x:innerWidth/2,y:160,L:L}; var r=el.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+10, L:L}; }
 function NOTE_SVG(front){ return front
-  ? `<svg viewBox="0 0 66 30"><rect width="66" height="30" rx="3" fill="#f3ead9"/><rect width="66" height="9" fill="#e8897a"/><rect y="21" width="66" height="9" fill="#9c6b4a"/><text x="33" y="20" font-size="12" font-weight="700" text-anchor="middle" fill="#7a4a2a" stroke="#7a4a2a" stroke-width=".3">5000</text></svg>`
-  : `<svg viewBox="0 0 66 30"><rect width="66" height="30" rx="3" fill="#f6d9cf" stroke="#e8897a" stroke-width="2"/><path d="M14 22 q6 -10 12 0" fill="none" stroke="#c0705c" stroke-width="1.4"/><circle cx="20" cy="12" r="2" fill="#c0705c"/><text x="44" y="20" font-size="11" font-weight="700" text-anchor="middle" fill="#c0705c">5000</text></svg>`; }
+  ? `<svg viewBox="0 0 66 30"><rect width="66" height="30" rx="3" fill="#f3ead9" stroke="#d9b98f" stroke-width=".5"/>`
+    + `<rect width="66" height="7" fill="#e8897a"/><rect y="7" width="66" height="3" fill="#c76a58"/>`
+    + `<rect y="23" width="66" height="7" fill="#9c6b4a"/>`
+    + `<text x="60" y="20" font-size="13" font-weight="800" text-anchor="end" fill="none" stroke="#7a4a2a" stroke-width=".6">5000</text>`
+    + `<text x="6" y="19" font-size="6" fill="#7a4a2a">STATE BANK</text></svg>`
+  : `<svg viewBox="0 0 66 30"><rect width="66" height="30" rx="3" fill="#f6d9cf" stroke="#e8897a" stroke-width="2"/>`
+    + `<path d="M8 23 h20 M14 23 v-5 a4 4 0 0 1 8 0 v5 M18 13 v-3" fill="none" stroke="#b05c48" stroke-width="1"/>`   // mosque silhouette
+    + `<circle cx="18" cy="9.5" r="2.2" fill="#f6d9cf" stroke="#b05c48" stroke-width="1"/>`
+    + `<text x="60" y="15" font-size="11" font-weight="800" text-anchor="end" fill="#c0705c">5000</text>`
+    + `<text x="60" y="25" font-size="4.6" font-weight="700" text-anchor="end" fill="#b05c48">FIVE THOUSAND</text></svg>`; }
+function MILL_TILE(which){  // the specific Overview tile for an animation
+  if(which==="woven") return document.querySelector('#ov-mill .tile');           // 🧵 Meters woven (first mill tile)
+  return tileEl(which) || document.querySelector('#ov-mill .tile');
+}
 function animate(e, pk, nk, done){
   var L=$("#anim-layer"); if(!L){ done(); return; }
   if(e.kind==="cash"){
@@ -1329,20 +1347,36 @@ function animate(e, pk, nk, done){
       L.appendChild(n); setTimeout(()=>n.remove(), 2000);
     })(i); }
     setTimeout(done, 700);
-  } else if(e.kind==="out" || e.kind==="in" || e.kind==="store"){
-    var inb=(e.kind==="in"), tl2=tileEl(e.kind==="store"?"cash":(inb?"yarn":"fabric")), p2=layerPos(tl2);
+  } else if(e.kind==="out" || e.kind==="in"){
+    // a truck (carrying fabric rolls) drives out of / into a GATE along a road line
+    var inb=(e.kind==="in"), tl2=MILL_TILE(e.what==="fabric"||!inb?"fabric":"yarn"), p2=layerPos(tl2); flash(tl2,false);
     var t=document.createElement("div"); t.className="fx truck"+(inb?" inb":"");
     t.style.left=(p2.x-30)+"px"; t.style.top=p2.y+"px";
-    var cap = e.kind==="store" ? ("store: "+esc(e.item)) : ((e.what||"goods")+(inb?" in":" out")+(e.bags?" · "+num(e.bags)+" bags":(e.kg?" · "+num(e.kg)+" kg":"")));
-    t.innerHTML=`<svg width="60" height="30" viewBox="0 0 60 30"><rect x="2" y="8" width="34" height="14" rx="2" fill="var(--teal)"/><rect x="36" y="12" width="16" height="10" rx="2" fill="var(--teal-deep)"/><circle cx="12" cy="24" r="4" fill="#333"/><circle cx="44" cy="24" r="4" fill="#333"/></svg><span class="cap">${cap}</span>`;
+    var qty = e.meters!=null? (num(e.meters)+" m") : (e.thaan!=null? (num(e.thaan)+" thaan") : (e.qty!=null? num(e.qty): (e.bags!=null? num(e.bags)+" bags":"")));
+    var cap = (e.what||"goods")+(inb?" in":" out")+(qty?" · "+qty:"")+(e.party?" → "+esc(String(e.party).slice(0,18)):"");
+    t.innerHTML=`<span class="road"></span><span class="gate">GATE</span>`
+      +`<svg width="62" height="30" viewBox="0 0 62 30"><rect x="2" y="7" width="34" height="15" rx="2" fill="var(--teal)"/>`
+      +`<rect x="6" y="10" width="8" height="9" rx="2" fill="#f3ead9"/><rect x="16" y="10" width="8" height="9" rx="2" fill="#f3ead9"/><rect x="26" y="10" width="7" height="9" rx="2" fill="#f3ead9"/>`  // fabric rolls
+      +`<rect x="37" y="11" width="15" height="11" rx="2" fill="var(--teal-deep)"/><circle cx="13" cy="24" r="4" fill="#333"/><circle cx="45" cy="24" r="4" fill="#333"/></svg>`
+      +`<span class="cap">${cap}</span>`;
     L.appendChild(t); setTimeout(()=>t.remove(), 2400); setTimeout(done, 800);
+  } else if(e.kind==="store"){
+    // a box slides from the shelf to a "LOOM n" box, near the mill tiles
+    var tl4=MILL_TILE("woven"), p4=layerPos(tl4);
+    var dest=String(e.to||"").match(/\d+/); dest = dest? ("LOOM "+dest[0]) : (e.to? String(e.to).slice(0,10) : "store");
+    var b=document.createElement("div"); b.className="fx box"; b.style.left=(p4.x-40)+"px"; b.style.top=(p4.y+14)+"px";
+    b.innerHTML=`<svg width="26" height="22" viewBox="0 0 26 22"><rect x="1" y="5" width="24" height="16" rx="1.5" fill="#cfa36b" stroke="#9c6b4a"/><path d="M1 9 h24 M13 5 v16" stroke="#9c6b4a" stroke-width="1"/></svg>`
+      +`<span class="cap">${esc(e.item)} → ${esc(dest)}</span>`;
+    L.appendChild(b); setTimeout(()=>b.remove(), 2100); setTimeout(done, 700);
   } else if(e.kind==="woven"){
-    var tl3=tileEl(null)||document.querySelector('#ov-mill .tile'), p3=layerPos(document.querySelector('#ov-mill .tile'));
+    var p3=layerPos(MILL_TILE("woven"));
     var r=document.createElement("div"); r.className="fx roll"; r.style.left=(p3.x-20)+"px"; r.style.top=p3.y+"px";
     r.innerHTML=`<svg class="spin" width="42" height="42" viewBox="0 0 42 42"><circle cx="21" cy="21" r="16" fill="none" stroke="var(--teal)" stroke-width="5"/><line x1="21" y1="5" x2="21" y2="37" stroke="var(--teal-deep)" stroke-width="3"/></svg><span class="cap">+ ${num(e.meters)} m woven</span>`;
     L.appendChild(r); setTimeout(()=>r.remove(), 2200); setTimeout(done, 800);
   } else if(e.kind==="alert"){
-    flash(tileEl("cash"), true);                       // a serious red pulse; the chip carries the title
+    // pulse the Needs-attention strip + header (the bell), not the cash tile
+    var strip=$("#ov-attention"), head=$("#ov-att-head");
+    [strip, head].forEach(function(el){ if(el){ el.classList.remove("pulse"); void el.offsetWidth; el.classList.add("pulse"); setTimeout(()=>el.classList.remove("pulse"),1600); } });
     setTimeout(done, 600);
   } else { done(); }
 }

@@ -113,6 +113,9 @@ def create(con):
         con.execute(f"CREATE INDEX IF NOT EXISTS ix_{t}_{c} ON {t} ({c})")
     con.execute("CREATE TABLE IF NOT EXISTS sync_log (entity TEXT, synced_at TEXT, since TEXT, rows INTEGER)")
     con.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
+    # the dashboard "what changed" feed: new/changed rows recorded at sync time (see smart_layer/changes.py)
+    con.execute("CREATE TABLE IF NOT EXISTS change_log (synced_at TEXT, entity TEXT, kind TEXT, payload TEXT)")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_change_log_at ON change_log (synced_at)")
     # Month-end fabric stock, read straight from the ERP's own stock view as of each month-end (never recomputed).
     con.execute("CREATE TABLE IF NOT EXISTS fabric_stock_history (month TEXT PRIMARY KEY, meters REAL, captured_on TEXT)")
     con.commit()
@@ -145,7 +148,8 @@ SHORT_HISTORY = {"loom_stops": 14}
 
 
 def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HISTORY, fabric_history=True,
-         short_history=None):
+         short_history=None, track_changes=False):
+    from . import changes as _changes                 # record what changed, at sync time (live syncs only)
     window = date.today() - timedelta(days=int(history_days))
     short_history = SHORT_HISTORY if short_history is None else short_history
     now = datetime.now().isoformat(sep=" ", timespec="seconds")
@@ -169,6 +173,7 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
             result[e.name] = None
             failed.append(e.name)
             continue
+        before = _changes.snapshot(con, e.name) if track_changes else None   # state before we replace the window
         if e.date_column:
             # a windowed sync only OWNS rows inside its window; drop any the query returned that fall before it
             # (e.g. all-time 'opening' rows) - the delete below only clears the window, so inserting them would
@@ -189,10 +194,15 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
             if e.date_column and e.name in short_history:
                 cap_since = date.today() - timedelta(days=int(short_history[e.name]))
                 con.execute(f"DELETE FROM {e.name} WHERE {e.date_column} < ?", (cap_since.isoformat(),))
+            if track_changes:                                 # record new/changed rows for the dashboard feed
+                _changes.record(con, e.name, before, now)
             con.execute("INSERT INTO sync_log VALUES (?, ?, ?, ?)",
                         (e.name, now, since.isoformat() if e.date_column else None, len(rows)))
         result[e.name] = len(rows)
         log(f"  {e.name:<17} {len(rows):>8,} rows")
+    if track_changes:
+        with con:
+            _changes.prune(con, int((getattr(erp, "change_log_days", None)) or 2))
     if fabric_history:
         _sync_fabric_history(con, erp, now, log, entities)
     set_state(con, "synced_mapping", getattr(erp, "mapping", None) and erp.mapping.name)   # for the demo-licence guard

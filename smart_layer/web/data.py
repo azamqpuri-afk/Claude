@@ -332,7 +332,7 @@ def build(con, cfg, as_of=None):
     return {
         "product": PRODUCT, "company": cfg["company"]["name"], "currency": cur, "as_of": d,
         "synced_at": _one(con, "SELECT MAX(synced_at) FROM sync_log") or None,
-        "now": datetime.now().isoformat(timespec="seconds"),       # server clock, used as `since` for the next refresh
+        "now": datetime.now().isoformat(sep=" ", timespec="seconds"),   # server clock (same format as change_log), the `since` for the next refresh
         "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound")},
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "kpis": {
@@ -370,50 +370,10 @@ def build(con, cfg, as_of=None):
 
 
 def changes(con, cfg, since):
-    """What is NEW in the data since `since` (an ISO timestamp from the client's previous refresh), for the Overview
-    'what changed' animations. Generic across ERPs: built from entities that carry entered_at (when the row was
-    keyed), so each event is a real new entry, not a recomputed total. Returns {events, now}; an empty/invalid
-    `since` yields no events (so the first page load never animates). The client diffs audit findings itself."""
-    now = datetime.now().isoformat(timespec="seconds")
-    if not since:
-        return {"events": [], "now": now}
-    s = str(since)[:19]
-    cur = cfg["company"]["currency"]
-    events = []
-    # cash + bank: net change from postings keyed since `since`, with the biggest single line named
-    rows = con.execute("""SELECT l.amount, l.voucher_type, COALESCE(p.party_name, a.account_name, l.account_code)
-                          FROM ledger_entries l JOIN accounts a USING (account_code)
-                          LEFT JOIN parties p ON p.party_code = a.party_code
-                          WHERE a.account_group IN ('cash','bank') AND l.entered_at > ? AND l.voucher_kind <> 'opening'""",
-                       (s,)).fetchall()
-    if rows:
-        delta = round(sum(r[0] or 0 for r in rows))
-        if abs(delta) >= 1:
-            top = max(rows, key=lambda r: abs(r[0] or 0))
-            events.append({"kind": "cash", "delta": delta, "currency": cur,
-                           "label": f"{top[1] or ''} {('' if (top[0] or 0) >= 0 else '')}{top[2] or ''}".strip()})
-    # metres woven: production keyed since `since`
-    m = con.execute("SELECT SUM(meters) FROM loom_production WHERE entered_at > ?", (s,)).fetchone()[0]
-    if m and round(m) > 0:
-        events.append({"kind": "woven", "meters": round(m)})
-    # store issues: each new slip line (cap a few)
-    for item, to, qty in con.execute("""SELECT COALESCE(i.item_name, s.item_code), s.issued_to, s.qty
-            FROM store_issues s LEFT JOIN items i ON i.item_code = s.item_code
-            WHERE s.entered_at > ? ORDER BY s.entered_at DESC LIMIT 6""", (s,)):
-        events.append({"kind": "store", "item": item, "to": to, "qty": round(qty or 0, 2)})
-    # yarn in / out: receipts (truck in) and sales/returns (truck out), by weight, keyed since `since`
-    yin, yout, bags_in = 0.0, 0.0, 0.0
-    for mt, kg, bags in con.execute("""SELECT move_type, SUM(kg), SUM(COALESCE(bags,0)) FROM yarn_movements
-            WHERE entered_at > ? GROUP BY move_type""", (s,)):
-        if mt in ("party_receipt", "sized_beams_received"):
-            yin += kg or 0; bags_in += bags or 0
-        elif mt in ("sale", "party_return", "to_sizer"):
-            yout += kg or 0
-    if yin >= 1:
-        events.append({"kind": "in", "what": "yarn", "kg": round(yin), "bags": round(bags_in)})
-    if yout >= 1:
-        events.append({"kind": "out", "what": "yarn", "kg": round(yout)})
-    return {"events": events, "now": now}
+    """What changed since the client's last refresh, from the sync-time change_log (see smart_layer/changes.py).
+    Returns {events, now}; empty/absent `since` yields no events, so the first page load never animates."""
+    from .. import changes as _changes
+    return _changes.feed(con, cfg, since)
 
 
 def _sync_health(con, cfg):

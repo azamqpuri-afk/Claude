@@ -1244,24 +1244,44 @@ def test_live_sync_refreshes_account_balances(env, tmp_path):
     con.close()
 
 
-def test_change_feed_reports_new_rows(env, tmp_path):
-    from datetime import datetime as _dt, timedelta as _td
+def test_change_feed_records_at_sync_time(env, tmp_path):
+    # the feed is built from the sync-time change_log, NOT from entered_at; `since` is the real client value
+    # (data.build()["now"], space-separated), and the new rows arrive through store.sync on a live sync.
+    import time
+    from datetime import date as _d
     cfg, _ = env
-    con = store.open_store(tmp_path / "ch.db")
-    now = _dt.now()
-    recent = now.isoformat(sep=" ", timespec="seconds")
-    with con:
-        con.execute("INSERT INTO accounts (account_code,account_name,account_group) VALUES ('C1','Cash','cash')")
-        con.execute("INSERT INTO ledger_entries (voucher_id,voucher_no,voucher_type,voucher_kind,voucher_date,entered_at,account_code,amount)"
-                    " VALUES ('v1','1','BR','receipt',?,?,'C1',250000)", (now.date().isoformat(), recent))
-        con.execute("INSERT INTO loom_production (prod_date,entered_at,loom_code,meters) VALUES (?,?,'L1',1840)", (now.date().isoformat(), recent))
-        con.execute("INSERT INTO items (item_code,item_name) VALUES ('I1','Reed')")
-        con.execute("INSERT INTO store_issues (doc_no,doc_date,entered_at,item_code,qty,issued_to) VALUES ('s1',?,?,'I1',1,'LOOM 31')",
-                    (now.date().isoformat(), recent))
-    since = (now - _td(hours=1)).isoformat(sep=" ", timespec="seconds")
-    res = web_data.changes(con, cfg, since)
-    kinds = {e["kind"] for e in res["events"]}
-    assert "cash" in kinds and "woven" in kinds and "store" in kinds
-    assert res["now"]
-    assert web_data.changes(con, cfg, "")["events"] == []      # first load (no since) never animates
+    today = _d.today().isoformat()
+
+    class FM:
+        name = "f"; source = {}
+        entities = {"store_issues": "x", "items": "x"}
+
+    class FE:
+        def __init__(s, issues): s.mapping = FM(); s.issues = issues
+        def fetch(s, n, since, as_of=None):
+            if n == "items":
+                return iter([("I1", "Reed", "pcs", None), ("I2", "Bearing", "pcs", None)])
+            if n == "store_issues":
+                return iter(s.issues)
+            return iter([])
+
+    iss1 = ("s1", today, None, "I1", 1, 50, "LOOM 5", None)
+    iss2 = ("s2", today, None, "I2", 2, 80, "LOOM 31", None)
+    dbp = tmp_path / "cl.db"
+    ent = ["items", "store_issues"]
+    # baseline sync (store_issues empty before -> no events recorded)
+    con = store.open_store(dbp)
+    store.sync(con, FE([iss1]), 3, entities=ent, full_history=(), fabric_history=False, track_changes=True, log=lambda *_: None)
+    now0 = web_data.build(con, cfg, _d.today())["now"]
     con.close()
+    assert "T" not in now0 and now0[10] == " "               # format matches change_log (bug 1 regression guard)
+    time.sleep(1.1)                                           # ensure the next sync lands in a later second
+    # a new slip arrives; the live sync records it in change_log at sync time
+    con = store.open_store(dbp)
+    store.sync(con, FE([iss1, iss2]), 3, entities=ent, full_history=(), fabric_history=False, track_changes=True, log=lambda *_: None)
+    res = web_data.changes(con, cfg, now0)
+    assert web_data.changes(con, cfg, "")["events"] == []    # no since (first load) -> nothing animates
+    con.close()
+    kinds = {e["kind"] for e in res["events"]}
+    assert "store" in kinds                                  # the new slip shows up for the real client `since`
+    assert any(e.get("item") == "Bearing" for e in res["events"] if e["kind"] == "store")
