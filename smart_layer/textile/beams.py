@@ -191,7 +191,10 @@ def weekly_beam_report(con, cfg, as_of=None):
     rows = beams_on_looms(con, cfg, as_of)
     quality = {c: q for c, q in con.execute("SELECT contract_no, quality FROM contracts")}
     fd = lambda s: date.fromisoformat(str(s)[:10]).strftime("%d-%b") if s else "-"   # noqa: E731
-    alert = [r for r in rows if r["days"] is not None and r["days"] <= warn_days_for(r["loom_name"], t) and not r["backup"] and not r["over"]]
+    # the loom type (VA / air-jet) may be in the loom name OR, on mills like Dost whose loom names carry no type,
+    # in the contract's quality/construction text - so match warn_days_by_type against both.
+    wdt = lambda r: warn_days_for(f"{r['loom_name']} {quality.get(r['contract']) or ''} {r['contract'] or ''}", t)  # noqa: E731
+    alert = [r for r in rows if r["days"] is not None and r["days"] <= wdt(r) and not r["backup"] and not r["over"]]
     out = []
     for r in rows:
         b = r["backup"]

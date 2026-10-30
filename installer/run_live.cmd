@@ -11,5 +11,9 @@ SmartLayer.exe logtrim "%LOG%" --max-mb 5 --keep-mb 1
 echo ==== %date% %time% ==== >> "%LOG%"
 SmartLayer.exe licence check >nul 2>&1 || (echo no valid licence - live sync skipped >> "%LOG%" & exit /b 1)
 SmartLayer.exe sync --live >> "%LOG%" 2>&1
+set SYNCRC=%ERRORLEVEL%
 rem Urgent, send-once alerts (loom silent, beam out with no backup, confirmed error, negative stock) - each pushed once.
 SmartLayer.exe audit --push --urgent >> "%LOG%" 2>&1
+set AUDITRC=%ERRORLEVEL%
+rem always write a result line, success or failure, so a silent problem (e.g. the ERP login) is visible in the log
+echo ---- done %time%: sync exit %SYNCRC%, audit exit %AUDITRC% ---- >> "%LOG%"

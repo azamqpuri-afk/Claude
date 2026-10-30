@@ -1118,3 +1118,65 @@ def test_sync_health_flags_stale(env):
     assert "live_stale" in h and "daily_stale" in h
     # the env's last sync time is 'now' at build, so it should be fresh at test time
     assert h["live_at"] is not None
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# v0.13.2: loom_stops history cap, demand rule(a) 180d, sync lock, grants scoping
+# ---------------------------------------------------------------------------------------------------------------
+def test_loom_stops_history_is_capped_to_14_days(tmp_path):
+    from datetime import date as _d, timedelta as _t
+
+    class FakeMapping:
+        name = "fake"
+        entities = {"loom_stops": "x", "store_issues": "x"}
+        source = {}
+
+    class FakeERP:
+        def __init__(self): self.mapping = FakeMapping(); self.calls = {}
+        def fetch(self, name, since, as_of=None): self.calls[name] = since; return iter([])
+
+    con = store.open_store(tmp_path / "s.db")
+    fe = FakeERP()
+    store.sync(con, fe, 400, entities=["loom_stops", "store_issues"],
+               full_history=("store_issues",), fabric_history=False, log=lambda *_: None)
+    assert fe.calls["loom_stops"] == _d.today() - _t(days=14)      # capped, not 400
+    assert fe.calls["store_issues"] == _d(1900, 1, 1)              # full history untouched
+    con.close()
+
+
+def test_sync_lock_is_exclusive(tmp_path):
+    with store.sync_lock(tmp_path) as a:
+        assert a
+        with store.sync_lock(tmp_path) as b:
+            assert b is False                                     # a second sync cannot start while one holds it
+    with store.sync_lock(tmp_path) as c:
+        assert c                                                  # released on exit
+
+
+def test_demand_rule_a_uses_180_day_window(env):
+    cfg, con = env
+    # an item used 120 days before END with zero stock must be listed (rule a is 180 days, not 90)
+    code = "DEMAND-OLD-USE"
+    with con:
+        con.execute("INSERT INTO items (item_code, item_name, unit) VALUES (?,?,?)", (code, "Old-use spare", "pcs"))
+        con.execute("INSERT INTO store_issues (doc_no, doc_date, item_code, qty) VALUES (?,?,?,?)",
+                    ("D1", (END - __import__("datetime").timedelta(days=120)).isoformat(), code, 5))
+        con.execute("INSERT INTO stock_balances (item_code, qty) VALUES (?, 0)", (code,))
+    try:
+        rep = stock.demand_list(con, cfg, END)
+        assert any(r[1] == code for r in rep.rows)                # listed though last issue was > 90 days ago
+    finally:
+        with con:
+            con.execute("DELETE FROM items WHERE item_code=?", (code,))
+            con.execute("DELETE FROM store_issues WHERE item_code=?", (code,))
+            con.execute("DELETE FROM stock_balances WHERE item_code=?", (code,))
+
+
+def test_grants_exclude_non_erp_sources(capsys):
+    from smart_layer import cli, config as _cfg
+    data = {"erp": {"mapping": str(ROOT / "mappings" / "dost_textiles_oracle.toml"), "driver": "oracle"}}
+    cli.cmd_grants(_cfg.Config(data, ROOT), SimpleNamespace(user="smartlayer_ro"))
+    out = capsys.readouterr().out.lower()
+    assert "dostex." in out                                       # real ERP tables are granted
+    assert "grant select on loomstat" not in out                 # Access scoreboard tables are NOT
+    assert "grant select on rtlsum" not in out

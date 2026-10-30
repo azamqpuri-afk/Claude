@@ -27,37 +27,52 @@ function Resolve-Principal($name) {
     return $principal
 }
 
-$daily = New-ScheduledTaskAction -Execute "$AppDir\run_daily.cmd" -WorkingDirectory $AppDir
-Register-ScheduledTask -TaskName "Smart Layer Daily" -Action $daily -Principal (Resolve-Principal "Smart Layer Daily") -Force `
+# A task run under an INTERACTIVE principal (a signed-in user, no stored password) would flash a black console
+# window every run if it launched run_*.cmd directly. run_hidden.vbs launches the .cmd hidden and waits, so wrap
+# the command in it for Interactive principals; a SYSTEM principal has no visible session, so it runs the .cmd raw.
+function New-RunAction($prin, $cmd) {
+    if ("$($prin.LogonType)" -eq "Interactive") {
+        return New-ScheduledTaskAction -Execute "wscript.exe" `
+               -Argument "`"$AppDir\run_hidden.vbs`" `"$cmd`"" -WorkingDirectory $AppDir
+    }
+    return New-ScheduledTaskAction -Execute $cmd -WorkingDirectory $AppDir
+}
+
+$dailyPrin = Resolve-Principal "Smart Layer Daily"
+Register-ScheduledTask -TaskName "Smart Layer Daily" -Action (New-RunAction $dailyPrin "$AppDir\run_daily.cmd") `
+    -Principal $dailyPrin -Force `
     -Trigger (New-ScheduledTaskTrigger -Daily -At $at) `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 3)) | Out-Null
 
-# Live sync: a light pull of the fast-changing weaving data every 5 minutes, so the dashboard stays current.
-# The repetition must be INDEFINITE. A bounded RepetitionDuration such as (New-TimeSpan -Days 3650) silently
-# overflows when converted to the Task Scheduler XML and registers as only ~9 days, after which the live sync
-# stops for good. [TimeSpan]::MaxValue registers as an unbounded (indefinite) duration; we assert it below.
-$live = New-ScheduledTaskAction -Execute "$AppDir\run_live.cmd" -WorkingDirectory $AppDir
-$liveTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) `
-    -RepetitionDuration ([TimeSpan]::MaxValue)
+# Live sync every 5 minutes, repeating INDEFINITELY. A bounded RepetitionDuration overflows the Task Scheduler XML
+# (New-TimeSpan -Days 3650 registered as ~9 days, then stopped for good) and [TimeSpan]::MaxValue is REJECTED on
+# Windows 10 ("Duration ... out of range"). The reliable way is to build the repetition with the interval only and
+# then set Duration to '' (empty = indefinite) before registering.
+$livePrin = Resolve-Principal "Smart Layer Live"
+$liveTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
+$liveTrigger.Repetition.Duration = ''
 $liveSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 4) `
     -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName "Smart Layer Live" -Action $live -Principal $principal -Force `
-    -Trigger $liveTrigger -Settings $liveSettings | Out-Null
+Register-ScheduledTask -TaskName "Smart Layer Live" -Action (New-RunAction $livePrin "$AppDir\run_live.cmd") `
+    -Principal $livePrin -Force -Trigger $liveTrigger -Settings $liveSettings | Out-Null
 
-# Assert the repetition really registered as indefinite (guard against the overflow). If a bounded duration slipped
-# through, clear it in place so the live sync never stops.
+# Safety net: confirm the repetition registered as indefinite; if a bounded duration slipped through, clear it.
 try {
     $lt = Get-ScheduledTask -TaskName "Smart Layer Live"
     if ($lt.Triggers[0].Repetition.Duration) {
-        $lt.Triggers[0].Repetition.Duration = ""          # "" = repeat indefinitely
+        $lt.Triggers[0].Repetition.Duration = ""
         Set-ScheduledTask -TaskName "Smart Layer Live" -Trigger $lt.Triggers[0] | Out-Null
         Write-Host "Smart Layer Live: repetition duration was bounded; reset to indefinite."
     }
 } catch { Write-Host "Could not verify the live-sync repetition: $_" }
 
-$dash = New-ScheduledTaskAction -Execute "$AppDir\run_dashboard.cmd" -WorkingDirectory $AppDir
-Register-ScheduledTask -TaskName "Smart Layer Dashboard" -Action $dash -Principal $principal -Force `
-    -Trigger (New-ScheduledTaskTrigger -AtStartup) `
+# Dashboard: always on. AtStartup fires for SYSTEM (runs with no session); an Interactive principal has no session
+# at boot, so it must start AtLogOn instead - otherwise the dashboard never comes up on an Interactive install.
+$dashPrin = Resolve-Principal "Smart Layer Dashboard"
+$dashTrigger = if ("$($dashPrin.LogonType)" -eq "Interactive") { New-ScheduledTaskTrigger -AtLogOn } `
+               else { New-ScheduledTaskTrigger -AtStartup }
+Register-ScheduledTask -TaskName "Smart Layer Dashboard" -Action (New-RunAction $dashPrin "$AppDir\run_dashboard.cmd") `
+    -Principal $dashPrin -Force -Trigger $dashTrigger `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) `
                -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)) | Out-Null
 

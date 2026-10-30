@@ -571,12 +571,27 @@ async function syncNow(full){
   var sb=$("#ov-sync-btn"), fb=$("#ov-fullsync-btn");
   if(sb) sb.disabled=true; if(fb) fb.disabled=true;
   var b=full?fb:sb; if(b) b.textContent="⟳ Syncing…";
+  var reset=()=>{ if(sb){sb.disabled=false;sb.textContent="⟳ Sync now";} if(fb){fb.disabled=false;fb.textContent="⟳ Full sync";} };
   try{
     var r=await fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({full:!!full})});
     var j=await r.json();
-    if(j.busy && b){ b.textContent="⟳ Already syncing…"; }
-    setTimeout(load, full?20000:7000);             // let the background sync run, then refresh the page data
-  }catch(e){ if(sb){sb.disabled=false;sb.textContent="⟳ Sync now";} if(fb){fb.disabled=false;fb.textContent="⟳ Full sync";} }
+    if(j.busy){ if(b) b.textContent="⟳ Already syncing…"; pollSync(reset); return; }
+    pollSync(reset);                                  // poll /api/sync/status until it finishes, then refresh
+  }catch(e){ reset(); }
+}
+function pollSync(reset){
+  var tries=0, max=120;                               // up to ~4 min for a full sync
+  var t=setInterval(async function(){
+    tries++;
+    try{
+      var s=await (await fetch("api/sync/status")).json();
+      if(!s.running){
+        clearInterval(t);
+        if(s.error){ var el=$("#ov-sync"); if(el){ var w=document.createElement("b"); w.style.color="var(--red)"; w.textContent=" — sync failed: "+s.error; el.appendChild(w);} reset(); }
+        else { load(); }                              // success: reload the page data (also repaints the sync line)
+      } else if(tries>=max){ clearInterval(t); load(); }
+    }catch(e){ if(tries>=max){ clearInterval(t); reset(); } }
+  }, 2000);
 }
 
 /* ---------- store item issue history (drill-down) ---------- */

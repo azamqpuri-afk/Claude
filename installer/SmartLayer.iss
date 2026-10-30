@@ -30,6 +30,7 @@ Source: "..\installer\run_daily.cmd";     DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\run_live.cmd";      DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\run_dashboard.cmd"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\run_setup.cmd";      DestDir: "{app}"; Flags: ignoreversion
+Source: "..\installer\run_hidden.vbs";     DestDir: "{app}"; Flags: ignoreversion
 Source: "..\installer\install_tasks.ps1"; DestDir: "{app}"; Flags: ignoreversion
 
 [Dirs]

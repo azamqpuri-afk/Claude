@@ -24,6 +24,7 @@ path = "data/smart_layer.db"       # local copy that reports, audits and Claude 
 
 [sync]
 history_days = 400                 # dated records re-pulled each sync (catches backdated edits)
+loom_stops_days = 14               # the raw LOOMSTAT stop log is ~1M rows at 400 days; the twin check needs only days
 
 [notify]
 channels = ["console"]             # add "ntfy" for phone pushes
@@ -197,11 +198,23 @@ Store issues go to looms ("LOOM # 1" ...) and departments.
 warn_days = 15
 urgent_days = 5
 rate_days = 30
+monitor_rate_days = 14             # second days-to-finish from the scoreboard; the weekly report takes the earlier
 ends_tolerance = 5                 # 8,855 / 8,856-end sets count as the same (63_beam_backup_alert.py)
 own_beam_sizers = ["Hiba"]         # parties that bring their own beams - left out of the sizer ledger
+warn_days_by_type = { VA = 7 }     # VA / air-jet looms eat a beam faster; matched in the loom name OR quality text
 # a beam that went out under one number and came back under another is the same physical beam
 beam_aliases = { "00336" = "00214" }
 ignore_beams = ["00072"]           # a stale beam number the ERP never cleared (last off-loom long ago)
+
+# Loom sensor duplicate-timings (sensor-swap) check. Floor layout from the View Shed screen, so pairs are graded by
+# nearness (only neighbouring/near looms can be confirmed). Needs the loom_stops entity (the OLMS stop log).
+[sensor]
+# shed 1: column 0 = even looms 2..18 top to bottom, column 1 = odd 1..17
+[sensor.sheds.1]
+columns = [[2, 4, 6, 8, 10, 12, 14, 16, 18], [1, 3, 5, 7, 9, 11, 13, 15, 17]]
+# shed 2: column 0 = even 20..36, column 1 = odd 19..35
+[sensor.sheds.2]
+columns = [[20, 22, 24, 26, 28, 30, 32, 34, 36], [19, 21, 23, 25, 27, 29, 31, 33, 35]]
 
 [yarn]
 # 52/1 and 54/1 CTN are the same yarn commercially - show them as one line in the count-wise stock list.

@@ -46,6 +46,7 @@ class App:
         self.sessions = {}
         self.lock = threading.Lock()
         self._syncing = False
+        self._sync_info = {"running": False, "kind": None, "finished_at": None, "error": None}
 
     def kick_first_sync(self):
         """After a licence is installed from the dashboard, pull the first data in the background if the store is
@@ -112,35 +113,54 @@ class App:
         return delivery.read_file(self.cfg, name)
 
     def sync_now(self, full=False):
-        """Run a sync now, in the background (the 'Sync now' / 'Full sync' buttons). At most one runs at a time -
-        the lock is shared with kick_first_sync, so a manual click and the scheduled task never overlap."""
+        """Run a sync now, in the background (the 'Sync now' / 'Full sync' buttons). At most one runs at a time; the
+        dashboard polls /api/sync/status to know when it finished (or failed)."""
         with self.lock:
             if self._syncing:
                 return {"started": False, "busy": True}
             self._syncing = True
+            self._sync_info = {"running": True, "kind": "full" if full else "live", "finished_at": None, "error": None}
         threading.Thread(target=self._do_sync, args=(bool(full),), daemon=True).start()
         return {"started": True, "full": bool(full)}
 
+    def sync_status(self):
+        """Progress of a manual sync, for the dashboard to poll after the button is pressed."""
+        info = dict(getattr(self, "_sync_info", {}) or {})
+        info["running"] = bool(self._syncing)
+        return info
+
     def _do_sync(self, full=False):
+        from datetime import datetime
+        err = None
         try:
             from .. import erp as _erp
-            mapping = _erp.Mapping(self.cfg.path(self.cfg["erp"]["mapping"]))
-            e = _erp.ERP(*_erp.connect(self.cfg["erp"], self.cfg.base_dir), mapping, self.cfg["sources"], self.cfg.base_dir)
-            con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
-            try:
-                if full:                                  # the deep daily sync: all history + month-end fabric
-                    store.sync(con, e, int(self.cfg["sync"]["history_days"]),
-                               full_history=self.cfg["sync"].get("full_history", store.FULL_HISTORY), log=lambda *_: None)
-                else:                                     # the light live sync: fast-changing entities, last few days
-                    store.sync(con, e, int(self.cfg["sync"].get("live_days", 3)), entities=list(store.LIVE_ENTITIES),
-                               full_history=(), fabric_history=False, log=lambda *_: None)
-            finally:
-                con.close()
-        except Exception:
-            pass                                          # best-effort; the scheduled sync still runs too
+            data_dir = self.cfg.path(self.cfg["store"]["path"]).parent
+            with store.sync_lock(data_dir) as got:
+                if not got:
+                    err = "A scheduled sync is already running; try again in a moment."
+                    return
+                mapping = _erp.Mapping(self.cfg.path(self.cfg["erp"]["mapping"]))
+                e = _erp.ERP(*_erp.connect(self.cfg["erp"], self.cfg.base_dir), mapping, self.cfg["sources"], self.cfg.base_dir)
+                con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+                try:
+                    if full:                              # the deep daily sync: all history + month-end fabric
+                        res = store.sync(con, e, int(self.cfg["sync"]["history_days"]),
+                                         full_history=self.cfg["sync"].get("full_history", store.FULL_HISTORY), log=lambda *_: None)
+                    else:                                 # the light live sync: fast-changing entities, last few days
+                        res = store.sync(con, e, int(self.cfg["sync"].get("live_days", 3)), entities=list(store.LIVE_ENTITIES),
+                                         full_history=(), fabric_history=False, log=lambda *_: None)
+                    failed = res.get("_failed") or []
+                    if failed:
+                        err = "Some data sets did not sync: " + ", ".join(failed)
+                finally:
+                    con.close()
+        except Exception as ex:
+            err = f"{type(ex).__name__}: {ex}"[:200]
         finally:
             with self.lock:
                 self._syncing = False
+                self._sync_info = {"running": False, "kind": "full" if full else "live",
+                                   "finished_at": datetime.now().strftime("%H:%M"), "error": err}
 
     def report(self, name, day, d0=None, d1=None):
         """A built report plus the day it is actually for (so the file name and on-screen title agree). d0/d1 are an
@@ -381,6 +401,8 @@ def get_response(app, path, query, check_licence=True):
         st = licence.status(app.cfg)
         return 200, {"state": st.state, "message": st.message, "allowed": st.allowed,
                      "warning": st.warning, "machine": licence.machine_id()}, "application/json", {}
+    if path == "/api/sync/status":                       # progress of a manual Sync now / Full sync (no data exposed)
+        return 200, app.sync_status(), "application/json", {}
     if path == "/api/reports":
         return 200, {"reports": [{"name": n, "label": label, "range": rng} for n, label, rng in report_registry.menu()]}, "application/json", {}
     if path == "/api/reports/file":                      # download a saved report file (licensed below via the list block)

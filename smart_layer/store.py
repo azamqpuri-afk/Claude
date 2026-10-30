@@ -10,12 +10,49 @@ Sync: entities with a date column are re-pulled for a rolling window
 the ERP (backdated edits) are picked up. Other entities are replaced whole.
 """
 
+import contextlib
 import json
+import os
 import sqlite3
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
 from . import schema
+
+
+@contextlib.contextmanager
+def sync_lock(data_dir, stale_sec=1800):
+    """A cross-process guard so a manual 'Sync now' (dashboard process) and the scheduled sync (a separate process)
+    never run at once. Yields True when the lock was taken (release on exit), False when another sync holds it. A
+    lock older than stale_sec is treated as abandoned (a crashed run) and reclaimed."""
+    lock = Path(data_dir) / "sync.lock"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        if lock.exists() and (time.time() - lock.stat().st_mtime) >= stale_sec:
+            lock.unlink()                                 # stale: a previous run died holding it
+    except OSError:
+        pass
+    try:
+        fd = os.open(str(lock), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        yield False
+        return
+    except OSError:
+        yield True                                        # cannot lock (read-only fs etc.) - don't block the sync
+        return
+    try:
+        os.write(fd, f"{os.getpid()} {datetime.now().isoformat(timespec='seconds')}".encode())
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        yield True
+    finally:
+        try:
+            lock.unlink()
+        except OSError:
+            pass
 
 SQL_TYPES = {"TEXT": "TEXT", "REAL": "REAL", "DATE": "TEXT", "DATETIME": "TEXT"}
 
@@ -97,8 +134,16 @@ LIVE_ENTITIES = ("loom_production", "loom_monitor", "loom_stops", "gate_passes",
                  "store_issues", "store_receipts", "yarn_stock", "fabric_stock")
 
 
-def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HISTORY, fabric_history=True):
+# Entities whose history is capped SHORTER than the main window, no matter how large history_days is: the raw
+# loom stop log is huge (~1M rows at 400 days) and the twin check only needs the last few days. The cap is
+# min(history_days, N), so the live sync (small window) still pulls even less. Override N via [sync] loom_stops_days.
+SHORT_HISTORY = {"loom_stops": 14}
+
+
+def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HISTORY, fabric_history=True,
+         short_history=None):
     window = date.today() - timedelta(days=int(history_days))
+    short_history = SHORT_HISTORY if short_history is None else short_history
     now = datetime.now().isoformat(sep=" ", timespec="seconds")
     result, failed = {}, []
     for e in schema.ENTITIES:
@@ -107,7 +152,12 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
         if e.name not in erp.mapping.entities:
             log(f"  {e.name:<17} skipped (not in mapping)")
             continue
-        since = date(1900, 1, 1) if e.name in full_history else window
+        if e.name in full_history:
+            since = date(1900, 1, 1)
+        elif e.name in short_history:
+            since = date.today() - timedelta(days=min(int(history_days), int(short_history[e.name])))
+        else:
+            since = window
         try:
             rows = list(erp.fetch(e.name, since))
         except Exception as exc:                          # one bad mapping must not lose every other entity's data

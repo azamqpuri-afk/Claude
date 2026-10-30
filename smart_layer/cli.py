@@ -93,7 +93,17 @@ def cmd_autoprofile(cfg, args):
 
 
 def cmd_sync(cfg, args):
+    data_dir = cfg.path(cfg["store"]["path"]).parent
+    with store.sync_lock(data_dir) as got:
+        if not got:
+            print("A sync is already running (dashboard or another task) - skipping this one.")
+            return 0
+        return _cmd_sync(cfg, args)
+
+
+def _cmd_sync(cfg, args):
     e = _open_erp(cfg)
+    short = {"loom_stops": int(cfg["sync"].get("loom_stops_days", 14))}   # cap the huge raw stop log
     if args.live:                                    # the 5-minute refresh: only the fast, window-safe entities
         days = int(cfg["sync"].get("live_days", 3))  # (LIVE_ENTITIES) - ledgers, attendance and month-end history
         ent = [x for x in args.entities if x in store.LIVE_ENTITIES] if args.entities else list(store.LIVE_ENTITIES)
@@ -101,10 +111,11 @@ def cmd_sync(cfg, args):
             print("Nothing to sync: none of the named data sets are refreshed by the live sync.")
             return 0
         print(f"Live sync from {e.mapping.name} (last {days} days: {', '.join(ent)})")  # rest are left to the daily sync
-        return _sync_exit(store.sync(_store(cfg), e, days, entities=ent, full_history=(), fabric_history=False))
+        return _sync_exit(store.sync(_store(cfg), e, days, entities=ent, full_history=(), fabric_history=False,
+                                     short_history=short))
     print(f"Syncing from {e.mapping.name} (last {cfg['sync']['history_days']} days; full history for yarn and fabric)")
     res = store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities,
-                     full_history=cfg["sync"].get("full_history", store.FULL_HISTORY))
+                     full_history=cfg["sync"].get("full_history", store.FULL_HISTORY), short_history=short)
     return _sync_exit(res)
 
 
@@ -224,14 +235,27 @@ def cmd_grants(cfg, args):
     """SQL for the mill's IT person: a read-only database user that can see only what the mapping reads."""
     import re
     mapping = erp.Mapping(cfg.path(cfg["erp"]["mapping"]))
-    sql = "\n".join(mapping.entities.values())
-    tables = sorted({m.lower() for m in re.findall(r"(?:FROM|JOIN)\s+([A-Za-z_][\w$#]*(?:\.[A-Za-z_][\w$#]*)?)", sql, re.I)
-                     if m.lower() not in ("dual",)})
-    funcs = sorted({m.lower() for m in re.findall(r"\b([A-Za-z_]\w*\.[A-Za-z_]\w*)\s*\(", sql)
+    # ONLY the entities that read the main ERP connection - not a second source (e.g. the MS Access loom
+    # scoreboard: LOOMSTAT / RTLSUM), whose tables are not in this database and would fail with ORA-00942.
+    erp_sql = "\n".join(s for name, s in mapping.entities.items() if mapping.source.get(name, "erp") == "erp")
+    found = {m.lower() for m in re.findall(r"(?:FROM|JOIN)\s+([A-Za-z_][\w$#]*(?:\.[A-Za-z_][\w$#]*)?)", erp_sql, re.I)
+             if m.lower() != "dual"}
+    tables = sorted(t for t in found if "." in t)          # schema-qualified objects only (grantable with certainty)
+    unqualified = sorted(t for t in found if "." not in t)  # CTE/derived aliases or same-schema objects - note, don't grant
+    funcs = sorted({m.lower() for m in re.findall(r"\b([A-Za-z_]\w*\.[A-Za-z_]\w*)\s*\(", erp_sql)
                     if m.split(".")[0].lower() not in {t.split(".")[-1] for t in tables} and "." in m})
     user, driver = args.user, cfg["erp"].get("driver", "oracle")
     print(f"-- Read-only user for {PRODUCT} ({mapping.name})")
     print("-- Run as a database administrator. Replace the password; put the same one in .env as ERP_PASSWORD.")
+    print("-- Grants are generated only for the main-ERP entities (a second source such as an MS Access loom")
+    print("-- scoreboard is read directly from its own file, not through this database user).")
+    if unqualified:
+        print(f"-- NOTE: these objects are not schema-qualified in the mapping - qualify them with the owning schema")
+        print(f"--       if they are real tables (ignore CTE / subquery aliases): {', '.join(unqualified)}")
+    if driver == "oracle" and any(t.split(".")[0] != "dostex" and "." in t for t in tables):
+        print("-- NOTE: where a DOSTEX view reads another schema's tables (e.g. PAYROLL), either grant SELECT on the")
+        print("--       base tables below, or have that schema grant them to DOSTEX WITH GRANT OPTION, or selecting")
+        print("--       the view as this read-only user fails.")
     if driver == "oracle":
         print(f'CREATE USER {user} IDENTIFIED BY "ChangeThisPassword";\nGRANT CREATE SESSION TO {user};')
         for t in tables:

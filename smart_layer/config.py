@@ -16,7 +16,8 @@ DEFAULTS = {
     "sync": {"history_days": 400, "live_days": 3,    # live_days: the short window the 5-minute live sync re-reads
              "stale_live_minutes": 30,               # dashboard shows the sync time red once the live sync is older
              "stale_daily_hours": 26,                # ... or the daily sync is older than this
-             "stale_alert_minutes": 90},             # the dashboard pushes one ntfy alert if no sync for this long
+             "stale_alert_minutes": 90,              # the dashboard pushes one ntfy alert if no sync for this long
+             "loom_stops_days": 14},                 # the raw loom stop log is capped to this many days (it is huge)
     "notify": {"channels": ["console"]},
     "reports": {"tracked_issue_days": 90, "reorder_cover_months": 1, "output_dir": "",
                 "retention_weeks": 26},           # saved report files older than this are pruned (0 = keep all)

@@ -222,24 +222,26 @@ def demand_list(con, cfg, as_of=None):
     cand = con.execute("""
         WITH used AS (SELECT item_code, SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END) AS issued90
                       FROM store_issues WHERE doc_date > ? AND doc_date <= ? GROUP BY item_code),
-             everused AS (SELECT DISTINCT item_code FROM store_issues WHERE doc_date > ? AND doc_date <= ? AND qty > 0),
+             used180 AS (SELECT item_code, SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END) AS issued180
+                         FROM store_issues WHERE doc_date > ? AND doc_date <= ? GROUP BY item_code),
              zero AS (SELECT DISTINCT item_code FROM store_issues WHERE doc_date > ? AND doc_date <= ? AND COALESCE(qty,0) <= 0),
              stock AS (SELECT item_code, SUM(qty) AS qty FROM stock_balances GROUP BY item_code)
         SELECT c.item_code, COALESCE(i.item_name, c.item_code), i.unit, COALESCE(s.qty, 0),
-               COALESCE(u.issued90, 0), (c.item_code IN (SELECT item_code FROM zero)) AS has_zero
-        FROM (SELECT item_code FROM everused UNION SELECT item_code FROM zero) c
+               COALESCE(u.issued90, 0), COALESCE(u2.issued180, 0), (c.item_code IN (SELECT item_code FROM zero)) AS has_zero
+        FROM (SELECT item_code FROM used180 WHERE issued180 > 0 UNION SELECT item_code FROM zero) c
         LEFT JOIN items i ON i.item_code = c.item_code
         LEFT JOIN stock s ON s.item_code = c.item_code
         LEFT JOIN used u ON u.item_code = c.item_code
+        LEFT JOIN used180 u2 ON u2.item_code = c.item_code
         ORDER BY 2""", (avg_since, d, used_since, d, zero_since, d)).fetchall()
     pos = _in_stock_index(con)
     cur = cfg["company"]["currency"]
     rows = 0
     out = []
-    for code, name, unit, qty, issued90, has_zero in cand:
+    for code, name, unit, qty, issued90, issued180, has_zero in cand:
         avg = (issued90 or 0) / months
         reasons = []
-        if qty <= 0 and issued90 > 0:
+        if qty <= 0 and issued180 > 0:                    # rule (a): used in the last 180 days AND out of stock now
             reasons.append("out of stock, still in use")
         if avg > 0 and qty < avg:
             reasons.append("below 90-day average use")
