@@ -147,6 +147,14 @@ def test_open_loans_use_amount_minus_repaid(env):
         assert r[-1] == r[4] - r[5] and r[-1] > 1                 # Balance = Amount - Repaid, and only open loans listed
 
 
+def test_payslips_show_designation(env):
+    cfg, con = env
+    rep = payroll.payslips(con, cfg, END)
+    assert rep.columns[:3] == ["Code", "Name", "Designation"]        # Designation column added, after Name
+    for r in rep.rows:
+        assert len(r) == len(rep.columns) and r[2] is not None        # a designation cell per row (from payroll.designation)
+
+
 def test_strict_similar_name_matching():
     from smart_layer.reports.stock import _strict_similar, _tokens
     assert _strict_similar(_tokens("6202"), _tokens("6202 SKF"))          # whole-word prefix
@@ -465,10 +473,11 @@ def test_overview_sales_series_and_average(env):
     assert sales and all({"month", "sales", "meters"} <= set(x) for x in sales)
     assert len(sales) == len(d["finance"]) and sales[-1]["month"] == d["finance"][-1]["month"]
     k = d["kpis"]
-    # average is of whole months only (the current partial month is excluded) over up to the last 12
-    whole = sales[:-1] if len(sales) > 1 else sales
-    exp = round(sum(x["sales"] for x in whole[-12:]) / len(whole[-12:]))
-    assert k["sales_avg_12m"] == exp and k["sales_avg_months"] == len(whole[-12:])
+    # the average is over the COMPLETE months only (the current partial month is excluded), up to the last 12
+    cur_key = f"{END.year}-{END.month:02d}"
+    complete = [f for f in d["finance"] if f["month"] < cur_key]
+    assert k["sales_avg_months"] == len(complete)
+    assert k["sales_avg_12m"] == round(sum(f["sales"] for f in complete) / len(complete))
     assert "dispatched_avg_12m" in k
 
 
@@ -904,19 +913,22 @@ def test_trial_balance_and_unbalanced_reports(env):
     tb = fin_rep.trial_balance(con, cfg, END)
     assert tb.columns[-1].startswith("Difference") and any("Trial balance:" in s for s in tb.summary)
     base_unbal = len(fin_rep.unbalanced(con, cfg, date(2025, 1, 1), END).rows)
-    # plant one voucher whose single line does not net to zero, then it must be detected
+    # plant a NEGATIVE out-of-balance voucher (tests abs() in the summary) and a tiny within-tolerance one
     con.execute("""INSERT INTO ledger_entries (voucher_id, voucher_no, voucher_type, voucher_kind, voucher_date, account_code, amount)
-                   VALUES ('TB-TEST', '9999', 'JV', 'journal', ?, ?, 12345)""", (END.isoformat(), acc))
+                   VALUES ('TB-TEST', '9999', 'JV', 'journal', ?, ?, -12345)""", (END.isoformat(), acc))
+    con.execute("""INSERT INTO ledger_entries (voucher_id, voucher_no, voucher_type, voucher_kind, voucher_date, account_code, amount)
+                   VALUES ('TB-TINY', '9998', 'JV', 'journal', ?, ?, 5)""", (END.isoformat(), acc))   # under the Rs 10 tolerance
     try:
         unb = fin_rep.unbalanced(con, cfg, date(2025, 1, 1), END)
-        assert len(unb.rows) == base_unbal + 1
         planted = [r for r in unb.rows if r[2] == "9999"][0]
-        assert planted[-1] == 12345                           # the out-of-balance difference
+        assert planted[-1] == -12345                          # the signed difference is still shown per row
+        assert "Rs -" not in " ".join(unb.summary)            # but the summary total uses abs()
         tb2 = fin_rep.trial_balance(con, cfg, END)
-        assert any("OUT OF BALANCE" in s for s in tb2.summary) # the check now fails
-        assert any(r[2] == "9999" for r in tb2.rows)          # and the culprit voucher is listed
+        assert any("OUT OF BALANCE" in s for s in tb2.summary) and any(r[2] == "9999" for r in tb2.rows)
+        assert not any(r[2] == "9998" for r in tb2.rows)      # the Rs 5 voucher is under tolerance - not listed
+        assert any("under the" in s and "tolerance" in s for s in tb2.summary)   # but noted
     finally:
-        con.execute("DELETE FROM ledger_entries WHERE voucher_id = 'TB-TEST'")
+        con.execute("DELETE FROM ledger_entries WHERE voucher_id IN ('TB-TEST', 'TB-TINY')")
 
 
 def test_report_range_filter_routes_through_build(env):

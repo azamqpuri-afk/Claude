@@ -258,6 +258,14 @@ def build(con, cfg, as_of=None):
     live_ids = {f["id"] for f in all_findings}
     acknowledged = [{"id": fid, "title": (acked[fid] or {}).get("title", ""), "at": (acked[fid] or {}).get("at", "")}
                     for fid in acked if fid in live_ids]   # only still-relevant acks (resolved ones just drop off)
+    stale = [fid for fid in acked if fid not in live_ids]  # the finding was fixed - forget the ack so a RECURRENCE shows again
+    if stale:
+        for fid in stale:
+            acked.pop(fid, None)
+        try:
+            _store.set_state(con, "acked", acked)
+        except Exception:
+            pass                                           # a read-only / busy store (e.g. cloud view) just keeps them
 
     # stock
     from ..reports.stock import _in_stock_index, _similar_in_stock
@@ -296,10 +304,25 @@ def build(con, cfg, as_of=None):
                     for f in finance]
     # average sales / month over the last 12 (available) months - excludes the current partial month so the
     # average is of whole months only
-    whole = sales_series[:-1] if len(sales_series) > 1 else sales_series
-    last12 = whole[-12:]
-    avg_sales = round(sum(x["sales"] for x in last12) / len(last12)) if last12 else 0
-    avg_meters = round(sum(x["meters"] for x in last12) / len(last12)) if last12 else 0
+    # average over the last 12 COMPLETE months (exclude the current partial month). This needs a 13-month window, so
+    # it is queried separately from the 12-month chart above.
+    yy = as_of.year * 12 + as_of.month - 1
+    avg_keys = [f"{(yy - j) // 12:04d}-{(yy - j) % 12 + 1:02d}" for j in range(12, 0, -1)]   # 12 whole months before this one
+    data_start = finance[0]["month"] if finance else avg_keys[0]
+    keys = [k for k in avg_keys if k >= data_start]            # don't dilute the average with months before go-live
+    arev = dict(con.execute("""SELECT strftime('%Y-%m', l.voucher_date),
+                   -SUM(CASE WHEN a.account_group = 'revenue' THEN l.amount ELSE 0 END)
+                   FROM ledger_entries l JOIN accounts a USING (account_code)
+                   WHERE l.voucher_kind <> 'opening' AND l.voucher_date >= ? AND l.voucher_date < ? GROUP BY 1""",
+                   (avg_keys[0] + "-01", m_start)))
+    adisp = dict(con.execute("""SELECT strftime('%Y-%m', dispatch_date),
+                   SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters)
+                   FROM fabric_dispatches WHERE dispatch_date >= ? AND dispatch_date < ? GROUP BY 1""",
+                   (avg_keys[0] + "-01", m_start)))
+    n = max(len(keys), 1)
+    avg_sales = round(sum(round(arev.get(k, 0) or 0) for k in keys) / n)
+    avg_meters = round(sum(round(adisp.get(k, 0) or 0) for k in keys) / n)
+    sales_avg_months = len(keys)
 
     return {
         "product": PRODUCT, "company": cfg["company"]["name"], "currency": cur, "as_of": d,
@@ -313,7 +336,7 @@ def build(con, cfg, as_of=None):
             "cash": round(group_balance("cash")), "bank": round(group_balance("bank")),
             "receivable": round(group_balance("customer")), "payable": round(-group_balance("supplier")),
             "sales_month": finance[-1]["sales"], "expenses_month": finance[-1]["expenses"],
-            "sales_avg_12m": avg_sales, "dispatched_avg_12m": avg_meters, "sales_avg_months": len(last12),
+            "sales_avg_12m": avg_sales, "dispatched_avg_12m": avg_meters, "sales_avg_months": sales_avg_months,
             "out_of_stock": sum(1 for r in items if r["status"] == "OUT OF STOCK"),
             "low_stock": sum(1 for r in items if r["status"] == "LOW STOCK"),
             "action": sum(1 for f in findings if f["severity"] == "ACTION"),

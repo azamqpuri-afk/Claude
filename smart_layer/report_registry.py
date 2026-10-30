@@ -60,5 +60,5 @@ def report_day(name, day=None):
 
 
 def menu():
-    """[(name, label)] for the dashboard's report list."""
-    return [(name, label) for name, (_, label, _) in REPORTS.items()]
+    """[(name, label, is_range)] for the dashboard's report list (is_range = the report uses the From/To window)."""
+    return [(name, label, name in RANGE) for name, (_, label, _) in REPORTS.items()]

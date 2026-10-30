@@ -332,7 +332,7 @@ def get_response(app, path, query, check_licence=True):
         return 200, {"state": st.state, "message": st.message, "allowed": st.allowed,
                      "warning": st.warning, "machine": licence.machine_id()}, "application/json", {}
     if path == "/api/reports":
-        return 200, {"reports": [{"name": n, "label": label} for n, label in report_registry.menu()]}, "application/json", {}
+        return 200, {"reports": [{"name": n, "label": label, "range": rng} for n, label, rng in report_registry.menu()]}, "application/json", {}
     if path in ("/api/data", "/api/report", "/api/entities", "/api/browse", "/api/ledger",
                 "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts"):
         if check_licence:

@@ -518,13 +518,17 @@ function render(){
     btn.style.display=""; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length);
     btn.onclick=()=>{ attOpen=!attOpen; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length); };
   }
-  // money (cash / receivable / payable tiles drill into detail)
+  // money (cash / receivable / payable tiles drill into detail). Receivable/Payable show GROSS (what parties owe /
+  // what we owe) with advances as the meta, so one party's advance never nets against another's debt.
   var avgMeta = (k.sales_avg_months? ("avg of "+k.sales_avg_months+" mo · "+num(k.dispatched_avg_12m)+" m/mo") : "last 12 months");
+  var fk=(D.fin&&D.fin.kpis)||{};
+  var recMeta = (fk.advances_from_parties? "adv received Rs "+rs(fk.advances_from_parties)+" · tap" : "tap for parties");
+  var payMeta = (fk.advances_to_suppliers? "adv paid Rs "+rs(fk.advances_to_suppliers)+" · tap" : "tap for parties");
   $("#ov-money").innerHTML =
     tile("💵 Cash in hand", "Rs "+num(k.cash), "tap for transactions", "", "live", "cash") +
     tile("🏦 Bank", "Rs "+num(k.bank), "", "", "live") +
-    tile("📥 Receivable", "Rs "+rs(k.receivable), "tap for parties", "", "", "receivable") +
-    tile("📤 Payable", "Rs "+rs(k.payable), "tap for parties", "", "", "payable") +
+    tile("📥 Receivable", "Rs "+rs(fk.receivable_gross!=null?fk.receivable_gross:k.receivable), recMeta, "", "", "receivable") +
+    tile("📤 Payable", "Rs "+rs(fk.owe_store_suppliers!=null?fk.owe_store_suppliers:k.payable), payMeta, "", "", "payable") +
     tile("📈 Avg sales / month", "Rs "+rs(k.sales_avg_12m), avgMeta, "accent");
   // mill (fabric & yarn tiles drill into detail)
   var yf=D.yarn_fabric||{};
@@ -569,7 +573,8 @@ async function drawCash(){
   if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see cash transactions.</p>'; return; }
   try{
     var j=await (await fetch("api/finance/group?group=cash")).json(), L=j.ledger||{};
-    var head=`<div class="lkpi" style="grid-template-columns:repeat(2,1fr);margin-bottom:10px"><div><div class="t">Cash in hand</div><div class="v">Rs ${num(L.balance)}</div></div><div><div class="t">Transactions</div><div class="v">${num(L.count)}</div></div></div>`;
+    var shown=(L.rows||[]).length, txt=(shown<L.count? ("latest "+num(shown)+" of "+num(L.count)) : num(L.count));
+    var head=`<div class="lkpi" style="grid-template-columns:repeat(2,1fr);margin-bottom:10px"><div><div class="t">Cash in hand</div><div class="v">Rs ${num(L.balance)}</div></div><div><div class="t">Transactions</div><div class="v">${txt}</div></div></div>`;
     var rows=(L.rows||[]).map(r=>[dshort(r.date), esc(r.voucher_type||""), esc(r.account||""), r.received?num(r.received):"", r.paid?num(r.paid):"", num(r.balance)]);
     $("#drawer-body").innerHTML=head+(rows.length?table(["Date","Type","Account","In","Out","Balance"],rows,[3,4,5]):'<p class="muted">No cash transactions.</p>');
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load cash transactions.</p>'; }
@@ -895,17 +900,26 @@ var CLOSING=false, closingParty="";
 function repUrl(fmt){
   var d=$("#day").value, dq=d?`&date=${d}`:"";
   if(CLOSING) return `api/closing?fmt=${fmt}&party=${encodeURIComponent(closingParty)}&counts=${encodeURIComponent(JSON.stringify(editedCounts()))}`+dq;
-  var f=($("#rep-from")||{}).value, t=($("#rep-to")||{}).value;   // optional From/To filter; empty = report's own default
+  var t=($("#rep-to")||{}).value;                                 // To is the as-of for any report
+  var f=repRange[$("#rep-name").value] ? ($("#rep-from")||{}).value : "";   // From only for range reports
   var rq=(f?`&from=${f}`:"")+(t?`&to=${t}`:"");
   return `api/report?name=${encodeURIComponent($("#rep-name").value)}&fmt=${fmt}`+dq+rq;
 }
+var repRange={};   // report name -> does it use the From/To window (only these use From; others ignore it)
 async function initReports(){
   if(STATIC_DATA) return;
-  try{ var j=await (await fetch("api/reports")).json(); $("#rep-name").innerHTML=j.reports.map(r=>`<option value="${esc(r.name)}">${esc(r.label)}</option>`).join(""); }catch(e){}
+  try{ var j=await (await fetch("api/reports")).json(); repRange={}; j.reports.forEach(r=>repRange[r.name]=!!r.range);
+       $("#rep-name").innerHTML=j.reports.map(r=>`<option value="${esc(r.name)}">${esc(r.label)}</option>`).join(""); }catch(e){}
   try{ var e=await (await fetch("api/entities")).json(); $("#br-entity").innerHTML=e.entities.map(x=>`<option value="${x.name}">${esc(x.label)} (${x.rows.toLocaleString()})</option>`).join(""); }catch(e){}
+  syncFromBox();
+}
+function syncFromBox(){   // From only applies to range reports; disable it otherwise so it is not silently ignored
+  var el=$("#rep-from"), lbl=el&&el.closest(".fld"); if(!el) return;
+  var on = !!repRange[$("#rep-name").value];
+  el.disabled=!on; if(lbl){ lbl.style.opacity=on?"":".45"; lbl.title=on?"":"From applies to range reports (e.g. Unbalanced entries) only"; }
 }
 $("#rep-view").onclick=()=>{ var n=$("#rep-name").value; loadReportNamed(n); };
-$("#rep-name").onchange=()=>{ if($("#rep-name").value!=="closing"){ CLOSING=false; $("#rep-edit").innerHTML=""; } };
+$("#rep-name").onchange=()=>{ syncFromBox(); if($("#rep-name").value!=="closing"){ CLOSING=false; $("#rep-edit").innerHTML=""; } };
 ["#rep-from","#rep-to"].forEach(s=>{ var el=$(s); if(el) el.onchange=()=>{ var n=$("#rep-name").value; if(n) loadReportNamed(n); }; });
 async function loadReportNamed(name){
   if(name==="closing"){ CLOSING=true; return openClosing(); }

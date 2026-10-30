@@ -136,6 +136,12 @@ def trial_balance(con, cfg, as_of=None):
                f"Trial balance: {verdict} (tolerance {cur} {tol:g})."]
     summary.append(f"{len(rows)} unbalanced voucher(s) shown below - these are what make the books not tie out."
                    if rows else "No unbalanced vouchers: every voucher's debits equal its credits.")
+    # vouchers out of balance but within tolerance are not listed; note them so the rows reconcile to the difference
+    un, ut = con.execute("""SELECT COUNT(*), COALESCE(SUM(ABS(s)), 0) FROM
+                            (SELECT SUM(amount) s FROM ledger_entries WHERE voucher_date <= ?
+                             GROUP BY voucher_id HAVING ABS(SUM(amount)) > 0 AND ABS(SUM(amount)) <= ?)""", (d, tol)).fetchone()
+    if un:
+        summary.append(f"(+ {un} voucher(s) under the {cur} {tol:g} tolerance totalling {cur} {ut:,.0f}, not listed.)")
     return Report(f"Trial balance check - {as_of:%d-%b-%Y}",
                   ["Date", "Type", "Voucher", "Lines", f"Debit {cur}", f"Credit {cur}", f"Difference {cur}"], rows, summary)
 
@@ -146,7 +152,7 @@ def unbalanced(con, cfg, d0=None, d1=None):
     d0 = d0 or (d1 - timedelta(days=365))
     cur, tol = cfg["company"]["currency"], _tolerance(cfg)
     rows = _unbalanced_vouchers(con, "voucher_date BETWEEN ? AND ?", (d0.isoformat(), d1.isoformat(), tol))
-    net = sum(r[6] for r in rows)
+    net = sum(abs(r[6]) for r in rows)                   # total size of the imbalance (always positive)
     summary = [f"{d0:%d-%b-%Y} to {d1:%d-%b-%Y}: {len(rows)} voucher(s) where debits do not equal credits"
                + (f", out of balance by {cur} {net:,.0f} in total." if rows else " - the books are clean for this period.")]
     if rows:
