@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$AppDir, [switch]$Start)
+param([Parameter(Mandatory=$true)][string]$AppDir, [switch]$Start, [switch]$AsSystem)
 # Schedules the daily run and the always-on dashboard for the compiled product, and opens the firewall port
 # when the dashboard is on the mill network.
 # Registering happens during install (no config.toml needed - the run scripts wait for it). The dashboard and
@@ -9,8 +9,26 @@ $ErrorActionPreference = "Continue"
 $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -LogonType ServiceAccount -RunLevel Highest
 $at = "07:30"
 
+# Preserve an EXISTING task's logon on upgrade. Default (fresh install) is SYSTEM, which needs no password and
+# reads the machine-sealed licence/.env. But a mill may have switched a task to run as a signed-in user
+# (LogonType Interactive, no stored password - e.g. on a Microsoft-account PC with PIN sign-in). This -Force
+# re-register would otherwise silently revert that working setup every upgrade, so we keep each task's current
+# principal when it already exists and only refresh its action/trigger/settings (the new run scripts, the
+# repetition fix). A clean reinstall as SYSTEM is still available with -AsSystem.
+function Resolve-Principal($name) {
+    if ($AsSystem) { return $principal }
+    $ex = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+    if ($ex -and $ex.Principal -and $ex.Principal.UserId) {
+        try {
+            return New-ScheduledTaskPrincipal -UserId $ex.Principal.UserId -LogonType $ex.Principal.LogonType `
+                   -RunLevel $ex.Principal.RunLevel
+        } catch { return $principal }
+    }
+    return $principal
+}
+
 $daily = New-ScheduledTaskAction -Execute "$AppDir\run_daily.cmd" -WorkingDirectory $AppDir
-Register-ScheduledTask -TaskName "Smart Layer Daily" -Action $daily -Principal $principal -Force `
+Register-ScheduledTask -TaskName "Smart Layer Daily" -Action $daily -Principal (Resolve-Principal "Smart Layer Daily") -Force `
     -Trigger (New-ScheduledTaskTrigger -Daily -At $at) `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 3)) | Out-Null
 
