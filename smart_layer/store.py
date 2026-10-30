@@ -179,10 +179,12 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
                 con.execute(f"DELETE FROM {e.name}")
             marks = ", ".join("?" * len(e.columns))
             con.executemany(f"INSERT INTO {e.name} VALUES ({marks})", rows)
-            # short-history entities (e.g. the huge raw loom stop log) are PRUNED to their cap: the windowed delete
-            # above only clears the window, so rows older than the cap would otherwise pile up for ever.
+            # short-history entities (e.g. the huge raw loom stop log) are PRUNED to their CAP, not to this sync's
+            # window: the live sync's window is only a few days, so pruning to `since` would trim the whole log to
+            # ~3 days every 5 minutes. Prune to today - the cap (e.g. 14 days) so the daily and live syncs agree.
             if e.date_column and e.name in short_history:
-                con.execute(f"DELETE FROM {e.name} WHERE {e.date_column} < ?", (since.isoformat(),))
+                cap_since = date.today() - timedelta(days=int(short_history[e.name]))
+                con.execute(f"DELETE FROM {e.name} WHERE {e.date_column} < ?", (cap_since.isoformat(),))
             con.execute("INSERT INTO sync_log VALUES (?, ?, ?, ?)",
                         (e.name, now, since.isoformat() if e.date_column else None, len(rows)))
         result[e.name] = len(rows)

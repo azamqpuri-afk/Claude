@@ -1205,3 +1205,27 @@ def test_short_history_entities_are_pruned(tmp_path):
     assert dates == [recent]                                      # old row pruned, recent kept
     assert all(x >= cap for x in dates)
     con.close()
+
+
+def test_short_history_prune_uses_full_cap_not_live_window(tmp_path):
+    # the LIVE sync (small window) must still keep up to the cap, not trim loom_stops to the live window
+    from datetime import date as _d, timedelta as _t
+    con = store.open_store(tmp_path / "pc.db")
+    within_cap = (_d.today() - _t(days=10)).isoformat()   # older than the 3-day live window, inside the 14-day cap
+    beyond_cap = (_d.today() - _t(days=20)).isoformat()
+    with con:
+        for dt in (within_cap, beyond_cap):
+            con.execute("INSERT INTO loom_stops (stop_date,loom_code,stop_time,restart_time) VALUES (?,?,?,?)",
+                        (dt, "2", dt + " 10:00:00", dt + " 10:01:00"))
+
+    class FM:
+        name = "f"; entities = {"loom_stops": "x"}; source = {}
+
+    class FE:
+        def __init__(s): s.mapping = FM()
+        def fetch(s, n, since, as_of=None): return iter([])
+
+    store.sync(con, FE(), 3, entities=["loom_stops"], full_history=(), fabric_history=False, log=lambda *_: None)
+    dates = sorted(r[0] for r in con.execute("SELECT stop_date FROM loom_stops"))
+    assert within_cap in dates and beyond_cap not in dates    # 14-day cap honoured even on a 3-day live sync
+    con.close()
