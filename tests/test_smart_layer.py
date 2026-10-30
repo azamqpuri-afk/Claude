@@ -1229,3 +1229,16 @@ def test_short_history_prune_uses_full_cap_not_live_window(tmp_path):
     dates = sorted(r[0] for r in con.execute("SELECT stop_date FROM loom_stops"))
     assert within_cap in dates and beyond_cap not in dates    # 14-day cap honoured even on a 3-day live sync
     con.close()
+
+
+def test_live_sync_refreshes_account_balances(env, tmp_path):
+    # cash/bank (and receivable/payable) balances come from account_balances, so the live sync must refresh it
+    cfg, _ = env
+    assert "account_balances" in store.LIVE_ENTITIES
+    mapping = erp.Mapping(cfg.path(cfg["erp"]["mapping"]))
+    e = erp.ERP(*erp.connect(cfg["erp"], cfg.base_dir), mapping, cfg["sources"], cfg.base_dir)
+    con = store.open_store(tmp_path / "live.db")
+    res = store.sync(con, e, 3, entities=list(store.LIVE_ENTITIES), full_history=(), fabric_history=False, log=lambda *_: None)
+    assert res.get("account_balances", 0) > 0                 # the live set pulled balances
+    assert con.execute("SELECT COUNT(*) FROM account_balances").fetchone()[0] > 0
+    con.close()

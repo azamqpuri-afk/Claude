@@ -131,7 +131,11 @@ FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # c
 # daily full sync: windowing an entity whose query also returns opening rows would re-insert those opening rows
 # every run (they fall outside the delete window), duplicating balances. Snapshots here are replaced wholesale.
 LIVE_ENTITIES = ("loom_production", "loom_monitor", "loom_stops", "gate_passes", "stock_balances",
-                 "store_issues", "store_receipts", "yarn_stock", "fabric_stock")
+                 "store_issues", "store_receipts", "yarn_stock", "fabric_stock",
+                 # account_balances is a whole-ledger snapshot (replaced entirely each sync, no date window and no
+                 # 'opening' rows), so it is safe to refresh live - this keeps the Overview cash / bank / receivable
+                 # / payable balances current every 5 minutes instead of only after the daily sync.
+                 "account_balances")
 
 
 # Entities whose history is capped SHORTER than the main window, no matter how large history_days is: the raw
