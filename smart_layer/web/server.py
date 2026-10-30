@@ -93,6 +93,14 @@ class App:
         finally:
             con.close()
 
+    def changes(self, since):
+        """What changed since the client's last refresh (for the Overview animations)."""
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return data.changes(con, self.cfg, since)
+        finally:
+            con.close()
+
     def issue_history(self, item, limit=20):
         """The last issues of one store item (feature 4 drill-down), newest first."""
         from ..reports.stock import issue_history
@@ -415,7 +423,7 @@ def get_response(app, path, query, check_licence=True):
         return 200, body, ctype, {"Content-Disposition": f'attachment; filename="{name}"'}
     if path in ("/api/data", "/api/report", "/api/entities", "/api/browse", "/api/ledger",
                 "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts",
-                "/api/store/issues", "/api/reports/files"):
+                "/api/store/issues", "/api/reports/files", "/api/changes"):
         if check_licence:
             st = licence.status(app.cfg)
             if not st.allowed:
@@ -437,6 +445,8 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.fin_group(g if g in ("cash", "bank") else "cash"), "application/json", {}
         if path == "/api/store/issues":                  # last issues of one item (store drill-down)
             return 200, app.issue_history(params.get("item", ""), params.get("limit", 20)), "application/json", {}
+        if path == "/api/changes":                       # what changed since the client's last refresh (animations)
+            return 200, app.changes(params.get("since", "")), "application/json", {}
         if path == "/api/reports/files":                 # saved report files for the Reports page
             return 200, app.reports_files(), "application/json", {}
         try:

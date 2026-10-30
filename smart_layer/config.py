@@ -54,6 +54,10 @@ DEFAULTS = {
     "licence": {},                        # file = "license.key" (next to config.toml)
     "sources": {},                        # extra databases, e.g. [sources.scoreboard] for a loom monitoring system
     "serve": {"host": "127.0.0.1", "port": 8080},
+    "dashboard": {"animations": True,         # Overview "what changed" animations on each auto-refresh
+                  "show_amounts": True,        # show money amounts (turn off for a shared office screen)
+                  "refresh_seconds": 300,      # auto-refresh the dashboard this often (aligned to the live sync)
+                  "sound": False},             # play a sound on changes (off by default)
     "ask": {"model": "claude-opus-5-5", "effort": "high", "max_rows": 200, "max_steps": 12,
             "query_timeout_sec": 8,                       # abort any single SQL that runs longer than this
             "deny_functions": ["randomblob", "zeroblob"]},  # functions that can allocate huge blobs / hang the query

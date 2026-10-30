@@ -36,6 +36,12 @@ password = "${DASHBOARD_PASSWORD}"
 channels = ["console", "ntfy"]
 ntfy_topic = "${NTFY_TOPIC}"
 
+[dashboard]
+animations = true       # Overview "what changed" animations on each 5-minute auto-refresh
+show_amounts = true     # show money amounts (set false to hide them on a shared office screen)
+refresh_seconds = 300   # auto-refresh interval (aligned to the live sync)
+sound = false           # play a sound on changes
+
 [reports]
 tracked_issue_days = 60
 reorder_cover_months = 2

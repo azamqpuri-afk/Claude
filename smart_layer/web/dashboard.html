@@ -169,6 +169,40 @@
     .pane[hidden]{display:none!important} .card{break-inside:avoid;border:1px solid #999}
     th{background:#eee!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
   }
+  /* ---- "what changed" chips + animations (CSS/SVG only) ---- */
+  .since{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:2px 2px 16px}
+  .since .lead{font-size:12px;color:var(--muted);font-weight:600;margin-right:2px}
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;padding:3px 10px;border-radius:999px;
+        border:1px solid var(--line);background:var(--panel);animation:chipin .35s ease both}
+  .chip.in{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
+  .chip.out{color:var(--amber);border-color:color-mix(in srgb,var(--amber) 45%,var(--line))}
+  .chip.alert{color:var(--red);border-color:color-mix(in srgb,var(--red) 45%,var(--line))}
+  @keyframes chipin{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+  .tile.flash{animation:tileflash 1.2s ease}
+  @keyframes tileflash{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--teal) 55%,transparent)}100%{box-shadow:var(--shadow)}}
+  .tile.flash.bad{animation:tileflashbad 1.4s ease}
+  @keyframes tileflashbad{0%,30%{box-shadow:0 0 0 2px color-mix(in srgb,var(--red) 60%,transparent)}100%{box-shadow:var(--shadow)}}
+  #anim-layer{position:fixed;inset:0;pointer-events:none;z-index:40;overflow:hidden}
+  .fx{position:absolute;will-change:transform,opacity}
+  .fx.note{width:66px;height:30px}
+  .fx.note .face{position:absolute;inset:0;backface-visibility:hidden;border-radius:3px;box-shadow:0 2px 6px rgba(0,0,0,.25)}
+  .fx.note.down{animation:notedrop 1.8s cubic-bezier(.5,.1,.5,1) forwards}
+  .fx.note.up{animation:noteup 1.8s cubic-bezier(.4,0,.6,1) forwards}
+  .fx.note .flip{position:absolute;inset:0;transform-style:preserve-3d;animation:noteflip 1s linear infinite}
+  @keyframes noteflip{to{transform:rotateY(360deg)}}
+  @keyframes notedrop{0%{opacity:0;transform:translateY(-40px)}12%{opacity:1}100%{opacity:0;transform:translateY(190px)}}
+  @keyframes noteup{0%{opacity:0;transform:translateY(0)}12%{opacity:1}100%{opacity:0;transform:translateY(-160px) translateX(40px)}}
+  .fx.truck{animation:truckout 2.3s ease-in forwards}
+  .fx.truck.inb{animation:truckin 2.3s ease-out forwards}
+  @keyframes truckout{0%{opacity:0;transform:translateX(-30px)}10%{opacity:1}100%{opacity:0;transform:translateX(260px)}}
+  @keyframes truckin{0%{opacity:0;transform:translateX(260px) scaleX(-1)}10%{opacity:1}100%{opacity:0;transform:translateX(0) scaleX(-1)}}
+  .fx .cap{position:absolute;top:-16px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:11px;font-weight:700;
+           color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:1px 6px}
+  .fx.roll{animation:rollfade 2.2s ease forwards}
+  .fx.roll .spin{transform-origin:center;animation:rollspin 2.2s linear}
+  @keyframes rollspin{to{transform:rotate(540deg)}}
+  @keyframes rollfade{0%{opacity:0;transform:scale(.8)}15%{opacity:1}85%{opacity:1}100%{opacity:0}}
+  @media (prefers-reduced-motion: reduce){ .fx{display:none!important} .tile.flash,.tile.flash.bad{animation:none} }
 </style>
 </head>
 <body>
@@ -222,6 +256,7 @@
     </div>
     <div class="strip" id="ov-attention" hidden></div>
     <div class="asof" id="ov-sync" style="justify-content:flex-start;gap:10px"></div>
+    <div class="since" id="ov-since" hidden></div>
     <div class="sec">Money</div>
     <div class="grid g5" id="ov-money" style="margin-bottom:22px"></div>
     <div class="sec">The mill today</div>
@@ -359,6 +394,7 @@
 
   <div class="foot">Project Smart Layer by Azam Puri — reads your ERP, changes nothing.</div>
 </div>
+<div id="anim-layer" aria-hidden="true"></div>
 
 <!-- chat -->
 <div id="chat"><div class="top">💬 Ask the ERP <span class="spacer" style="flex:1"></span><button class="hbtn" id="chatClose">✕</button></div>
@@ -487,8 +523,12 @@ function tile(lbl, val, meta, cls, asof, drill){
   var chev = drill ? '<span class="chev">›</span>' : "";
   return `<div class="tile ${cls||""}${click}"><div class="lbl">${lbl}${chev}</div><div class="val">${val}</div>${meta?`<div class="meta">${meta}</div>`:""}${asof?`<div class="asof-tile">🕒 ${esc(asof)}</div>`:""}</div>`;
 }
+var ANIM=true, SHOW_AMOUNTS=true, REFRESH_SECS=300;   // from [dashboard] config, set on each data load
 function render(){
   if(!D) return;
+  var dc=D.dashboard||{};
+  ANIM = dc.animations!==false; SHOW_AMOUNTS = dc.show_amounts!==false;
+  REFRESH_SECS = Math.max(30, parseInt(dc.refresh_seconds)||300);
   $("#millName").textContent = D.company || "Mill";
   $("#subtitle").textContent = "by Azam Puri";
   var _s=D.sync||{};
@@ -526,12 +566,13 @@ function render(){
   var fk=(D.fin&&D.fin.kpis)||{};
   var recMeta = (fk.advances_from_parties? "adv received Rs "+rs(fk.advances_from_parties)+" · tap" : "tap for parties");
   var payMeta = (fk.advances_to_suppliers? "adv paid Rs "+rs(fk.advances_to_suppliers)+" · tap" : "tap for parties");
+  var M = (s)=> SHOW_AMOUNTS ? s : "•••";              // hide money amounts on a shared office screen ([dashboard] show_amounts)
   $("#ov-money").innerHTML =
-    tile("💵 Cash in hand", "Rs "+num(k.cash), "tap for transactions", "", "live", "cash") +
-    tile("🏦 Bank", "Rs "+num(k.bank), "", "", "live") +
-    tile("📥 Receivable", "Rs "+rs(fk.receivable_gross!=null?fk.receivable_gross:k.receivable), recMeta, "", "", "receivable") +
-    tile("📤 Payable", "Rs "+rs(fk.owe_store_suppliers!=null?fk.owe_store_suppliers:k.payable), payMeta, "", "", "payable") +
-    tile("📈 Avg sales / month", "Rs "+rs(k.sales_avg_12m), avgMeta, "accent");
+    tile("💵 Cash in hand", M("Rs "+num(k.cash)), "tap for transactions", "", "live", "cash") +
+    tile("🏦 Bank", M("Rs "+num(k.bank)), "", "", "live") +
+    tile("📥 Receivable", M("Rs "+rs(fk.receivable_gross!=null?fk.receivable_gross:k.receivable)), recMeta, "", "", "receivable") +
+    tile("📤 Payable", M("Rs "+rs(fk.owe_store_suppliers!=null?fk.owe_store_suppliers:k.payable)), payMeta, "", "", "payable") +
+    tile("📈 Avg sales / month", M("Rs "+rs(k.sales_avg_12m)), avgMeta, "accent");
   // mill (fabric & yarn tiles drill into detail)
   var yf=D.yarn_fabric||{};
   $("#ov-mill").innerHTML =
@@ -543,6 +584,8 @@ function render(){
   wireDrills();
   renderWeaving(); renderFinanceTiles(); renderYFTiles();
   buildCharts(curTab);
+  // remember this snapshot so the next auto-refresh can diff it (the `since` for /api/changes, kpis, finding ids)
+  if(!STATIC_DATA){ sinceTs = D.now || sinceTs; prevKpis = D.kpis || null; prevFindingIds = new Set((D.findings||[]).map(f=>f.id)); }
 }
 
 async function markRead(id, title, undo){
@@ -563,7 +606,8 @@ function renderSync(){
   var fullC = s.daily_stale ? ' style="color:var(--red)"' : '';
   var warn = s.stale ? ' <b style="color:var(--red)">— data may be stale</b>' : '';
   var btns = STATIC_DATA ? "" : `<button class="hbtn" id="ov-sync-btn" style="margin-left:8px">⟳ Sync now</button> <button class="hbtn" id="ov-fullsync-btn" title="Deep sync of all history (slower)">⟳ Full sync</button>`;
-  el.innerHTML = `${dot} <span${liveC}>${esc(live)}</span> · <span${fullC}>${esc(full)}</span>${warn} ${btns}`;
+  var cd = STATIC_DATA ? "" : ` · <span id="ov-countdown" class="muted" style="font-size:12px"></span>`;
+  el.innerHTML = `${dot} <span${liveC}>${esc(live)}</span> · <span${fullC}>${esc(full)}</span>${cd}${warn} ${btns}`;
   var b=$("#ov-sync-btn"); if(b) b.onclick=()=>syncNow(false);
   var fb=$("#ov-fullsync-btn"); if(fb) fb.onclick=()=>{ if(confirm("Run a full sync? This re-pulls all history from the ERP and can take a few minutes.")) syncNow(true); };
 }
@@ -1206,8 +1250,102 @@ async function load(day, silent, _retry){
   }
 }
 $("#day").onchange=(e)=>{ loaded={}; load(e.target.value); if(curTab!=="overview"){ var t=curTab; curTab="overview"; setTab(t); } };
-setInterval(()=>{ if(!STATIC_DATA && !document.hidden && curTab==="overview") load($("#day").value||undefined, true); }, 60000);
-document.addEventListener("visibilitychange",()=>{ if(!document.hidden && !STATIC_DATA && curTab==="overview") load($("#day").value||undefined, true); });
+
+/* ---------- auto-refresh (aligned to the live sync) + "what changed" animations ---------- */
+var sinceTs=null;        // D.now from the last load - the `since` for /api/changes
+var prevKpis=null;       // kpis before the last refresh (for count-ups / deltas)
+var prevFindingIds=null; // finding ids before the last refresh (for new-alert detection)
+var countdown=0;
+function drawerOpen(){ var d=$("#drawer"); return (d&&d.open) || ($("#licDlg")&&$("#licDlg").open) || $("#chat").classList.contains("open"); }
+function tickCountdown(){
+  var el=$("#ov-countdown"); if(!el) return;
+  if(drawerOpen()){ el.textContent="refresh paused"; return; }
+  countdown--;
+  el.textContent = countdown>0 ? ("next refresh in "+countdown+"s") : "refreshing…";
+}
+async function autoRefresh(){
+  if(STATIC_DATA) return;
+  countdown = REFRESH_SECS;
+  if(document.hidden || drawerOpen() || curTab!=="overview"){ return; }   // skip quietly; the timer re-arms
+  var since=sinceTs, pk=prevKpis, pf=prevFindingIds;
+  await load($("#day").value||undefined, true);                          // silent: keeps tab + scroll
+  if(!D) return;
+  if(ANIM && since){                                                     // never animate the first load
+    var events=[];
+    try{ var cj=await (await fetch("api/changes?since="+encodeURIComponent(since))).json(); events=(cj&&cj.events)||[]; }catch(e){}
+    // new ACTION/CONFIRMED findings -> alert events (diffed client-side; audit is not timestamped)
+    var nowIds=new Set((D.findings||[]).map(f=>f.id));
+    (D.findings||[]).forEach(function(f){ if((f.severity==="ACTION"||f.severity==="CONFIRMED") && pf && !pf.has(f.id)) events.push({kind:"alert", title:f.title}); });
+    playChanges(events, pk, D.kpis||{});
+  }
+}
+function startAutoRefresh(){
+  countdown = REFRESH_SECS;
+  setInterval(tickCountdown, 1000);
+  setInterval(()=>{ if(countdown<=0) autoRefresh(); }, 1000);
+}
+document.addEventListener("visibilitychange",()=>{ if(!document.hidden && !STATIC_DATA && curTab==="overview" && countdown<=0) autoRefresh(); });
+
+/* ---------- change chips + animations ---------- */
+function money(v){ var s=(v<0?"−":"+")+"Rs "+rs(Math.abs(v)); return SHOW_AMOUNTS? s : (v<0?"−":"+")+"Rs •••"; }
+function playChanges(events, pk, nk){
+  var since=$("#ov-since"); if(!since) return;
+  if(!events.length){ since.hidden=true; since.innerHTML=""; return; }
+  // chip summary line
+  var chips=[];
+  events.forEach(function(e){
+    if(e.kind==="cash"){ chips.push([e.delta>=0?'in':'out', money(e.delta)+" cash"+(e.label?" ("+esc(e.label)+")":"")]); }
+    else if(e.kind==="woven"){ chips.push(['in',"+ "+num(e.meters)+" m woven"]); }
+    else if(e.kind==="store"){ chips.push(['out',"store: "+esc(e.item)+(e.to?" → "+esc(e.to):"")]); }
+    else if(e.kind==="in"){ chips.push(['in',(e.what||"goods")+" in"+(e.bags?" · "+num(e.bags)+" bags":"")]); }
+    else if(e.kind==="out"){ chips.push(['out',(e.what||"goods")+" out"+(e.kg?" · "+num(e.kg)+" kg":"")]); }
+    else if(e.kind==="alert"){ chips.push(['alert',"new: "+esc(e.title)]); }
+  });
+  var when = D.sync&&D.sync.live_at ? String(D.sync.live_at).slice(11,16) : "";
+  since.hidden=false;
+  since.innerHTML = `<span class="lead">Since ${esc(when)}</span>` + chips.map(c=>`<span class="chip ${c[0]}">${c[1]}</span>`).join("");
+  // animations (respect reduced-motion via CSS; cap at 3 concurrent, queue the rest)
+  if(!ANIM) return;
+  var queue=events.slice(), running=0;
+  function next(){
+    while(running<3 && queue.length){ var e=queue.shift(); running++; animate(e, pk, nk, ()=>{ running--; next(); }); }
+  }
+  next();
+}
+function tileEl(drill){ return document.querySelector(`#ov-money [data-drill="${drill}"]`) || document.querySelector('#ov-mill [data-drill="'+drill+'"]'); }
+function flash(el, bad){ if(!el) return; el.classList.remove("flash","bad"); void el.offsetWidth; el.classList.add("flash"); if(bad) el.classList.add("bad"); }
+function layerPos(el){ var L=$("#anim-layer"); if(!el) return {x:innerWidth/2,y:160,L:L}; var r=el.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+10, L:L}; }
+function NOTE_SVG(front){ return front
+  ? `<svg viewBox="0 0 66 30"><rect width="66" height="30" rx="3" fill="#f3ead9"/><rect width="66" height="9" fill="#e8897a"/><rect y="21" width="66" height="9" fill="#9c6b4a"/><text x="33" y="20" font-size="12" font-weight="700" text-anchor="middle" fill="#7a4a2a" stroke="#7a4a2a" stroke-width=".3">5000</text></svg>`
+  : `<svg viewBox="0 0 66 30"><rect width="66" height="30" rx="3" fill="#f6d9cf" stroke="#e8897a" stroke-width="2"/><path d="M14 22 q6 -10 12 0" fill="none" stroke="#c0705c" stroke-width="1.4"/><circle cx="20" cy="12" r="2" fill="#c0705c"/><text x="44" y="20" font-size="11" font-weight="700" text-anchor="middle" fill="#c0705c">5000</text></svg>`; }
+function animate(e, pk, nk, done){
+  var L=$("#anim-layer"); if(!L){ done(); return; }
+  if(e.kind==="cash"){
+    var up=e.delta>=0, tl=tileEl("cash"), p=layerPos(tl); flash(tl, false);
+    for(var i=0;i<3;i++){ (function(i){
+      var n=document.createElement("div"); n.className="fx note "+(up?"down":"up");
+      n.style.left=(p.x-33+(i-1)*22)+"px"; n.style.top=(up? (p.y-30):(p.y))+"px"; n.style.animationDelay=(i*0.12)+"s";
+      n.innerHTML=`<div class="flip"><div class="face" style="transform:rotateY(0)">${NOTE_SVG(true)}</div><div class="face" style="transform:rotateY(180deg)">${NOTE_SVG(false)}</div></div><span class="cap" style="color:${up?'var(--green)':'var(--red)'}">${money(e.delta)}</span>`;
+      L.appendChild(n); setTimeout(()=>n.remove(), 2000);
+    })(i); }
+    setTimeout(done, 700);
+  } else if(e.kind==="out" || e.kind==="in" || e.kind==="store"){
+    var inb=(e.kind==="in"), tl2=tileEl(e.kind==="store"?"cash":(inb?"yarn":"fabric")), p2=layerPos(tl2);
+    var t=document.createElement("div"); t.className="fx truck"+(inb?" inb":"");
+    t.style.left=(p2.x-30)+"px"; t.style.top=p2.y+"px";
+    var cap = e.kind==="store" ? ("store: "+esc(e.item)) : ((e.what||"goods")+(inb?" in":" out")+(e.bags?" · "+num(e.bags)+" bags":(e.kg?" · "+num(e.kg)+" kg":"")));
+    t.innerHTML=`<svg width="60" height="30" viewBox="0 0 60 30"><rect x="2" y="8" width="34" height="14" rx="2" fill="var(--teal)"/><rect x="36" y="12" width="16" height="10" rx="2" fill="var(--teal-deep)"/><circle cx="12" cy="24" r="4" fill="#333"/><circle cx="44" cy="24" r="4" fill="#333"/></svg><span class="cap">${cap}</span>`;
+    L.appendChild(t); setTimeout(()=>t.remove(), 2400); setTimeout(done, 800);
+  } else if(e.kind==="woven"){
+    var tl3=tileEl(null)||document.querySelector('#ov-mill .tile'), p3=layerPos(document.querySelector('#ov-mill .tile'));
+    var r=document.createElement("div"); r.className="fx roll"; r.style.left=(p3.x-20)+"px"; r.style.top=p3.y+"px";
+    r.innerHTML=`<svg class="spin" width="42" height="42" viewBox="0 0 42 42"><circle cx="21" cy="21" r="16" fill="none" stroke="var(--teal)" stroke-width="5"/><line x1="21" y1="5" x2="21" y2="37" stroke="var(--teal-deep)" stroke-width="3"/></svg><span class="cap">+ ${num(e.meters)} m woven</span>`;
+    L.appendChild(r); setTimeout(()=>r.remove(), 2200); setTimeout(done, 800);
+  } else if(e.kind==="alert"){
+    flash(tileEl("cash"), true);                       // a serious red pulse; the chip carries the title
+    setTimeout(done, 600);
+  } else { done(); }
+}
 
 /* ---------- chat ---------- */
 var session=null; try{session=sessionStorage.getItem("sl-session");}catch(e){}
@@ -1229,6 +1367,7 @@ $("#askForm").onsubmit=async(e)=>{
 
 licenceInfo();
 load();
+if(!STATIC_DATA) startAutoRefresh();
 </script>
 </body>
 </html>

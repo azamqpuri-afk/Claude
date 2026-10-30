@@ -7,4 +7,4 @@ connected by a mapping file; everything else is written once.
 """
 
 PRODUCT = "Project Smart Layer by Azam Puri"
-__version__ = "0.13.5"
+__version__ = "0.14.0"

@@ -1242,3 +1242,26 @@ def test_live_sync_refreshes_account_balances(env, tmp_path):
     assert res.get("account_balances", 0) > 0                 # the live set pulled balances
     assert con.execute("SELECT COUNT(*) FROM account_balances").fetchone()[0] > 0
     con.close()
+
+
+def test_change_feed_reports_new_rows(env, tmp_path):
+    from datetime import datetime as _dt, timedelta as _td
+    cfg, _ = env
+    con = store.open_store(tmp_path / "ch.db")
+    now = _dt.now()
+    recent = now.isoformat(sep=" ", timespec="seconds")
+    with con:
+        con.execute("INSERT INTO accounts (account_code,account_name,account_group) VALUES ('C1','Cash','cash')")
+        con.execute("INSERT INTO ledger_entries (voucher_id,voucher_no,voucher_type,voucher_kind,voucher_date,entered_at,account_code,amount)"
+                    " VALUES ('v1','1','BR','receipt',?,?,'C1',250000)", (now.date().isoformat(), recent))
+        con.execute("INSERT INTO loom_production (prod_date,entered_at,loom_code,meters) VALUES (?,?,'L1',1840)", (now.date().isoformat(), recent))
+        con.execute("INSERT INTO items (item_code,item_name) VALUES ('I1','Reed')")
+        con.execute("INSERT INTO store_issues (doc_no,doc_date,entered_at,item_code,qty,issued_to) VALUES ('s1',?,?,'I1',1,'LOOM 31')",
+                    (now.date().isoformat(), recent))
+    since = (now - _td(hours=1)).isoformat(sep=" ", timespec="seconds")
+    res = web_data.changes(con, cfg, since)
+    kinds = {e["kind"] for e in res["events"]}
+    assert "cash" in kinds and "woven" in kinds and "store" in kinds
+    assert res["now"]
+    assert web_data.changes(con, cfg, "")["events"] == []      # first load (no since) never animates
+    con.close()
