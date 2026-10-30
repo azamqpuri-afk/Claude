@@ -329,13 +329,14 @@ FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
 # within a couple of seconds of each other; a stopped loom's sensor fitted on a running loom makes the scoreboard
 # count one loom twice, so both numbers stop and restart on the same second.
 # Same [sources.scoreboard] (MS Access OLMSDB_copy.mdb) as loom_monitor. Jet SQL rejects -- comments, so none here.
-# OPEN (still-stopped) stops: OLMS rewrites RCUR_TIME to the current poll time, so every open stop shares one
-# "restart" second. The check drops those live (any restart within a few seconds of the latest restart in the
-# data), so they never create false twins; the stop is evaluated once it has really closed.
+# OPEN (still-stopped) stops carry a NULL RCUR_TIME here and are excluded by the WHERE; the twin check also drops
+# any shared newest-second block as a safety net. RMACH_NO comes back as a FLOAT (6.0), so CInt() makes the loom
+# code match RTLSUM.PMACH and loom_monitor ('6', not '6.0'). RDATE is the SHIFT date (a night-shift stop after
+# midnight keeps the previous day's RDATE), which is right for the :since window; calendar logic uses stop_time.
 [entities.loom_stops]
 source = "scoreboard"
 sql = """
-SELECT RDATE AS stop_date, RMACH_NO AS loom_code, RSTOP_TIME AS stop_time, RCUR_TIME AS restart_time
+SELECT RDATE AS stop_date, CInt(RMACH_NO) AS loom_code, RSTOP_TIME AS stop_time, RCUR_TIME AS restart_time
 FROM LOOMSTAT WHERE RDATE >= :since AND RSTOP_TIME IS NOT NULL AND RCUR_TIME IS NOT NULL
 """
 

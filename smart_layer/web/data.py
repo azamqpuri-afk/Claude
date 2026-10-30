@@ -374,7 +374,9 @@ def _sync_health(con, cfg):
     from .. import store as _store
     rows = dict(con.execute("SELECT entity, MAX(synced_at) FROM sync_log GROUP BY entity"))
     live_at = max((rows[e] for e in _store.LIVE_ENTITIES if rows.get(e)), default=None)
-    daily_at = max((v for v in rows.values() if v), default=None)
+    # the FULL (daily) sync's freshness = the newest sync of an entity the live sync does NOT touch (ledgers,
+    # attendance, loans ...), so a running live sync never masks a stalled daily one on the header.
+    daily_at = max((v for e, v in rows.items() if e not in _store.LIVE_ENTITIES and v), default=None)
     s = cfg["sync"]
     live_limit = int(s.get("stale_live_minutes", 30))
     daily_limit = int(s.get("stale_daily_hours", 26))

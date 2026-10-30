@@ -95,11 +95,14 @@ def episodes(rows, t):
     ev.sort(key=lambda e: e[1])
     if not ev:
         return []
-    # OPEN (still-stopped) stops all carry the latest poll second as their "restart" - drop them so they never
-    # look like a twin; the stop is judged once it has really closed and a true restart time is written.
+    # OPEN (still-stopped) stops can all carry the latest poll second as their "restart" on some monitors, which
+    # would look like a twin. Drop that block ONLY when 3+ looms share the newest restart second (the tell-tale of
+    # a rewritten poll time); when just 1-2 looms sit at the newest second they are genuine just-restarted stops -
+    # keep them (and the next sync re-reads them anyway). Monitors that instead leave open stops NULL never hit this.
     poll = max(r for _, _, r in ev)
     open_s = float(t["open_stop_seconds"])
-    ev = [e for e in ev if (poll - e[2]).total_seconds() > open_s]
+    if len({e[0] for e in ev if (poll - e[2]).total_seconds() <= open_s}) >= 3:
+        ev = [e for e in ev if (poll - e[2]).total_seconds() > open_s]
     if not ev:
         return []
     times = {}                                           # loom -> sorted stop times (all stops, for the share)

@@ -274,7 +274,8 @@ ENTITIES += (
         "Raw per-stop log from a loom monitoring system (scoreboard / sensors): one row per loom stop, with the "
         "second it stopped and the second it restarted. Optional - only mills whose monitor exports stop timings "
         "map it. Feeds the sensor duplicate-timings (sensor-swap) check; a daily-aggregated monitor cannot.",
-        (C("stop_date", "DATE", "Shift / production date the stop belongs to (for the rolling sync window)", True),
+        (C("stop_date", "DATE", "Shift date the stop belongs to (the sync window key; a night-shift stop after "
+           "midnight keeps the shift's date, so it can differ from stop_time's calendar date - use stop_time for that)", True),
          C("loom_code", "TEXT", "Loom the stop is on (the monitor's own loom number / code)", True),
          C("stop_time", "DATETIME", "When the loom stopped (to the second)", True),
          C("restart_time", "DATETIME", "When the loom restarted (to the second)", True),

@@ -111,24 +111,29 @@ class App:
         from ..reports import delivery
         return delivery.read_file(self.cfg, name)
 
-    def sync_now(self):
-        """Run a live sync now, in the background (the 'Sync now' button). At most one sync runs at a time."""
+    def sync_now(self, full=False):
+        """Run a sync now, in the background (the 'Sync now' / 'Full sync' buttons). At most one runs at a time -
+        the lock is shared with kick_first_sync, so a manual click and the scheduled task never overlap."""
         with self.lock:
             if self._syncing:
                 return {"started": False, "busy": True}
             self._syncing = True
-        threading.Thread(target=self._do_live_sync, daemon=True).start()
-        return {"started": True}
+        threading.Thread(target=self._do_sync, args=(bool(full),), daemon=True).start()
+        return {"started": True, "full": bool(full)}
 
-    def _do_live_sync(self):
+    def _do_sync(self, full=False):
         try:
             from .. import erp as _erp
             mapping = _erp.Mapping(self.cfg.path(self.cfg["erp"]["mapping"]))
             e = _erp.ERP(*_erp.connect(self.cfg["erp"], self.cfg.base_dir), mapping, self.cfg["sources"], self.cfg.base_dir)
             con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
             try:
-                store.sync(con, e, int(self.cfg["sync"].get("live_days", 3)), entities=list(store.LIVE_ENTITIES),
-                           full_history=(), fabric_history=False, log=lambda *_: None)
+                if full:                                  # the deep daily sync: all history + month-end fabric
+                    store.sync(con, e, int(self.cfg["sync"]["history_days"]),
+                               full_history=self.cfg["sync"].get("full_history", store.FULL_HISTORY), log=lambda *_: None)
+                else:                                     # the light live sync: fast-changing entities, last few days
+                    store.sync(con, e, int(self.cfg["sync"].get("live_days", 3)), entities=list(store.LIVE_ENTITIES),
+                               full_history=(), fabric_history=False, log=lambda *_: None)
             finally:
                 con.close()
         except Exception:
@@ -553,11 +558,16 @@ def handler(app):
                 msg = st.message + (" Fetching the first data now - the dashboard will fill in shortly." if started else "")
                 return self._send(200 if st.allowed else 400, {"state": st.state, "message": msg,
                                                                "allowed": st.allowed, "first_sync": started})
-            if self.path == "/api/sync":                  # 'Sync now' button: run a live sync in the background
+            if self.path == "/api/sync":                  # 'Sync now' / 'Full sync' button: run in the background
                 from .. import licence
                 if not licence.status(app.cfg).allowed:
                     return self._send(403, {"error": "Licence: " + licence.status(app.cfg).message})
-                return self._send(200, app.sync_now())
+                try:
+                    n = min(int(self.headers.get("Content-Length", 0)), 1000)
+                    full = bool(json.loads(self.rfile.read(n) or b"{}").get("full"))
+                except Exception:
+                    full = False
+                return self._send(200, app.sync_now(full))
             if self.path == "/api/ack":                   # mark a Needs-attention finding read (or restore it)
                 from .. import licence
                 if not licence.status(app.cfg).allowed:

@@ -491,8 +491,9 @@ function render(){
   if(!D) return;
   $("#millName").textContent = D.company || "Mill";
   $("#subtitle").textContent = "by Azam Puri";
-  $("#asof").textContent = "as of " + dshort(D.as_of) + (D.synced_at? " · synced "+String(D.synced_at).slice(11,16) : "");
-  $("#asof").style.color = (D.sync && D.sync.stale) ? "var(--red)" : "";
+  var _s=D.sync||{};
+  $("#asof").textContent = "as of " + dshort(D.as_of) + (_s.live_at? " · live sync "+String(_s.live_at).slice(11,16) : (D.synced_at? " · synced "+String(D.synced_at).slice(11,16) : ""));
+  $("#asof").style.color = (_s.stale) ? "var(--red)" : "";
   renderSync();
   if($("#day") && !$("#day").value && D.as_of) $("#day").value = D.as_of;
   var k=D.kpis||{};
@@ -555,22 +556,27 @@ async function markRead(id, title, undo){
 function renderSync(){
   var el=$("#ov-sync"); if(!el) return;
   var s=D.sync||{};
-  var liveTxt = s.live_at ? ("live sync "+String(s.live_at).slice(11,16)+" ("+dshort(s.live_at)+")") : "no live sync yet";
   var dot = s.stale ? '<span style="color:var(--red);font-weight:700">●</span>' : '<span style="color:var(--green)">●</span>';
-  var warn = s.stale ? ` <b style="color:var(--red)">— data may be stale, last sync over ${s.live_stale? s.live_limit_min+" min":"the limit"} ago</b>` : "";
-  var btn = STATIC_DATA ? "" : `<button class="hbtn" id="ov-sync-btn" style="margin-left:8px">⟳ Sync now</button>`;
-  el.innerHTML = `${dot} ${esc(liveTxt)}${warn} ${btn}`;
-  var b=$("#ov-sync-btn"); if(b) b.onclick=syncNow;
+  var live = s.live_at ? ("Live "+String(s.live_at).slice(11,16)) : "Live —";
+  var full = s.daily_at ? ("Full "+dshort(s.daily_at)+" "+String(s.daily_at).slice(11,16)) : "Full —";
+  var liveC = s.live_stale ? ' style="color:var(--red)"' : '';
+  var fullC = s.daily_stale ? ' style="color:var(--red)"' : '';
+  var warn = s.stale ? ' <b style="color:var(--red)">— data may be stale</b>' : '';
+  var btns = STATIC_DATA ? "" : `<button class="hbtn" id="ov-sync-btn" style="margin-left:8px">⟳ Sync now</button> <button class="hbtn" id="ov-fullsync-btn" title="Deep sync of all history (slower)">⟳ Full sync</button>`;
+  el.innerHTML = `${dot} <span${liveC}>${esc(live)}</span> · <span${fullC}>${esc(full)}</span>${warn} ${btns}`;
+  var b=$("#ov-sync-btn"); if(b) b.onclick=()=>syncNow(false);
+  var fb=$("#ov-fullsync-btn"); if(fb) fb.onclick=()=>{ if(confirm("Run a full sync? This re-pulls all history from the ERP and can take a few minutes.")) syncNow(true); };
 }
-async function syncNow(){
-  var b=$("#ov-sync-btn"); if(b){ b.disabled=true; b.textContent="⟳ Syncing…"; }
+async function syncNow(full){
+  var sb=$("#ov-sync-btn"), fb=$("#ov-fullsync-btn");
+  if(sb) sb.disabled=true; if(fb) fb.disabled=true;
+  var b=full?fb:sb; if(b) b.textContent="⟳ Syncing…";
   try{
-    var r=await fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    var r=await fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({full:!!full})});
     var j=await r.json();
-    if(j.busy){ if(b){ b.textContent="⟳ Already syncing…"; } }
-    // give the background live sync a few seconds, then reload the dashboard data
-    setTimeout(load, 7000);
-  }catch(e){ if(b){ b.disabled=false; b.textContent="⟳ Sync now"; } }
+    if(j.busy && b){ b.textContent="⟳ Already syncing…"; }
+    setTimeout(load, full?20000:7000);             // let the background sync run, then refresh the page data
+  }catch(e){ if(sb){sb.disabled=false;sb.textContent="⟳ Sync now";} if(fb){fb.disabled=false;fb.textContent="⟳ Full sync";} }
 }
 
 /* ---------- store item issue history (drill-down) ---------- */
@@ -582,10 +588,14 @@ async function drawIssues(code, name, limit){
     var j=await (await fetch("api/store/issues?item="+encodeURIComponent(code)+"&limit="+limit)).json();
     var s=j.summary||{};
     var head=`<p class="muted" style="margin:0 0 8px">Last 90 days: ${num(s.slips)} issue slip(s), ${num(s.qty)} ${esc(j.unit||"")} issued. ${num(j.total)} issues on record.</p>`;
-    var rows=(j.rows||[]).map(r=>[dshort(r.date), esc(r.to||"—"),
-      (r.zero?`<span class="tag low">${num(r.qty)}</span>`:num(r.qty)), num(r.amount), esc(r.slip||""), esc(r.by||"")]);
+    // "Entered by" is hidden when it is empty or the same for every row (e.g. a shared ERP login); shown for mills that record real users
+    var bys=[...new Set((j.rows||[]).map(r=>String(r.by||"").trim()).filter(Boolean))];
+    var showBy = bys.length>1;
+    var cols=["Date","Issued to","Qty","Amount","Slip"]; if(showBy) cols.push("Entered by");
+    var rows=(j.rows||[]).map(function(r){ var a=[dshort(r.date), esc(r.to||"—"),
+      (r.zero?`<span class="tag low">${num(r.qty)}</span>`:num(r.qty)), num(r.amount), esc(r.slip||"")]; if(showBy) a.push(esc(r.by||"")); return a; });
     var more = j.more ? `<div style="padding:10px 2px"><button class="btn ghost" onclick="drawIssues('${esc(code)}','${esc((name||code)).replace(/'/g,"")}',100)">Show more</button></div>` : "";
-    $("#drawer-body").innerHTML=head+(rows.length?table(["Date","Issued to","Qty","Amount","Slip","Entered by"],rows,[2,3])+more:'<p class="muted">No issues on record for this item.</p>');
+    $("#drawer-body").innerHTML=head+(rows.length?table(cols,rows,[2,3])+more:'<p class="muted">No issues on record for this item.</p>');
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load issue history.</p>'; }
 }
 
