@@ -9,13 +9,14 @@ product on the standard model (so they work with any ERP); the rest are listed w
 |---|---|---|
 | 12, 13, 23, 27 daily production report / export, efficiency summary, month-end re-export | Daily production per loom (meters, efficiency, rejection), CSV/PDF; every sync re-pulls a rolling window so backdated corrections appear | `report production` |
 | 13, 14, 15, 16 quality history with contract rates | Production value: earnings per loom and contract (rate per meter or per pick) | `report value` |
-| 33, 34, 36, 39, 76 store stock check, zero-stock alert, vendor order list, PDF push | Stock status, new zero-stock push, draft reorder list (PDF) | `report stock` · `report zero --push` · `report reorder` |
+| 33, 34, 36, 39, 76 store stock check, zero-stock alert, vendor order list, PDF push | Whole store room (every item with stock or movement, searchable, click for issue history), new zero-stock push, draft reorder list, demand list (what to buy, on usage), item issue history | `report stock` · `report zero --push` · `report reorder` · `report demand` · Store tab |
 | 40, 41, closing_entries, merged_ledger | Monthly P&L by account head, balance summary, party balances | `report pnl` · `report balances` · `report parties` |
 | 45, 67 stores reconciliation, store journal by month | Ledger store consumption vs store issues per month | `report store-recon` |
 | 48, 50, 55, 57, 59 contract closing (owner's method), grand closings | Contract closing with the mill's own method (divisor, counts, rejection rule, basis, allowances, per-party/contract overrides, own formula), yarn groups for one yarn under two codes, party totals | `report closing` |
 | 52, 56 yarn & fabric data, party stock by date | Yarn in hand and at sizers per party/yarn; fabric stock per contract by grade with ageing | `report yarn-stock` · `report fabric-stock` |
 | 54, 58 pilferage checks | Weft issued vs needed per party and yarn, suspicious entries, sizing loss per sizer | `report pilferage` (+ daily audit) |
-| 60, 61, 62, 63, 64, 65, 75 beam register, sizer audit/ledger, backup alert, weekly beam report, correction list, sizer reconciliation | Beams on looms with days to finish (learned shrinkage), backup matching on contract/ends, phone alert, beam stock, empty beams per sizer and numbers not returned, overweave check | `report beams` · `report sizers` (+ daily audit) |
+| 60, 61, 62, 63, 64, 65, 75 beam register, sizer audit/ledger, backup alert, weekly beam report, correction list, sizer reconciliation | Beams on looms with days to finish (learned shrinkage), backup matching on contract/ends, phone alert, beam stock, empty beams per sizer and numbers not returned, overweave check; weekly beam report with days to finish by BOTH ERP and monitor rate (earlier wins) + finish date, per-loom-type warn window, PDF pushed Fridays | `report beams` · `report sizers` · `report weekly-beams` (+ daily audit) |
+| 77 sensor twin check | Sensor duplicate-timings (sensor-swap) check from the monitor's raw stop log: looms that stop AND restart on the same second, grouped into episodes, graded by an optional floor layout; runs 24/7 on every live sync, pushes once per confirmed episode, stale-data alert | `[sources.*]` + `loom_stops` mapping, `[sensor]` (daily + live audit) |
 | 70 ERP audit (daily / monthly) | Finance, store, weaving, yarn, beam, fabric, loom-monitor checks; ACTION / CONFIRMED / WATCH; learns the mill's habits; dismiss rules; push once | `audit` · `audit --month` |
 | 26 production entry snapshot diff; 70 issue-value drift | Entries changed after saving (issue qty/value, production meters, deletions) | daily `audit` |
 | 70 loom vs history | A loom's output far from its own usual | daily `audit` |
@@ -35,7 +36,6 @@ product on the standard model (so they work with any ERP); the rest are listed w
 | 66, 68, 69 audits of the accountant's closing workbooks | Read one accountant's own Excel layout - specific to that file; the product's closing replaces the workbook |
 | 71 photo agent | Needs the Dost gate app and its photos; possible later as an add-on per mill |
 | 72 approval folder check | Dost's Google Drive signing workflow |
-| 77 sensor twin check | Needs the scoreboard's second-by-second stop log; can be added for mills whose monitor provides one |
 | gate software checks inside 70 | Need the Dost gate app; another mill's gate system would need its own connector |
 | ERP backup checks inside 70 | Server housekeeping specific to Dost's IT |
 | old ERP (DOSTT) history | A second mapping for the old ERP can be added per mill when history before the current ERP is needed |

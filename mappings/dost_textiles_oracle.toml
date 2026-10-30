@@ -323,6 +323,22 @@ SELECT PDATE AS read_date, PMACH AS loom_code,
 FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
 """
 
+# Raw per-stop log (OLMS LOOMSTAT) as a second source, for the sensor duplicate-timings / sensor-swap check.
+# One row per loom stop: RMACH_NO = loom number, RSTOP_TIME = the second it stopped, RCUR_TIME = the second it
+# restarted. RDATE is the shift date (the sync window filter). The twin check pairs looms that stop AND restart
+# within a couple of seconds of each other; a stopped loom's sensor fitted on a running loom makes the scoreboard
+# count one loom twice, so both numbers stop and restart on the same second.
+# Same [sources.scoreboard] (MS Access OLMSDB_copy.mdb) as loom_monitor. Jet SQL rejects -- comments, so none here.
+# OPEN (still-stopped) stops: OLMS rewrites RCUR_TIME to the current poll time, so every open stop shares one
+# "restart" second. The check drops those live (any restart within a few seconds of the latest restart in the
+# data), so they never create false twins; the stop is evaluated once it has really closed.
+[entities.loom_stops]
+source = "scoreboard"
+sql = """
+SELECT RDATE AS stop_date, RMACH_NO AS loom_code, RSTOP_TIME AS stop_time, RCUR_TIME AS restart_time
+FROM LOOMSTAT WHERE RDATE >= :since AND RSTOP_TIME IS NOT NULL AND RCUR_TIME IS NOT NULL
+"""
+
 # ---------------------------------------------------------------------------------------------------------------
 # Payroll (separate PAYROLL schema, readable by the dostex login) and the gate register.
 # NOT YET RUN against the live database: run `python -m smart_layer check` on the server; it tests each entity

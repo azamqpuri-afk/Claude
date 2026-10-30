@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -221,6 +221,7 @@
       <button class="btn ghost" id="ov-att-btn" style="padding:2px 12px;display:none">Show</button>
     </div>
     <div class="strip" id="ov-attention" hidden></div>
+    <div class="asof" id="ov-sync" style="justify-content:flex-start;gap:10px"></div>
     <div class="sec">Money</div>
     <div class="grid g5" id="ov-money" style="margin-bottom:22px"></div>
     <div class="sec">The mill today</div>
@@ -266,8 +267,8 @@
   <!-- STORE ROOM -->
   <section class="pane" data-pane="store" hidden>
     <div class="subtabs" id="store-sub">
-      <button data-v="stock" aria-selected="true">Stock status</button>
-      <button data-v="reorder">Store demand</button>
+      <button data-v="stock" aria-selected="true">Store room</button>
+      <button data-v="demand">Store demand</button>
     </div>
     <div class="tools" id="store-tools"></div>
     <div id="store-out"></div>
@@ -347,14 +348,12 @@
       <div id="rep-edit"></div>
       <div class="tscroll" id="rep-out" style="padding:0 2px 8px"></div>
     </div>
-    <div class="card"><div class="hd"><h3>Browse data</h3>
-      <div class="tools" style="margin:0">
-        <label class="fld">Data set <select id="br-entity"></select></label>
-        <label class="fld">🔎 <input id="br-q" placeholder="Search"></label>
-      </div></div>
-      <div class="rep-sum" id="br-msg"></div>
-      <div class="tscroll" id="br-out"></div>
-      <div style="padding:10px 16px"><button class="btn ghost" id="br-more" style="display:none">Load more</button></div>
+    <div class="card"><div class="hd"><h3>Saved reports</h3>
+      <span class="count" id="rf-note">PDFs and CSVs saved on the server</span>
+      <span class="spacer" style="flex:1"></span>
+      <button class="btn ghost" id="rf-refresh">↻ Refresh</button></div>
+      <div class="rep-sum" id="rf-msg"></div>
+      <div class="tscroll" id="rf-out"></div>
     </div>
   </section>
 
@@ -493,6 +492,8 @@ function render(){
   $("#millName").textContent = D.company || "Mill";
   $("#subtitle").textContent = "by Azam Puri";
   $("#asof").textContent = "as of " + dshort(D.as_of) + (D.synced_at? " · synced "+String(D.synced_at).slice(11,16) : "");
+  $("#asof").style.color = (D.sync && D.sync.stale) ? "var(--red)" : "";
+  renderSync();
   if($("#day") && !$("#day").value && D.as_of) $("#day").value = D.as_of;
   var k=D.kpis||{};
   // attention - collapsible so it never covers the page
@@ -548,6 +549,44 @@ async function markRead(id, title, undo){
   try{ await fetch("api/ack",{method:"POST",headers:{"Content-Type":"application/json"},
        body:JSON.stringify({id:id, title:title||"", undo:!!undo})}); load(); }   // reload so counts + strip update
   catch(e){}
+}
+
+/* ---------- sync freshness + Sync now ---------- */
+function renderSync(){
+  var el=$("#ov-sync"); if(!el) return;
+  var s=D.sync||{};
+  var liveTxt = s.live_at ? ("live sync "+String(s.live_at).slice(11,16)+" ("+dshort(s.live_at)+")") : "no live sync yet";
+  var dot = s.stale ? '<span style="color:var(--red);font-weight:700">●</span>' : '<span style="color:var(--green)">●</span>';
+  var warn = s.stale ? ` <b style="color:var(--red)">— data may be stale, last sync over ${s.live_stale? s.live_limit_min+" min":"the limit"} ago</b>` : "";
+  var btn = STATIC_DATA ? "" : `<button class="hbtn" id="ov-sync-btn" style="margin-left:8px">⟳ Sync now</button>`;
+  el.innerHTML = `${dot} ${esc(liveTxt)}${warn} ${btn}`;
+  var b=$("#ov-sync-btn"); if(b) b.onclick=syncNow;
+}
+async function syncNow(){
+  var b=$("#ov-sync-btn"); if(b){ b.disabled=true; b.textContent="⟳ Syncing…"; }
+  try{
+    var r=await fetch("api/sync",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
+    var j=await r.json();
+    if(j.busy){ if(b){ b.textContent="⟳ Already syncing…"; } }
+    // give the background live sync a few seconds, then reload the dashboard data
+    setTimeout(load, 7000);
+  }catch(e){ if(b){ b.disabled=false; b.textContent="⟳ Sync now"; } }
+}
+
+/* ---------- store item issue history (drill-down) ---------- */
+async function drawIssues(code, name, limit){
+  limit = limit || 20;
+  openDrawer("📦 "+esc(name||code)+" — issue history",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see issue history.</p>'; return; }
+  try{
+    var j=await (await fetch("api/store/issues?item="+encodeURIComponent(code)+"&limit="+limit)).json();
+    var s=j.summary||{};
+    var head=`<p class="muted" style="margin:0 0 8px">Last 90 days: ${num(s.slips)} issue slip(s), ${num(s.qty)} ${esc(j.unit||"")} issued. ${num(j.total)} issues on record.</p>`;
+    var rows=(j.rows||[]).map(r=>[dshort(r.date), esc(r.to||"—"),
+      (r.zero?`<span class="tag low">${num(r.qty)}</span>`:num(r.qty)), num(r.amount), esc(r.slip||""), esc(r.by||"")]);
+    var more = j.more ? `<div style="padding:10px 2px"><button class="btn ghost" onclick="drawIssues('${esc(code)}','${esc((name||code)).replace(/'/g,"")}',100)">Show more</button></div>` : "";
+    $("#drawer-body").innerHTML=head+(rows.length?table(["Date","Issued to","Qty","Amount","Slip","Entered by"],rows,[2,3])+more:'<p class="muted">No issues on record for this item.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load issue history.</p>'; }
 }
 
 /* ---------- Overview drill-downs (drawer) ---------- */
@@ -815,10 +854,31 @@ function statusCell(v){ var s=String(v==null?"":v); var map={"OUT OF STOCK":"out
 var storeView="stock";
 $("#store-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{storeView=b.dataset.v;$("#store-sub").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x===b));loadStore();});
 function loadStore(){
-  $("#store-tools").innerHTML = storeView==="reorder"
-    ? SEARCH_BOX('#store-out','Find item…')+`<span class="countline" style="margin-left:10px">Items that ran out or fell below one month's use (90-day window). Order qty brings stock to one month.</span><span class="spacer" style="flex:1"></span><button class="btn" onclick="window.print()">🖨 Print</button><a class="btn ghost" href="api/report?name=reorder&fmt=pdf${dayq()}">⤓ PDF</a>`
-    : SEARCH_BOX('#store-out','Find item…')+`<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=stock&fmt=pdf${dayq()}">⤓ PDF</a>`;
-  loadReport(storeView, "#store-out", "#store-msg");
+  if(storeView==="demand"){
+    $("#store-tools").innerHTML = SEARCH_BOX('#store-out','Find item…')+`<span class="countline" style="margin-left:10px">Items to buy, on usage not the ERP's reorder levels: out &amp; still used, below 90-day average use, or a demand slip with no stock.</span><span class="spacer" style="flex:1"></span><button class="btn" onclick="window.print()">🖨 Print</button><a class="btn ghost" href="api/report?name=demand&fmt=pdf${dayq()}">⤓ PDF</a>`;
+    loadReport("demand", "#store-out", "#store-msg");
+  } else {
+    renderStoreRoom();
+  }
+}
+// The whole store room (BUG: it used to show only out/low items issued in the last window). Every item with stock
+// or any movement, searchable, each one clickable for its issue history. Status/avg still use the window.
+function renderStoreRoom(){
+  $("#store-tools").innerHTML = SEARCH_BOX('#store-out','Find item or code…')+`<span class="countline" style="margin-left:10px">Every item with stock or movement. Click an item for its issue history. Status &amp; average use are over the last ${(D&&D.reports_window)||90} days.</span><span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=stock&fmt=pdf${dayq()}">⤓ PDF</a>`;
+  var items=(D&&D.stock)||[];
+  if(!items.length){ $("#store-out").innerHTML=""; $("#store-msg").textContent="No store items."; return; }
+  var cols=["Status","Item","Code","Unit","Stock","Avg / month","Last issue","Last receipt"];
+  var rows=items.map(r=>[statusCell(r.status), esc(r.item), esc(r.code), esc(r.unit||""),
+    num(r.stock), (r.recent_use?num(r.avg_month):'<span class="muted">no recent use</span>'),
+    r.last_issue?dshort(r.last_issue):"—", r.last_receipt?dshort(r.last_receipt):"—"]);
+  $("#store-out").innerHTML=`<div class="card"><div class="tscroll">`+
+    `<table><thead><tr>`+cols.map((c,i)=>`<th class="${[4,5].indexOf(i)>=0?'num':''}">${esc(c)}</th>`).join("")+`</tr></thead><tbody>`+
+    rows.map((r,ri)=>`<tr class="clickrow" data-code="${esc(items[ri].code)}" data-name="${esc(items[ri].item)}" style="cursor:pointer">`+
+      r.map((c,i)=>`<td class="${[4,5].indexOf(i)>=0?'num':''}">${c}</td>`).join("")+`</tr>`).join("")+
+    `</tbody></table></div></div>`;
+  var n={}; items.forEach(r=>n[r.status]=(n[r.status]||0)+1);
+  $("#store-msg").textContent = `${items.length} items — ${n['OUT OF STOCK']||0} out of stock, ${n['LOW STOCK']||0} low, ${n['IN STOCK']||0} in stock, ${n['IDLE']||0} idle.`;
+  $("#store-out").querySelectorAll(".clickrow").forEach(tr=>tr.onclick=()=>drawIssues(tr.dataset.code, tr.dataset.name));
 }
 function dayq(){ var d=$("#day").value; return d?("&date="+d):""; }
 // live client-side filter over a rendered report table (Store, Payroll)
@@ -910,7 +970,6 @@ async function initReports(){
   if(STATIC_DATA) return;
   try{ var j=await (await fetch("api/reports")).json(); repRange={}; j.reports.forEach(r=>repRange[r.name]=!!r.range);
        $("#rep-name").innerHTML=j.reports.map(r=>`<option value="${esc(r.name)}">${esc(r.label)}</option>`).join(""); }catch(e){}
-  try{ var e=await (await fetch("api/entities")).json(); $("#br-entity").innerHTML=e.entities.map(x=>`<option value="${x.name}">${esc(x.label)} (${x.rows.toLocaleString()})</option>`).join(""); }catch(e){}
   syncFromBox();
 }
 function syncFromBox(){   // From only applies to range reports; disable it otherwise so it is not silently ignored
@@ -1030,11 +1089,22 @@ function clearPartyCount(code){
   if(!party) return;
   postClosingSave({counts:{}, clear:[code], who:$("#cc-who").value.trim(), party:party, scope:"party"}, $("#cc-msg"));
 }
-var brTotal=0;
-async function brRun(){ brTotal=await browseInto($("#br-entity").value,$("#br-q").value.trim(),"#br-out","#br-msg",0,false); $("#br-more").style.display=brTotal>200?"":"none"; }
-$("#br-entity").onchange=brRun;
-var brT; $("#br-q").addEventListener("input",()=>{clearTimeout(brT);brT=setTimeout(brRun,300);});
-$("#br-more").onclick=async()=>{ var shown=$("#br-out").querySelectorAll("tbody tr").length; await browseInto($("#br-entity").value,$("#br-q").value.trim(),"#br-out","#br-msg",shown,true); if($("#br-out").querySelectorAll("tbody tr").length>=brTotal)$("#br-more").style.display="none"; };
+/* ---------- saved report files (download list) ---------- */
+function fsize(n){ n=+n||0; return n>=1048576?(n/1048576).toFixed(1)+" MB":n>=1024?Math.round(n/1024)+" KB":n+" B"; }
+async function loadSavedFiles(){
+  if(STATIC_DATA){ $("#rf-msg").textContent="Open from the server to see saved reports."; return; }
+  $("#rf-msg").textContent="Loading…"; $("#rf-out").innerHTML="";
+  try{
+    var j=await (await fetch("api/reports/files")).json();
+    var files=j.files||[];
+    $("#rf-note").textContent = j.folder ? ("saved in "+j.folder) : "PDFs and CSVs saved on the server";
+    if(!files.length){ $("#rf-msg").textContent="No saved reports yet. Reports you push or save appear here."; return; }
+    $("#rf-msg").textContent = files.length+" file(s)";
+    var rows=files.map(f=>[esc(f.modified), `<a href="api/reports/file?name=${encodeURIComponent(f.name)}">${esc(f.name)}</a>`, f.kind.toUpperCase(), fsize(f.size)]);
+    $("#rf-out").innerHTML=`<div class="card" style="margin:0"><div class="tscroll">`+table(["When","File","Type","Size"],rows,[3])+`</div></div>`;
+  }catch(e){ $("#rf-msg").textContent="Could not load saved reports."; }
+}
+$("#rf-refresh").onclick=loadSavedFiles;
 
 /* ---------- tabs ---------- */
 var curTab="overview";
@@ -1051,7 +1121,7 @@ function setTab(name){
     if(name==="yf") loadYF();
     if(name==="payroll"){ initPay(); loadPay(); }
     if(name==="gate") initGate();
-    if(name==="reports"){ initReports().then(()=>{ if($("#rep-name").value) loadReportNamed($("#rep-name").value); brRun(); }); }
+    if(name==="reports"){ initReports().then(()=>{ if($("#rep-name").value) loadReportNamed($("#rep-name").value); loadSavedFiles(); }); }
   }
   applyFilter();
 }

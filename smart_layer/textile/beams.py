@@ -23,7 +23,19 @@ from ..reports import Report
 
 DEFAULTS = {"warn_days": 15, "urgent_days": 5, "rate_days": 30, "ends_tolerance": 5, "default_shrinkage_pct": 7,
             "sizer_return_days": 30, "own_beam_sizers": [], "beam_aliases": {}, "ignore_beams": [], "empty_age_out_days": 120,
-            "shrink_min_pct": 1, "shrink_max_pct": 15}   # real shrinkage is ~1-12% by quality; outside = cut/on-loom beam
+            "shrink_min_pct": 1, "shrink_max_pct": 15,    # real shrinkage is ~1-12% by quality; outside = cut/on-loom beam
+            "monitor_rate_days": 14,                      # loom-monitor meters/day window, as a second days-to-finish
+            "warn_days_by_type": {}}                      # per loom type, e.g. {VA = 7, AIRJET = 7}; matched in the loom name
+
+
+def warn_days_for(loom_name, t):
+    """Days-ahead alert window for a loom, by its type. A key of warn_days_by_type found in the loom name (e.g. 'VA',
+    'AIRJET') wins - fast looms eat a beam quicker, so they warn sooner; otherwise the default warn_days."""
+    name = str(loom_name or "").upper()
+    for key, days in (t.get("warn_days_by_type") or {}).items():
+        if str(key).upper() in name:
+            return float(days)
+    return float(t["warn_days"])
 
 
 def settings(cfg):
@@ -94,6 +106,12 @@ def beams_on_looms(con, cfg, as_of=None):
     since = (as_of - timedelta(days=int(t["rate_days"]))).isoformat()
     rate = {loom: (m or 0) / int(t["rate_days"]) for loom, m in con.execute(
         "SELECT loom_code, SUM(meters) FROM loom_production WHERE prod_date > ? AND prod_date <= ? GROUP BY loom_code", (since, d))}
+    # a second daily rate from the loom monitor (scoreboard), over its own shorter window, used as an independent
+    # days-to-finish; where both exist the beam report takes the EARLIER finish of the two.
+    mdays = int(t["monitor_rate_days"])
+    msince = (as_of - timedelta(days=mdays)).isoformat()
+    mon_rate = {loom: (m or 0) / mdays for loom, m in con.execute(
+        "SELECT loom_code, SUM(meters) FROM loom_monitor WHERE read_date > ? AND read_date <= ? GROUP BY loom_code", (msince, d))}
     last_entry = dict(con.execute("SELECT loom_code, MAX(prod_date) FROM loom_production WHERE prod_date <= ? GROUP BY loom_code", (d,)))
     names = dict(con.execute("SELECT loom_code, loom_name FROM looms"))
     rows = []
@@ -116,10 +134,16 @@ def beams_on_looms(con, cfg, as_of=None):
             shrink = mill
         to_come = max(0.0, (length or 0) * (1 - shrink) - woven) if length else None
         r = rate.get(loom, 0)
+        mr = mon_rate.get(loom, 0)
         since_entry = (as_of - date.fromisoformat(last_entry[loom])).days if last_entry.get(loom) else 0
-        days = max(0.0, to_come / r - since_entry) if (to_come is not None and r > 0) else None
+        days_erp = max(0.0, to_come / r - since_entry) if (to_come is not None and r > 0) else None
+        days_mon = max(0.0, to_come / mr - since_entry) if (to_come is not None and mr > 0) else None
+        have = [x for x in (days_erp, days_mon) if x is not None]
+        days = min(have) if have else None               # the EARLIER finish of the two rates
+        finish = (as_of + timedelta(days=round(days))).isoformat() if days is not None else None
         rows.append(dict(loom=loom, loom_name=names.get(loom, loom), beam=beam, set_no=set_no, contract=cno, ends=ends,
-                         set_length=length, woven=woven, shrinkage=shrink, to_come=to_come, rate=r, days=days,
+                         set_length=length, woven=woven, shrinkage=shrink, to_come=to_come, rate=r, mon_rate=mr,
+                         days=days, days_erp=days_erp, days_mon=days_mon, finish=finish,
                          last_entry=last_entry.get(loom), over=bool(length and woven > 1.02 * length),
                          backup=None))
     # backups: sized beams waiting, matched on contract, else ends within tolerance; earliest-finishing looms first
@@ -155,6 +179,44 @@ def beam_report(con, cfg, as_of=None):
     return Report(f"Beams on looms - {as_of:%d-%b-%Y}",
                   ["Loom", "Beam", "Contract", "Set m", "Woven m", "Shrinkage", "Fabric to come m", "m / day", "Days left",
                    "Backup beam", "Note"], out, summary)
+
+
+def weekly_beam_report(con, cfg, as_of=None):
+    """The weekly beam report: every beam on a loom with fabric still to come and days to finish by BOTH the ERP
+    rate and the loom-monitor rate (the earlier wins), the finish date, and whether a sized backup of the same ends
+    is waiting. Looms ending within their type's warn window with no backup are flagged. Summary lines give where
+    all the beams are (on looms / sized waiting / empty / at sizers). Saved as a PDF and pushed weekly."""
+    as_of = as_of or date.today()
+    t = settings(cfg)
+    rows = beams_on_looms(con, cfg, as_of)
+    quality = {c: q for c, q in con.execute("SELECT contract_no, quality FROM contracts")}
+    fd = lambda s: date.fromisoformat(str(s)[:10]).strftime("%d-%b") if s else "-"   # noqa: E731
+    alert = [r for r in rows if r["days"] is not None and r["days"] <= warn_days_for(r["loom_name"], t) and not r["backup"] and not r["over"]]
+    out = []
+    for r in rows:
+        b = r["backup"]
+        ending = r in alert
+        out.append([r["loom_name"], r["beam"], r["contract"], quality.get(r["contract"]),
+                    round(r["set_length"]) if r["set_length"] else None, round(r["woven"]),
+                    round(r["to_come"]) if r["to_come"] is not None else None,
+                    round(r["rate"]), round(r["days_erp"], 1) if r["days_erp"] is not None else None,
+                    round(r["mon_rate"]) if r["mon_rate"] else None, round(r["days_mon"], 1) if r["days_mon"] is not None else None,
+                    round(r["days"], 1) if r["days"] is not None else None, fd(r["finish"]),
+                    f"{b['beam']} (set {b['set_no'] or '?'})" if b else ("NONE" if ending else "-"),
+                    "woven more than the beam holds" if r["over"] else ("ending soon, no backup" if ending else "")])
+    stock = dict(con.execute("SELECT status, COUNT(*) FROM beams GROUP BY status"))
+    at_sizer = con.execute("SELECT COALESCE(SUM(CASE WHEN beams > 0 THEN beams ELSE 0 END), 0) FROM empty_beam_stock").fetchone()[0] or 0
+    summary = [f"{len(rows)} beams on looms; {len(alert)} finish within their alert window with no sized beam of the "
+               f"same ends waiting to replace them.",
+               f"Where the beams are: {stock.get('sized_waiting', 0)} sized and waiting, "
+               f"{stock.get('empty_in_mill', 0)} empty in the mill, {round(at_sizer)} empty at sizers.",
+               "Days to finish is the EARLIER of the ERP rate (last %d days of production) and the loom-monitor rate "
+               "(last %d days); the finish date uses it." % (int(t["rate_days"]), int(t["monitor_rate_days"]))]
+    if alert:
+        summary.append("Ending soon with no backup: " + ", ".join(f"{r['loom_name']} ({r['days']:.0f}d)" for r in alert) + ".")
+    return Report(f"Weekly beam report - {as_of:%d-%b-%Y}",
+                  ["Loom", "Beam", "Contract", "Quality", "Set m", "Woven m", "To come m", "ERP m/day", "Days (ERP)",
+                   "Mon m/day", "Days (mon)", "Days left", "Finish", "Backup beam", "Note"], out, summary)
 
 
 def sizer_ledger(con, cfg, as_of=None):

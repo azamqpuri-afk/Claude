@@ -4,7 +4,7 @@ Works for any mill: it reads only the standard entities.
 """
 
 import calendar
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 
 from .. import PRODUCT, audit
 from ..reports.production import EFF_AGG
@@ -267,14 +267,16 @@ def build(con, cfg, as_of=None):
         except Exception:
             pass                                           # a read-only / busy store (e.g. cloud view) just keeps them
 
-    # stock
-    from ..reports.stock import _in_stock_index, _similar_in_stock
+    # stock: the KPIs count only actionable (recently-used) out/low items; the Store tab lists the WHOLE store room
+    # (every item with stock or any movement), searchable, with each item's last issue and last receipt.
+    from ..reports.stock import _in_stock_index, _similar_in_stock, store_room_rows
     items = _status_rows(con, as_of, int(cfg["reports"]["tracked_issue_days"]))
     pos = _in_stock_index(con)
     stock = [{"status": r["status"], "item": r["item_name"], "code": r["item_code"], "unit": r["unit"],
-              "stock": r["stock"], "avg_month": round(r["avg_month"], 1),
-              "similar": _similar_in_stock(pos, r["item_code"], r["item_name"])}
-             for r in items if r["status"] != "IN STOCK"]
+              "stock": round(r["stock"], 2), "avg_month": round(r["avg_month"], 1), "recent_use": r["recent_use"],
+              "last_issue": r["last_issue"], "last_receipt": r["last_receipt"],
+              "similar": (_similar_in_stock(pos, r["item_code"], r["item_name"]) if r["status"] in ("OUT OF STOCK", "LOW STOCK") else [])}
+             for r in store_room_rows(con, cfg, as_of)]
 
     # yarn
     crows = closing.contract_rows(con, Method(cfg["closing"]), as_of)
@@ -330,6 +332,7 @@ def build(con, cfg, as_of=None):
     return {
         "product": PRODUCT, "company": cfg["company"]["name"], "currency": cur, "as_of": d,
         "synced_at": _one(con, "SELECT MAX(synced_at) FROM sync_log") or None,
+        "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "kpis": {
             "meters": round(today[1] or 0) if today else 0,
             "dispatched_month": round(disp_month or 0), "woven_month": round(woven_month or 0),
@@ -362,6 +365,33 @@ def build(con, cfg, as_of=None):
         "weaving": _weaving(con, as_of),
         "yarn_fabric": _yarn_fabric(con, cfg, as_of),
     }
+
+
+def _sync_health(con, cfg):
+    """Freshness of the data for the dashboard header: when the live sync and the daily sync last ran, and whether
+    either is overdue. The dashboard shows 'Last synced ...' in red when stale, so a stuck Task Scheduler (the
+    tasks silently stop) is noticed at a glance instead of by chance."""
+    from .. import store as _store
+    rows = dict(con.execute("SELECT entity, MAX(synced_at) FROM sync_log GROUP BY entity"))
+    live_at = max((rows[e] for e in _store.LIVE_ENTITIES if rows.get(e)), default=None)
+    daily_at = max((v for v in rows.values() if v), default=None)
+    s = cfg["sync"]
+    live_limit = int(s.get("stale_live_minutes", 30))
+    daily_limit = int(s.get("stale_daily_hours", 26))
+
+    def _age_min(ts):
+        if not ts:
+            return None
+        try:
+            return (datetime.now() - datetime.fromisoformat(str(ts)[:19])).total_seconds() / 60
+        except ValueError:
+            return None
+    live_age, daily_age = _age_min(live_at), _age_min(daily_at)
+    live_stale = live_age is None or live_age > live_limit
+    daily_stale = daily_age is None or daily_age > daily_limit * 60
+    return {"live_at": live_at, "daily_at": daily_at, "live_stale": live_stale, "daily_stale": daily_stale,
+            "live_limit_min": live_limit, "daily_limit_h": daily_limit,
+            "stale": bool(live_stale or daily_stale)}
 
 
 def _beam_stock(con, cfg, as_of=None):

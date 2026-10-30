@@ -270,6 +270,19 @@ ENTITIES += (
         date_column="read_date",
     ),
     Entity(
+        "loom_stops",
+        "Raw per-stop log from a loom monitoring system (scoreboard / sensors): one row per loom stop, with the "
+        "second it stopped and the second it restarted. Optional - only mills whose monitor exports stop timings "
+        "map it. Feeds the sensor duplicate-timings (sensor-swap) check; a daily-aggregated monitor cannot.",
+        (C("stop_date", "DATE", "Shift / production date the stop belongs to (for the rolling sync window)", True),
+         C("loom_code", "TEXT", "Loom the stop is on (the monitor's own loom number / code)", True),
+         C("stop_time", "DATETIME", "When the loom stopped (to the second)", True),
+         C("restart_time", "DATETIME", "When the loom restarted (to the second)", True),
+         C("shift", "TEXT", "Shift, if the monitor records it"),
+         C("reason", "TEXT", "Stop reason / code, if the monitor records it")),
+        date_column="stop_date",
+    ),
+    Entity(
         "yarn_stock",
         "Count-wise loose-yarn stock on hand, as a snapshot at sync time. 'weft' = the mill's own loose yarn; "
         "'sizing' = yarn out at a sizing party (sent minus received, plus the sizer's opening). Quantities are net "

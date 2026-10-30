@@ -16,7 +16,8 @@ SmartLayer.exe report beams --csv --pdf >> "%LOG%" 2>&1
 for /f %%d in ('powershell -NoProfile -Command "(Get-Date).DayOfWeek"') do set DOW=%%d
 for /f %%d in ('powershell -NoProfile -Command "(Get-Date).Day"') do set DOM=%%d
 if "%DOW%"=="Friday" (
-  for %%r in (stock reorder closing pilferage sizers yarn-stock fabric-stock) do SmartLayer.exe report %%r --csv --pdf >> "%LOG%" 2>&1
+  for %%r in (stock reorder demand closing pilferage sizers yarn-stock fabric-stock) do SmartLayer.exe report %%r --csv --pdf >> "%LOG%" 2>&1
+  SmartLayer.exe report weekly-beams --pdf --push >> "%LOG%" 2>&1
 )
 if "%DOM%"=="1" (
   for %%r in (pnl balances parties store-recon) do SmartLayer.exe report %%r --csv --pdf >> "%LOG%" 2>&1

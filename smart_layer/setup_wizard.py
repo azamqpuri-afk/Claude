@@ -244,7 +244,11 @@ history_days = 400
 [reports]
 tracked_issue_days = 60
 reorder_cover_months = 2
-output_dir = "output"
+# Where saved reports (PDF/CSV) are written. Leave blank for the per-machine default
+# (Windows: C:\\ProgramData\\Smart Layer\\output). Point it at a synced OneDrive / Google Drive
+# for desktop folder to get the reports in the cloud - Smart Layer itself uses no cloud API.
+output_dir = ""
+retention_weeks = 26
 
 [audit]
 large_payment = 500000

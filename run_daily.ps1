@@ -32,9 +32,11 @@ Run @("report", "zero", "--push") | Out-Null
 Run @("report", "production", "--csv", "--pdf") | Out-Null
 Run @("report", "beams", "--csv", "--pdf") | Out-Null
 if ((Get-Date).DayOfWeek -eq "Friday") {
-    foreach ($r in "stock", "reorder", "closing", "pilferage", "sizers", "yarn-stock", "fabric-stock") {
+    foreach ($r in "stock", "reorder", "demand", "closing", "pilferage", "sizers", "yarn-stock", "fabric-stock") {
         Run @("report", $r, "--csv", "--pdf") | Out-Null
     }
+    # the weekly beam report is saved AND pushed (the PDF is attached to the ntfy alert so it reaches the owner's phone)
+    Run @("report", "weekly-beams", "--pdf", "--push") | Out-Null
 }
 if ((Get-Date).Day -eq 1) {
     foreach ($r in "pnl", "balances", "parties", "store-recon") { Run @("report", $r, "--csv", "--pdf") | Out-Null }

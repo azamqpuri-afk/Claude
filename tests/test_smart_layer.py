@@ -988,3 +988,133 @@ def test_finance_endpoints(env):
     day = con.execute("SELECT MAX(voucher_date) FROM ledger_entries WHERE voucher_kind <> 'opening'").fetchone()[0]
     dd = app.fin_daily(date.fromisoformat(day))
     assert dd["totals"]["debit"] > 0 and dd["totals"]["credit"] > 0
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# v0.13: sensor twin check, store room / demand / issue history, weekly beams, report delivery, sync freshness
+# ---------------------------------------------------------------------------------------------------------------
+from datetime import datetime as _dt, timedelta as _td  # noqa: E402
+
+from smart_layer.audit import sensor as _sensor  # noqa: E402
+from smart_layer.reports import delivery as _delivery  # noqa: E402
+from smart_layer.textile import beams as _beams  # noqa: E402
+
+
+def _twin_rows(base, n=6, a="2", b="4", gap_sec=1):
+    """n twin stops of looms a & b: each stops together and restarts together (within a second)."""
+    rows = []
+    for i in range(n):
+        t = base + _td(minutes=3 * i)
+        rows.append((a, t.isoformat(sep=" "), (t + _td(seconds=40)).isoformat(sep=" ")))
+        rows.append((b, (t + _td(seconds=gap_sec)).isoformat(sep=" "), (t + _td(seconds=40 + gap_sec)).isoformat(sep=" ")))
+    return rows
+
+
+def test_sensor_episodes_confirms_twin_no_layout():
+    base = _dt(2026, 10, 2, 20, 0, 0)
+    rows = _twin_rows(base, 6)
+    rows.append(("9", (base + _td(hours=2)).isoformat(sep=" "), (base + _td(hours=2, seconds=3)).isoformat(sep=" ")))
+    eps = _sensor.episodes(rows, {**_sensor.DEFAULTS})
+    conf = [e for e in eps if e["confirmed"]]
+    assert conf and {conf[0]["a"], conf[0]["b"]} == {"2", "4"} and conf[0]["twins"] >= 5
+    assert conf[0]["near"] == "unknown"                       # no layout -> graded on timing alone
+
+
+def test_sensor_episodes_layout_drops_far_pairs():
+    base = _dt(2026, 10, 2, 20, 0, 0)
+    # looms 2 & 4 neighbours in shed 1; loom 20 is in shed 2 (far from 2)
+    t = {**_sensor.DEFAULTS, "sheds": {"1": {"columns": [[2, 4, 6, 8], [1, 3, 5, 7]]}, "2": {"columns": [[20, 22], [19, 21]]}}}
+    near = _sensor.episodes(_twin_rows(base, 6, "2", "4"), t)
+    assert any(e["confirmed"] and e["near"] in ("neighbours", "near") for e in near)
+    far = _sensor.episodes(_twin_rows(base, 6, "2", "20"), t)
+    assert far and all(not e["confirmed"] and e["near"] == "far" for e in far)   # far pair never confirmed
+
+
+def test_sensor_run_pushes_confirmed_and_stale(env, tmp_path):
+    cfg, _ = env
+    con = store.open_store(tmp_path / "sensor_store.db")
+    try:
+        con.executemany("INSERT INTO looms (loom_code, loom_name) VALUES (?, ?)", [("2", "LOOM # 2"), ("4", "LOOM # 4")])
+        base = _dt.now() - _td(minutes=40)                    # recent, so NOT stale
+        rows = [(r[1][:10], r[0], r[1], r[2]) for r in _twin_rows(base, 6)]
+        con.executemany("INSERT INTO loom_stops (stop_date, loom_code, stop_time, restart_time) VALUES (?, ?, ?, ?)", rows)
+        con.commit()
+        a = audit.run(con, cfg, END)
+        assert any(f.section == "Looms" and f.key.startswith("sensor-") and f.severity == "ACTION"
+                   and not f.key.startswith("sensor-stale") for f in a.findings)
+        # urgent, so the live 5-minute run pushes it
+        assert any(f.key.startswith("sensor-") for f in a.new_alerts(urgent_only=True))
+    finally:
+        con.close()
+    # a store whose newest stop is old -> a stale ACTION
+    con2 = store.open_store(tmp_path / "stale_store.db")
+    try:
+        old = _dt.now() - _td(days=3)
+        con2.execute("INSERT INTO loom_stops (stop_date, loom_code, stop_time, restart_time) VALUES (?, ?, ?, ?)",
+                     (old.date().isoformat(), "2", old.isoformat(sep=" "), (old + _td(seconds=5)).isoformat(sep=" ")))
+        con2.commit()
+        a2 = audit.run(con2, cfg, END)
+        assert any(f.key.startswith("sensor-stale") and f.severity == "ACTION" for f in a2.findings)
+    finally:
+        con2.close()
+
+
+def test_store_room_shows_all_items_not_just_out_low(env):
+    cfg, con = env
+    room = stock.store_room_rows(con, cfg, END)
+    statuses = {r["status"] for r in room}
+    assert "IN STOCK" in statuses                              # the whole room, not only out/low
+    # more items than the out/low-in-window list the store tab used to show
+    outlow = [r for r in stock._status_rows(con, END, int(cfg["reports"]["tracked_issue_days"]))
+              if r["status"] != "IN STOCK"]
+    assert len(room) > len(outlow)
+    assert all("last_issue" in r and "last_receipt" in r for r in room)
+
+
+def test_demand_report_lists_items_with_reasons(env):
+    cfg, con = env
+    rep = stock.demand_list(con, cfg, END)
+    assert "Why listed" in rep.columns
+    why = rep.columns.index("Why listed")
+    assert rep.rows and all(r[why] for r in rep.rows)          # every listed item has a reason
+
+
+def test_issue_history_newest_first(env):
+    cfg, con = env
+    code = con.execute("SELECT item_code FROM store_issues GROUP BY item_code ORDER BY COUNT(*) DESC LIMIT 1").fetchone()[0]
+    h = stock.issue_history(con, code, 20)
+    assert h["item_code"] == code and h["rows"]
+    dates = [r["date"] for r in h["rows"] if r["date"]]
+    assert dates == sorted(dates, reverse=True)               # newest first
+    assert h["summary"]["days"] == 90
+
+
+def test_weekly_beam_report_has_both_rates(env):
+    cfg, con = env
+    rep = _beams.weekly_beam_report(con, cfg, END)
+    assert "Days (ERP)" in rep.columns and "Days (mon)" in rep.columns and "Finish" in rep.columns
+
+
+def test_report_delivery_saves_lists_and_prunes(env, tmp_path):
+    cfg, con = env
+    cfg.data["reports"]["output_dir"] = str(tmp_path / "out")
+    rep = report_registry.build(con, cfg, "demand")
+    p = _delivery.save(cfg, rep, "demand", "2026-10-02")
+    assert p.exists() and p.suffix == ".pdf"
+    files = _delivery.listing(cfg)
+    assert any(f["name"] == p.name for f in files)
+    assert _delivery.read_file(cfg, p.name) and _delivery.read_file(cfg, "../config.toml") is None
+    # retention: make the file old, then prune
+    import os
+    old = _dt.now().timestamp() - 400 * 86400
+    os.utime(p, (old, old))
+    cfg.data["reports"]["retention_weeks"] = 26
+    assert _delivery.prune(cfg) >= 1 and not p.exists()
+
+
+def test_sync_health_flags_stale(env):
+    cfg, con = env
+    h = web_data._sync_health(con, cfg)
+    assert "live_stale" in h and "daily_stale" in h
+    # the env's last sync time is 'now' at build, so it should be fresh at test time
+    assert h["live_at"] is not None

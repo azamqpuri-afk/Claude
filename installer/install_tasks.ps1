@@ -15,13 +15,27 @@ Register-ScheduledTask -TaskName "Smart Layer Daily" -Action $daily -Principal $
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 3)) | Out-Null
 
 # Live sync: a light pull of the fast-changing weaving data every 5 minutes, so the dashboard stays current.
+# The repetition must be INDEFINITE. A bounded RepetitionDuration such as (New-TimeSpan -Days 3650) silently
+# overflows when converted to the Task Scheduler XML and registers as only ~9 days, after which the live sync
+# stops for good. [TimeSpan]::MaxValue registers as an unbounded (indefinite) duration; we assert it below.
 $live = New-ScheduledTaskAction -Execute "$AppDir\run_live.cmd" -WorkingDirectory $AppDir
 $liveTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5) `
-    -RepetitionDuration (New-TimeSpan -Days 3650)
+    -RepetitionDuration ([TimeSpan]::MaxValue)
 $liveSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 4) `
     -MultipleInstances IgnoreNew
 Register-ScheduledTask -TaskName "Smart Layer Live" -Action $live -Principal $principal -Force `
     -Trigger $liveTrigger -Settings $liveSettings | Out-Null
+
+# Assert the repetition really registered as indefinite (guard against the overflow). If a bounded duration slipped
+# through, clear it in place so the live sync never stops.
+try {
+    $lt = Get-ScheduledTask -TaskName "Smart Layer Live"
+    if ($lt.Triggers[0].Repetition.Duration) {
+        $lt.Triggers[0].Repetition.Duration = ""          # "" = repeat indefinitely
+        Set-ScheduledTask -TaskName "Smart Layer Live" -Trigger $lt.Triggers[0] | Out-Null
+        Write-Host "Smart Layer Live: repetition duration was bounded; reset to indefinite."
+    }
+} catch { Write-Host "Could not verify the live-sync repetition: $_" }
 
 $dash = New-ScheduledTaskAction -Execute "$AppDir\run_dashboard.cmd" -WorkingDirectory $AppDir
 Register-ScheduledTask -TaskName "Smart Layer Dashboard" -Action $dash -Principal $principal -Force `

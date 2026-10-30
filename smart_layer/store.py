@@ -71,7 +71,8 @@ def create(con):
                  ("ledger_entries", "voucher_id"), ("ledger_entries", "account_code"),
                  ("loom_production", "loom_code"), ("loom_production", "contract_no"),
                  ("yarn_movements", "contract_no"), ("fabric_dispatches", "contract_no"),
-                 ("beam_movements", "beam_no"), ("loom_monitor", "loom_code")):
+                 ("beam_movements", "beam_no"), ("loom_monitor", "loom_code"),
+                 ("loom_stops", "loom_code"), ("loom_stops", "stop_time")):
         con.execute(f"CREATE INDEX IF NOT EXISTS ix_{t}_{c} ON {t} ({c})")
     con.execute("CREATE TABLE IF NOT EXISTS sync_log (entity TEXT, synced_at TEXT, since TEXT, rows INTEGER)")
     con.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
@@ -83,6 +84,8 @@ def create(con):
 FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # contract closing needs each contract's whole life
                 "loom_production",                                           # fabric stock = all-time woven - all-time dispatched; a window makes old contracts show negative
                 "store_receipts",                                            # the reorder list shows each item's LAST purchase party/rate - slow-moving spares were often last bought > a year ago
+                "store_issues",                                              # the store room's "last issue" + the item issue-history drill-down need each item's whole issue trail, not just the window
+
                 "ledger_entries",                                            # party ledgers show the opening (old-ERP) balance and full running balance
                 "employee_loans")                                            # a loan given years ago can still be open; its balance = amount - all-time salary deductions
 
@@ -90,7 +93,7 @@ FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # c
 # other entities that carry an all-time "opening" row, attendance, the month-end fabric history) is left to the
 # daily full sync: windowing an entity whose query also returns opening rows would re-insert those opening rows
 # every run (they fall outside the delete window), duplicating balances. Snapshots here are replaced wholesale.
-LIVE_ENTITIES = ("loom_production", "loom_monitor", "gate_passes", "stock_balances",
+LIVE_ENTITIES = ("loom_production", "loom_monitor", "loom_stops", "gate_passes", "stock_balances",
                  "store_issues", "store_receipts", "yarn_stock", "fabric_stock")
 
 

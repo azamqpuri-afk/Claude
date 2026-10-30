@@ -92,6 +92,51 @@ class App:
         finally:
             con.close()
 
+    def issue_history(self, item, limit=20):
+        """The last issues of one store item (feature 4 drill-down), newest first."""
+        from ..reports.stock import issue_history
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return issue_history(con, item, limit)
+        finally:
+            con.close()
+
+    def reports_files(self):
+        """Saved report files (PDF/CSV) in output_dir, for the Reports page's download list."""
+        from ..reports import delivery
+        return {"files": delivery.listing(self.cfg), "folder": str(self.cfg.output_dir())}
+
+    def report_file(self, name):
+        """Bytes of one saved file for download (only inside output_dir; no path traversal), or None."""
+        from ..reports import delivery
+        return delivery.read_file(self.cfg, name)
+
+    def sync_now(self):
+        """Run a live sync now, in the background (the 'Sync now' button). At most one sync runs at a time."""
+        with self.lock:
+            if self._syncing:
+                return {"started": False, "busy": True}
+            self._syncing = True
+        threading.Thread(target=self._do_live_sync, daemon=True).start()
+        return {"started": True}
+
+    def _do_live_sync(self):
+        try:
+            from .. import erp as _erp
+            mapping = _erp.Mapping(self.cfg.path(self.cfg["erp"]["mapping"]))
+            e = _erp.ERP(*_erp.connect(self.cfg["erp"], self.cfg.base_dir), mapping, self.cfg["sources"], self.cfg.base_dir)
+            con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+            try:
+                store.sync(con, e, int(self.cfg["sync"].get("live_days", 3)), entities=list(store.LIVE_ENTITIES),
+                           full_history=(), fabric_history=False, log=lambda *_: None)
+            finally:
+                con.close()
+        except Exception:
+            pass                                          # best-effort; the scheduled sync still runs too
+        finally:
+            with self.lock:
+                self._syncing = False
+
     def report(self, name, day, d0=None, d1=None):
         """A built report plus the day it is actually for (so the file name and on-screen title agree). d0/d1 are an
         optional From/To filter; the To date (or `day`) is the report's as-of."""
@@ -333,8 +378,17 @@ def get_response(app, path, query, check_licence=True):
                      "warning": st.warning, "machine": licence.machine_id()}, "application/json", {}
     if path == "/api/reports":
         return 200, {"reports": [{"name": n, "label": label, "range": rng} for n, label, rng in report_registry.menu()]}, "application/json", {}
+    if path == "/api/reports/file":                      # download a saved report file (licensed below via the list block)
+        params = {k: _unquote(v) for p in query.split("&") if "=" in p for k, v in [p.split("=", 1)]}
+        body = app.report_file(params.get("name", ""))
+        if body is None:
+            return 404, {"error": "file not found"}, "application/json", {}
+        name = params["name"]
+        ctype = "application/pdf" if name.lower().endswith(".pdf") else "text/csv; charset=utf-8"
+        return 200, body, ctype, {"Content-Disposition": f'attachment; filename="{name}"'}
     if path in ("/api/data", "/api/report", "/api/entities", "/api/browse", "/api/ledger",
-                "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts"):
+                "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts",
+                "/api/store/issues", "/api/reports/files"):
         if check_licence:
             st = licence.status(app.cfg)
             if not st.allowed:
@@ -354,6 +408,10 @@ def get_response(app, path, query, check_licence=True):
         if path == "/api/finance/group":                 # cash/bank transaction history for the Overview drill-down
             g = params.get("group", "cash")
             return 200, app.fin_group(g if g in ("cash", "bank") else "cash"), "application/json", {}
+        if path == "/api/store/issues":                  # last issues of one item (store drill-down)
+            return 200, app.issue_history(params.get("item", ""), params.get("limit", 20)), "application/json", {}
+        if path == "/api/reports/files":                 # saved report files for the Reports page
+            return 200, app.reports_files(), "application/json", {}
         try:
             day = date.fromisoformat(params["date"]) if params.get("date") else None
         except ValueError:
@@ -495,6 +553,11 @@ def handler(app):
                 msg = st.message + (" Fetching the first data now - the dashboard will fill in shortly." if started else "")
                 return self._send(200 if st.allowed else 400, {"state": st.state, "message": msg,
                                                                "allowed": st.allowed, "first_sync": started})
+            if self.path == "/api/sync":                  # 'Sync now' button: run a live sync in the background
+                from .. import licence
+                if not licence.status(app.cfg).allowed:
+                    return self._send(403, {"error": "Licence: " + licence.status(app.cfg).message})
+                return self._send(200, app.sync_now())
             if self.path == "/api/ack":                   # mark a Needs-attention finding read (or restore it)
                 from .. import licence
                 if not licence.status(app.cfg).allowed:
@@ -540,12 +603,45 @@ def handler(app):
     return Handler
 
 
+def _stale_watchdog(cfg):
+    """The dashboard process is always up, so it can watch its own freshness: if no sync has run for longer than
+    [sync] stale_alert_minutes, push ONE ntfy alert (and again if it recovers and goes stale once more). This is
+    the backstop for a silently stopped Task Scheduler - the owner should not have to notice by chance."""
+    import time
+    from datetime import datetime
+    from .. import notify
+    limit = int(cfg["sync"].get("stale_alert_minutes", 90))
+    if limit <= 0 or "ntfy" not in (cfg["notify"].get("channels") or []):
+        return                                            # nothing to push to; skip the watchdog entirely
+    alerted = False
+    while True:
+        time.sleep(300)                                   # check every 5 minutes
+        try:
+            con = store.open_store(cfg.path(cfg["store"]["path"]))
+            try:
+                last = con.execute("SELECT MAX(synced_at) FROM sync_log").fetchone()[0]
+            finally:
+                con.close()
+            age = ((datetime.now() - datetime.fromisoformat(str(last)[:19])).total_seconds() / 60) if last else 1e9
+            if age > limit and not alerted:
+                notify.send(cfg, "Smart Layer: data not syncing",
+                            f"No sync has run for {age / 60:.1f} hours (limit {limit} min). The scheduled sync may "
+                            f"have stopped - check the Smart Layer tasks in Task Scheduler on the server.",
+                            priority="high", tags="warning")
+                alerted = True
+            elif age <= limit:
+                alerted = False                           # recovered; arm again for the next outage
+        except Exception:
+            pass                                          # never let the watchdog take the server down
+
+
 def serve(cfg):
     host = cfg["serve"].get("host", "127.0.0.1")
     port = int(cfg["serve"].get("port", 8080))
     app = App(cfg)
     if host not in ("127.0.0.1", "localhost") and not app.password:
         raise SystemExit("Set [serve] password before opening the dashboard to the network (host is not 127.0.0.1).")
+    threading.Thread(target=_stale_watchdog, args=(cfg,), daemon=True).start()
     httpd = ThreadingHTTPServer((host, port), handler(app))
     print(f"Dashboard on http://{'localhost' if host in ('0.0.0.0', '127.0.0.1') else host}:{port}  (Ctrl+C to stop)")
     try:

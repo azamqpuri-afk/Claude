@@ -131,13 +131,19 @@ def cmd_report(cfg, args):
         rep = report_registry.build(con, cfg, args.name, day, d0, d1)
     print(rep.text())
     tag = report_registry.report_day(args.name, d1 or day).isoformat()
-    out_dir = cfg.path(cfg["reports"]["output_dir"])
+    from .reports import delivery
+    out_dir = cfg.output_dir()
+    pdf_path = None
     if args.csv:
         print("\nSaved", rep.write_csv(out_dir, f"{args.name}_{tag}.csv"))
     if args.pdf:
-        print("Saved", rep.write_pdf(out_dir, f"{args.name}_{tag}.pdf", cfg["company"]["name"], PRODUCT))
+        pdf_path = delivery.save(cfg, rep, args.name, tag)
+        delivery.prune(cfg)
+        print("Saved", pdf_path)
     if args.push and (rep.rows or args.name != "zero"):
-        notify.send(cfg, rep.title, "\n".join(rep.summary) + ("\n\n" + rep.text(limit=15) if args.name == "zero" else ""))
+        body = "\n".join(rep.summary) + ("\n\n" + rep.text(limit=15) if args.name == "zero" else "")
+        attach = pdf_path.read_bytes() if (pdf_path and delivery.attach_enabled(cfg, args.name)) else None
+        notify.send(cfg, rep.title, body, attach=attach, filename=(pdf_path.name if attach else None))
     return 0
 
 
@@ -153,9 +159,9 @@ def cmd_audit(cfg, args):
     rep = a.report()
     print(rep.text())
     if args.csv:
-        print("\nSaved", rep.write_csv(cfg.path(cfg["reports"]["output_dir"]), f"audit_{d0}_{d1}.csv"))
+        print("\nSaved", rep.write_csv(cfg.output_dir(), f"audit_{d0}_{d1}.csv"))
     if args.pdf:
-        print("Saved", rep.write_pdf(cfg.path(cfg["reports"]["output_dir"]), f"audit_{d0}_{d1}.pdf", cfg["company"]["name"], PRODUCT))
+        print("Saved", rep.write_pdf(cfg.output_dir(), f"audit_{d0}_{d1}.pdf", cfg["company"]["name"], PRODUCT))
     if args.push and args.urgent:                    # the 5-minute task: each urgent finding, once, with a tap-to-open link
         for f in a.new_alerts(urgent_only=True):
             notify.send(cfg, f"{f.section}: {f.title[:80]}", (f.title + ("\n" + f.detail if f.detail else "")),
@@ -207,7 +213,7 @@ def cmd_serve(cfg, args):
 def cmd_dashboard(cfg, args):
     from .web import static_page
     day = date.fromisoformat(args.date) if args.date else None
-    out = cfg.path(args.out or (cfg.path(cfg["reports"]["output_dir"]) / "dashboard.html"))
+    out = cfg.path(args.out or (cfg.output_dir() / "dashboard.html"))
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(static_page(_store(cfg), cfg, day), encoding="utf-8")
     print("Saved", out)

@@ -116,6 +116,8 @@ def is_urgent(f, audit_cfg=None):
         return True
     if f.key.startswith("beamend-"):                 # a beam finishing with no sized beam waiting
         return True
+    if f.key.startswith("sensor-"):                  # a confirmed sensor swap, or the monitor gone stale/blind
+        return True
     if f.key.startswith("idle-"):                    # a loom with nothing entered for a long time
         m = re.search(r"entered for (\d+) days", f.title)
         days = int(m.group(1)) if m else 0
@@ -124,8 +126,8 @@ def is_urgent(f, audit_cfg=None):
 
 
 def run(con, cfg, d0, d1=None, persist=False):
-    from . import beams, edits, finance, monitor, store, weaving, yarn
+    from . import beams, edits, finance, monitor, sensor, store, weaving, yarn
     a = Audit(con, cfg, d0, d1 or d0, persist=persist)
-    for rules in (finance, store, weaving, yarn, beams, monitor, edits):
+    for rules in (finance, store, weaving, yarn, beams, monitor, sensor, edits):
         rules.run(a)
     return a

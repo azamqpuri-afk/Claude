@@ -13,9 +13,24 @@ DEFAULTS = {
     "company": {"name": "My Mill", "currency": "Rs"},
     "erp": {"driver": "sqlite"},
     "store": {"path": "data/smart_layer.db"},
-    "sync": {"history_days": 400, "live_days": 3},   # live_days: the short window the 5-minute live sync re-reads
+    "sync": {"history_days": 400, "live_days": 3,    # live_days: the short window the 5-minute live sync re-reads
+             "stale_live_minutes": 30,               # dashboard shows the sync time red once the live sync is older
+             "stale_daily_hours": 26,                # ... or the daily sync is older than this
+             "stale_alert_minutes": 90},             # the dashboard pushes one ntfy alert if no sync for this long
     "notify": {"channels": ["console"]},
-    "reports": {"tracked_issue_days": 90, "reorder_cover_months": 1, "output_dir": "output"},
+    "reports": {"tracked_issue_days": 90, "reorder_cover_months": 1, "output_dir": "",
+                "retention_weeks": 26},           # saved report files older than this are pruned (0 = keep all)
+    "sensor": {                                   # loom sensor duplicate-timings (sensor-swap) check - needs loom_stops
+        "tol_seconds": 2,                         # two looms "twin" if they stop AND restart within this many seconds
+        "gap_minutes": 20,                        # twin stops of one pair no more than this apart are one episode
+        "min_twins": 5,                           # an episode needs this many twin stops to be confirmed
+        "min_share": 0.60,                        # ... and the twins must be this share of the smaller loom's stops
+        "max_simultaneous": 3,                    # stops hitting more looms than this at once = shed-wide event, skipped
+        "open_stop_seconds": 5,                   # a restart within this of the latest restart = still-open stop, skipped
+        "stale_hours": 2,                         # push once if the monitor's newest stop is older than this (gone blind)
+        "sheds": {},                              # optional floor layout: [sensor.sheds.1] columns = [[even looms],[odd]]
+        "layout": {},                             # optional explicit layout: "<loom>" = [shed, column, row]
+    },
     "audit": {
         "large_payment": 500000,          # payments at or above this are listed (WATCH)
         "duplicate_payment_min": 5000,    # same party + same amount within 3 days
@@ -260,6 +275,20 @@ class Config:
         """A path from the config, relative to the config file's folder."""
         p = Path(value)
         return p if p.is_absolute() else self.base_dir / p
+
+    def output_dir(self):
+        """Where saved reports (PDF/CSV, the dashboard, the Reports page's files) are written. If [reports]
+        output_dir is set, that path is used. Otherwise a writable per-machine default: on Windows
+        C:\\ProgramData\\Smart Layer\\output (Program Files is read-only and the tasks run as a normal user or
+        SYSTEM), elsewhere 'output' beside config.toml. Pointing output_dir at a synced OneDrive / Drive-for-desktop
+        folder is how a mill gets its reports in the cloud - Smart Layer itself stays local-only, no cloud API."""
+        value = (self["reports"].get("output_dir") or "").strip()
+        if value:
+            return self.path(value)
+        if os.name == "nt":
+            base = os.environ.get("ProgramData", r"C:\ProgramData")
+            return Path(base) / "Smart Layer" / "output"
+        return self.base_dir / "output"
 
 
 def load(path="config.toml", expand=True):
