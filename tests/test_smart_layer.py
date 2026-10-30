@@ -1245,9 +1245,8 @@ def test_live_sync_refreshes_account_balances(env, tmp_path):
 
 
 def test_change_feed_records_at_sync_time(env, tmp_path):
-    # the feed is built from the sync-time change_log, NOT from entered_at; `since` is the real client value
-    # (data.build()["now"], space-separated), and the new rows arrive through store.sync on a live sync.
-    import time
+    # the feed is built from the sync-time change_log, NOT from entered_at; `since` is the real client cursor
+    # (data.build()["change_cursor"]), and the new rows arrive through store.sync on a live sync.
     from datetime import date as _d
     cfg, _ = env
     today = _d.today().isoformat()
@@ -1272,16 +1271,17 @@ def test_change_feed_records_at_sync_time(env, tmp_path):
     # baseline sync (store_issues empty before -> no events recorded)
     con = store.open_store(dbp)
     store.sync(con, FE([iss1]), 3, entities=ent, full_history=(), fabric_history=False, track_changes=True, log=lambda *_: None)
-    now0 = web_data.build(con, cfg, _d.today())["now"]
+    payload0 = web_data.build(con, cfg, _d.today())
+    cursor0 = payload0["change_cursor"]                      # the id the client stores and passes back next time
+    assert "T" not in payload0["now"] and payload0["now"][10] == " "   # display clock format (space, not 'T')
     con.close()
-    assert "T" not in now0 and now0[10] == " "               # format matches change_log (bug 1 regression guard)
-    time.sleep(1.1)                                           # ensure the next sync lands in a later second
     # a new slip arrives; the live sync records it in change_log at sync time
     con = store.open_store(dbp)
     store.sync(con, FE([iss1, iss2]), 3, entities=ent, full_history=(), fabric_history=False, track_changes=True, log=lambda *_: None)
-    res = web_data.changes(con, cfg, now0)
-    assert web_data.changes(con, cfg, "")["events"] == []    # no since (first load) -> nothing animates
+    res = web_data.changes(con, cfg, cursor0)
+    assert web_data.changes(con, cfg, "")["events"] == []    # no cursor (first load) -> nothing animates
+    assert res["cursor"] >= cursor0                          # cursor advances
     con.close()
     kinds = {e["kind"] for e in res["events"]}
-    assert "store" in kinds                                  # the new slip shows up for the real client `since`
+    assert "store" in kinds                                  # the new slip shows up for the real client cursor
     assert any(e.get("item") == "Bearing" for e in res["events"] if e["kind"] == "store")

@@ -332,7 +332,8 @@ def build(con, cfg, as_of=None):
     return {
         "product": PRODUCT, "company": cfg["company"]["name"], "currency": cur, "as_of": d,
         "synced_at": _one(con, "SELECT MAX(synced_at) FROM sync_log") or None,
-        "now": datetime.now().isoformat(sep=" ", timespec="seconds"),   # server clock (same format as change_log), the `since` for the next refresh
+        "now": datetime.now().isoformat(sep=" ", timespec="seconds"),   # server clock, for the "Live HH:MM" display
+        "change_cursor": _change_cursor(con),           # the change_log id to pass back as `since` on the next refresh
         "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound")},
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "kpis": {
@@ -369,9 +370,17 @@ def build(con, cfg, as_of=None):
     }
 
 
+def _change_cursor(con):
+    from .. import changes as _changes
+    try:
+        return _changes.cursor(con)
+    except Exception:
+        return 0
+
+
 def changes(con, cfg, since):
     """What changed since the client's last refresh, from the sync-time change_log (see smart_layer/changes.py).
-    Returns {events, now}; empty/absent `since` yields no events, so the first page load never animates."""
+    `since` is the change_log id cursor. Returns {events, cursor}; a blank/absent cursor yields no events."""
     from .. import changes as _changes
     return _changes.feed(con, cfg, since)
 

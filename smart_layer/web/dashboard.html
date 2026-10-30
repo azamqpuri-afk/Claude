@@ -590,8 +590,8 @@ function render(){
   wireDrills();
   renderWeaving(); renderFinanceTiles(); renderYFTiles();
   buildCharts(curTab);
-  // remember this snapshot so the next auto-refresh can diff it (the `since` for /api/changes, kpis, finding ids)
-  if(!STATIC_DATA){ sinceTs = D.now || sinceTs; prevKpis = D.kpis || null; prevFindingIds = new Set((D.findings||[]).map(f=>f.id)); }
+  // remember this snapshot so the next auto-refresh can diff it (the change_log cursor, kpis, finding ids)
+  if(!STATIC_DATA){ lastCursor = (D.change_cursor!=null? D.change_cursor : lastCursor); prevKpis = D.kpis || null; prevFindingIds = new Set((D.findings||[]).map(f=>f.id)); }
 }
 
 async function markRead(id, title, undo){
@@ -1258,7 +1258,7 @@ async function load(day, silent, _retry){
 $("#day").onchange=(e)=>{ loaded={}; load(e.target.value); if(curTab!=="overview"){ var t=curTab; curTab="overview"; setTab(t); } };
 
 /* ---------- auto-refresh (aligned to the live sync) + "what changed" animations ---------- */
-var sinceTs=null;        // D.now from the last load - the `since` for /api/changes
+var lastCursor=null;     // D.change_cursor from the last load - the id `since` for /api/changes
 var prevKpis=null;       // kpis before the last refresh (for count-ups / deltas)
 var prevFindingIds=null; // finding ids before the last refresh (for new-alert detection)
 var countdown=0;
@@ -1273,10 +1273,10 @@ async function autoRefresh(){
   if(STATIC_DATA) return;
   countdown = REFRESH_SECS;
   if(document.hidden || drawerOpen() || curTab!=="overview"){ return; }   // skip quietly; the timer re-arms
-  var since=sinceTs, pk=prevKpis, pf=prevFindingIds;
+  var since=lastCursor, pk=prevKpis, pf=prevFindingIds;
   await load($("#day").value||undefined, true);                          // silent: keeps tab + scroll
   if(!D) return;
-  if(ANIM && since){                                                     // never animate the first load
+  if(ANIM && since!==null){                                              // never animate the first load (no prior cursor)
     var events=[];
     try{ var cj=await (await fetch("api/changes?since="+encodeURIComponent(since))).json(); events=(cj&&cj.events)||[]; }catch(e){}
     // new ACTION/CONFIRMED findings -> alert events (diffed client-side; audit is not timestamped)

@@ -66,20 +66,27 @@ def record(con, entity, before, now):
         events = events[:6]
     elif entity == "gate_passes":
         new = before["ids"]
-        seen = set()
-        for gid, direction, typ, party, qty, thaan, gp in con.execute("""
-                SELECT gatepass_id, direction, type, party_name, qty, thaan, gp_no FROM gate_passes"""):
-            if gid in new or gid in seen:
+        # aggregate ALL lines of a gate pass (a slip can have many), so the meters/thaan/bags are the slip total,
+        # not just the first line. direction / type / party / number are the same on every line, so MAX picks them.
+        for gid, direction, typ, party, gp, qty, thaan, bags in con.execute("""
+                SELECT gatepass_id, MAX(direction), MAX(type), MAX(party_name), MAX(gp_no),
+                       SUM(COALESCE(qty,0)), SUM(COALESCE(thaan,0)), SUM(COALESCE(bags,0)) FROM gate_passes
+                GROUP BY gatepass_id"""):
+            if gid in new:
                 continue
-            seen.add(gid)
-            fabric = "fabric" in str(typ or "").lower()
-            if direction == "out":
-                events.append({"kind": "out", "what": "fabric" if fabric else (str(typ or "goods").split()[0]).lower(),
-                               "party": party, "meters": round(qty or 0) if fabric else None,
-                               "thaan": round(thaan or 0) if thaan else None, "doc_no": gp})
-            else:
-                events.append({"kind": "in", "what": (str(typ or "goods").split()[0]).lower(), "party": party,
-                               "qty": round(qty or 0) if qty else None, "doc_no": gp})
+            what = _goods_kind(typ)                       # from the whole type text, not its first word
+            ev = {"kind": "out" if direction == "out" else "in", "what": what, "party": party, "doc_no": gp}
+            if what == "fabric":
+                ev["meters"] = round(qty or 0)
+                if thaan:
+                    ev["thaan"] = round(thaan)
+            elif what == "yarn":
+                ev["bags"] = round(bags) if bags else None
+                if not bags and qty:
+                    ev["kg"] = round(qty)
+            else:                                         # beams / store goods / other
+                ev["qty"] = round(qty) if qty else (round(bags) if bags else None)
+            events.append(ev)
         events = events[:6]
     elif entity == "loom_production":
         old = before["m"]
@@ -92,18 +99,40 @@ def record(con, entity, before, now):
                         [(now, entity, e["kind"], json.dumps(e)) for e in events])
 
 
+def _goods_kind(typ):
+    """What the gate pass carries, from its type text (generic): fabric, yarn, beams, store goods, or goods."""
+    t = str(typ or "").lower()
+    if "fabric" in t:
+        return "fabric"
+    if "yarn" in t or "sizing" in t:
+        return "yarn"
+    if "beam" in t:
+        return "beams"
+    if "store" in t or "grn" in t:
+        return "store goods"
+    return "goods"
+
+
 def prune(con, days=2):
     cutoff = (datetime.now() - timedelta(days=int(days))).isoformat(sep=" ", timespec="seconds")
     con.execute("DELETE FROM change_log WHERE synced_at < ?", (cutoff,))
 
 
+def cursor(con):
+    """The newest change_log id - the client stores this and passes it back as `since` on the next refresh."""
+    return con.execute("SELECT COALESCE(MAX(id), 0) FROM change_log").fetchone()[0]
+
+
 def feed(con, cfg, since):
-    """Events recorded since the client's last refresh (server-clock `since`), aggregated for the animations.
-    Returns {events, now}. Empty/absent `since` -> no events (first load never animates)."""
-    now = datetime.now().isoformat(sep=" ", timespec="seconds")
-    if not since:
-        return {"events": [], "now": now}
-    rows = con.execute("SELECT kind, payload FROM change_log WHERE synced_at > ? ORDER BY synced_at", (str(since),)).fetchall()
+    """Events recorded since the client's last refresh, aggregated for the animations. `since` is the change_log
+    id the client last saw (a monotonic cursor, so a refresh that lands mid-sync never skips rows). Returns
+    {events, cursor}. An absent/blank `since` yields no events (first load never animates)."""
+    cur = cursor(con)
+    try:
+        since_id = int(since)
+    except (TypeError, ValueError):
+        return {"events": [], "cursor": cur}             # no prior cursor -> nothing to animate yet
+    rows = con.execute("SELECT kind, payload FROM change_log WHERE id > ? ORDER BY id", (since_id,)).fetchall()
     cash_delta, cash_label, woven = 0, "", 0
     store, out, inb = [], [], []
     for kind, payload in rows:
@@ -128,4 +157,4 @@ def feed(con, cfg, since):
     if round(woven) > 0:
         events.append({"kind": "woven", "meters": round(woven)})
     events += out[:4] + inb[:4] + store[:6]
-    return {"events": events, "now": now}
+    return {"events": events, "cursor": cur}
