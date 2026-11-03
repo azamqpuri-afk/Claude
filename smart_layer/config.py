@@ -18,9 +18,15 @@ DEFAULTS = {
              "stale_daily_hours": 26,                # ... or the daily sync is older than this
              "stale_alert_minutes": 90,              # the dashboard pushes one ntfy alert if no sync for this long
              "loom_stops_days": 14},                 # the raw loom stop log is capped to this many days (it is huge)
-    "notify": {"channels": ["console"]},
+    "notify": {"channels": ["console"],
+               "quiet_from": None, "quiet_to": None},   # hours (0-23): suppress non-urgent pushes in this window
     "reports": {"tracked_issue_days": 90, "reorder_cover_months": 1, "output_dir": "",
-                "retention_weeks": 26},           # saved report files older than this are pruned (0 = keep all)
+                "retention_weeks": 26,            # saved report files older than this are pruned (0 = keep all)
+                "unused_stock_months": 6},        # the Unused-stock tab flags items not issued for this many months
+    "sizing": {"gullay_g": 55,                    # grams of yarn left on each returned baby cone (gullay)
+               "pick_factor": 1.0936,             # metres-to-yards-ish factor in the closing-count formula
+               "shrink_pct": 7},                  # default warp->fabric shrinkage for the sized-yarn closing count
+    "cost": {"heads": {}},                        # map a ledger account_group/head -> a cost bucket (store/payroll/power/sizing/other)
     "sensor": {                                   # loom sensor duplicate-timings (sensor-swap) check - needs loom_stops
         "tol_seconds": 2,                         # two looms "twin" if they stop AND restart within this many seconds
         "gap_minutes": 20,                        # twin stops of one pair no more than this apart are one episode
@@ -57,7 +63,8 @@ DEFAULTS = {
     "dashboard": {"animations": True,         # Overview "what changed" animations on each auto-refresh
                   "show_amounts": True,        # show money amounts (turn off for a shared office screen)
                   "refresh_seconds": 300,      # auto-refresh the dashboard this often (aligned to the live sync)
-                  "sound": False},             # play a sound on changes (off by default)
+                  "sound": False,              # play a sound on changes (off by default)
+                  "colour_scheme": "teal"},    # default colour scheme (the Overview picker overrides per browser)
     "ask": {"model": "claude-opus-5-5", "effort": "high", "max_rows": 200, "max_steps": 12,
             "query_timeout_sec": 8,                       # abort any single SQL that runs longer than this
             "deny_functions": ["randomblob", "zeroblob"]},  # functions that can allocate huge blobs / hang the query

@@ -104,7 +104,7 @@ def create(con):
             con.execute(f"DROP TABLE _old_{e.name}")
         if e.date_column:
             con.execute(f"CREATE INDEX IF NOT EXISTS ix_{e.name}_date ON {e.name} ({e.date_column})")
-    for t, c in (("store_receipts", "item_code"), ("store_issues", "item_code"),
+    for t, c in (("store_receipts", "item_code"), ("store_issues", "item_code"), ("store_returns", "item_code"),
                  ("ledger_entries", "voucher_id"), ("ledger_entries", "account_code"),
                  ("loom_production", "loom_code"), ("loom_production", "contract_no"),
                  ("yarn_movements", "contract_no"), ("fabric_dispatches", "contract_no"),
@@ -123,6 +123,12 @@ def create(con):
     con.execute("CREATE INDEX IF NOT EXISTS ix_change_log_at ON change_log (synced_at)")
     # Month-end fabric stock, read straight from the ERP's own stock view as of each month-end (never recomputed).
     con.execute("CREATE TABLE IF NOT EXISTS fabric_stock_history (month TEXT PRIMARY KEY, meters REAL, captured_on TEXT)")
+    # Manual inputs the ERP does not hold (e.g. a set's yarn-rewind weight), kept only in Smart Layer, with history.
+    # scope = what the value is about (e.g. "set"), key = its id (set number), field = which value, with who/when/note.
+    con.execute("CREATE TABLE IF NOT EXISTS manual_inputs "
+                "(id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT, key TEXT, field TEXT, value REAL, "
+                " note TEXT, who TEXT, at TEXT)")
+    con.execute("CREATE INDEX IF NOT EXISTS ix_manual_inputs_k ON manual_inputs (scope, key, field)")
     con.commit()
 
 
@@ -130,6 +136,7 @@ FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # c
                 "loom_production",                                           # fabric stock = all-time woven - all-time dispatched; a window makes old contracts show negative
                 "store_receipts",                                            # the reorder list shows each item's LAST purchase party/rate - slow-moving spares were often last bought > a year ago
                 "store_issues",                                              # the store room's "last issue" + the item issue-history drill-down need each item's whole issue trail, not just the window
+                "store_returns",                                             # store expense is netted over history; returns are few but span the whole period
 
                 "ledger_entries",                                            # party ledgers show the opening (old-ERP) balance and full running balance
                 "employee_loans")                                            # a loan given years ago can still be open; its balance = amount - all-time salary deductions
@@ -139,7 +146,7 @@ FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # c
 # daily full sync: windowing an entity whose query also returns opening rows would re-insert those opening rows
 # every run (they fall outside the delete window), duplicating balances. Snapshots here are replaced wholesale.
 LIVE_ENTITIES = ("loom_production", "loom_monitor", "loom_stops", "gate_passes", "stock_balances",
-                 "store_issues", "store_receipts", "yarn_stock", "fabric_stock",
+                 "store_issues", "store_receipts", "store_returns", "yarn_stock", "fabric_stock",
                  # account_balances is a whole-ledger snapshot (replaced entirely each sync, no date window and no
                  # 'opening' rows), so it is safe to refresh live - this keeps the Overview cash / bank / receivable
                  # / payable balances current every 5 minutes instead of only after the daily sync.

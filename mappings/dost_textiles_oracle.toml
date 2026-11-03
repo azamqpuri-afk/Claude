@@ -46,6 +46,18 @@ FROM dostex.store_issue_v v JOIN dostex.dmn m ON m.trans_no = v.trans_no
 WHERE v.dd >= :since
 """
 
+# Store RETURNS (items given back into the store) - DMN type 'RET' (owner: 23 docs in 400 days). Used to net
+# store expense (issues - returns). NOT YET RUN against the live DB: DBSERVER to confirm the DMN type column
+# (m.dtype) and the DDT amount column (d.amount vs d.total_amt); run `python -m smart_layer check`, which names
+# a failing entity, before trusting it. DDT is the line detail, DMN the document master (as stock_balances uses).
+[entities.store_returns]
+sql = """
+SELECT m.dno AS doc_no, TRUNC(m.dd) AS doc_date, m.feedd AS entered_at, d.ic AS item_code, d.qty AS qty,
+       d.total_amt AS amount, m.cn AS returned_from
+FROM dostex.dmn m JOIN dostex.ddt d ON d.trans_no = m.trans_no AND d.uc = m.uc
+WHERE m.dtype = 'RET' AND m.dd >= :since
+"""
+
 [entities.parties]
 sql = """
 SELECT ac AS party_code, an AS party_name,

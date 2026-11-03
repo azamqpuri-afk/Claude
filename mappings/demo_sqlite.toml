@@ -44,6 +44,14 @@ FROM inv_txn_hdr h JOIN inv_txn_dtl d ON d.txn_id = h.txn_id
 WHERE h.txn_type = 'ISS' AND h.txn_dt >= :since
 """
 
+[entities.store_returns]
+sql = """
+SELECT h.txn_no AS doc_no, h.txn_dt AS doc_date, h.created_on AS entered_at, d.itm_id AS item_code,
+       d.qty AS qty, d.qty * d.unit_price AS amount, h.dept_cd AS returned_from, h.created_by AS entered_by
+FROM inv_txn_hdr h JOIN inv_txn_dtl d ON d.txn_id = h.txn_id
+WHERE h.txn_type = 'RET' AND h.txn_dt >= :since
+"""
+
 [entities.parties]
 sql = """
 SELECT bp_id AS party_code, bp_name AS party_name,

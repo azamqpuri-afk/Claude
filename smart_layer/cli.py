@@ -147,6 +147,8 @@ def cmd_report(cfg, args):
     pdf_path = None
     if args.csv:
         print("\nSaved", rep.write_csv(out_dir, f"{args.name}_{tag}.csv"))
+    if getattr(args, "xlsx", False):
+        print("Saved", rep.write_xlsx(out_dir, f"{args.name}_{tag}.xlsx", cfg["company"]["name"]))
     if args.pdf:
         pdf_path = delivery.save(cfg, rep, args.name, tag)
         delivery.prune(cfg)
@@ -365,6 +367,7 @@ def main(argv=None):
     r.add_argument("--to", metavar="YYYY-MM-DD", help="range end / as-of date")
     r.add_argument("--csv", action="store_true")
     r.add_argument("--pdf", action="store_true")
+    r.add_argument("--xlsx", action="store_true", help="also save an Excel workbook (live formulas where the report has them)")
     r.add_argument("--push", action="store_true")
     a = sub.add_parser("audit")
     a.add_argument("--date")

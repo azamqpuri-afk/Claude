@@ -391,6 +391,13 @@ def _report_body(app, rep, name, tag, fmt, cell):
             p = rep.write_pdf(tmp, f"{name}_{tag}.pdf", app.cfg["company"]["name"], PRODUCT)
             body = Path(p).read_bytes()
         return 200, body, "application/pdf", {"Content-Disposition": f'attachment; filename="{name}_{tag}.pdf"'}
+    if fmt in ("xlsx", "excel"):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            p = rep.write_xlsx(tmp, f"{name}_{tag}.xlsx", app.cfg["company"]["name"])
+            body = Path(p).read_bytes()
+        return (200, body, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                {"Content-Disposition": f'attachment; filename="{name}_{tag}.xlsx"'})
     return 200, {"title": rep.title, "columns": rep.columns, "summary": rep.summary,
                  "rows": [[cell(v) for v in r] for r in rep.rows], "date": tag}, "application/json", {}
 

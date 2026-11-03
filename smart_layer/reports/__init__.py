@@ -11,6 +11,7 @@ class Report:
     columns: list
     rows: list
     summary: list = field(default_factory=list)     # short lines shown above the table / in a push
+    xlsx_sheets: list = None                         # optional live-formula workbook spec (reports.xlsx.write)
 
     def text(self, limit=None):
         out = [self.title, "=" * len(self.title), *self.summary, ""]
@@ -39,6 +40,14 @@ class Report:
     def write_pdf(self, folder, name, company="", product=""):
         from .pdf import write_pdf
         return write_pdf(self, Path(folder) / name, company, product)
+
+    def write_xlsx(self, folder, name, company=""):
+        from . import xlsx
+        folder = Path(folder)
+        folder.mkdir(parents=True, exist_ok=True)
+        if self.xlsx_sheets:                                 # a live-formula workbook (shaded inputs + formulas)
+            return xlsx.write(folder / name, self.xlsx_sheets, company)
+        return xlsx.report_to_xlsx(self, folder / name, company)
 
 
 def fmt(v):

@@ -88,6 +88,20 @@ ENTITIES = (
         date_column="doc_date",
     ),
     Entity(
+        "store_returns",
+        "Items returned INTO the store (return slip lines) - used to net store expense (issues - returns). "
+        "Optional: only mills that record store returns separately map it (e.g. Dost's DMN type 'RET').",
+        (C("doc_no", "TEXT", "Return slip number", True),
+         C("doc_date", "DATE", "Date on the slip", True),
+         C("entered_at", "DATETIME", "When the line was keyed into the ERP"),
+         C("item_code", "TEXT", "Item code", True),
+         C("qty", "REAL", "Quantity returned", True),
+         C("amount", "REAL", "Line value"),
+         C("returned_from", "TEXT", "Department / machine / loom it came back from"),
+         C("entered_by", "TEXT", "ERP user who keyed it")),
+        date_column="doc_date",
+    ),
+    Entity(
         "parties",
         "Customers, suppliers, sizing parties and other business partners.",
         (C("party_code", "TEXT", "Party code", True),
