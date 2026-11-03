@@ -101,7 +101,7 @@ def write(path, sheets, company=""):
         for row in sh.get("rows") or []:
             for c, v in enumerate(row, 1):
                 if isinstance(v, Fx):
-                    cell = ws.cell(r, c); cell.value = v.formula
+                    cell = ws.cell(r, c); cell.value = v.formula.replace("{r}", str(r))   # {r} -> this row number
                     if v.fmt or (c - 1) in money:
                         cell.number_format = v.fmt or MONEY
                 elif isinstance(v, Inp):

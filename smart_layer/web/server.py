@@ -127,6 +127,31 @@ class App:
     def loom_lines(self, loom, d0, d1):
         return self._store_drill("loom_lines", loom, d0, d1)
 
+    def manual_list(self, scope, field=None):
+        from .. import manual
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return {"values": manual.latest(con, scope, field or None)}
+        finally:
+            con.close()
+
+    def manual_history(self, scope, key, field=None):
+        from .. import manual
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return {"history": manual.history(con, scope, key, field or None)}
+        finally:
+            con.close()
+
+    def manual_set(self, scope, key, field, value, who="", note=""):
+        from .. import manual
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            manual.set_value(con, scope, key, field, value, who, note)
+            return {"ok": True, "value": manual.get(con, scope, key, field)}
+        finally:
+            con.close()
+
     def reports_files(self):
         """Saved report files (PDF/CSV) in output_dir, for the Reports page's download list."""
         from ..reports import delivery
@@ -448,7 +473,7 @@ def get_response(app, path, query, check_licence=True):
     if path in ("/api/data", "/api/report", "/api/entities", "/api/browse", "/api/ledger",
                 "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts",
                 "/api/store/issues", "/api/store/rates", "/api/store/slip", "/api/store/loom",
-                "/api/reports/files", "/api/changes"):
+                "/api/manual", "/api/manual/history", "/api/reports/files", "/api/changes"):
         if check_licence:
             st = licence.status(app.cfg)
             if not st.allowed:
@@ -481,6 +506,10 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.loom_lines(params.get("loom", ""), a0, a1), "application/json", {}
         if path == "/api/store/slip":                    # one issue slip's lines
             return 200, app.slip_lines(params.get("doc", "")), "application/json", {}
+        if path == "/api/manual":                        # manual inputs (latest per key) for a scope
+            return 200, app.manual_list(params.get("scope", ""), params.get("field", "")), "application/json", {}
+        if path == "/api/manual/history":                # edit history of one manual input
+            return 200, app.manual_history(params.get("scope", ""), params.get("key", ""), params.get("field", "")), "application/json", {}
         if path == "/api/changes":                       # what changed since the client's last refresh (animations)
             return 200, app.changes(params.get("since", "")), "application/json", {}
         if path == "/api/reports/files":                 # saved report files for the Reports page
@@ -636,6 +665,18 @@ def handler(app):
                 except Exception:
                     full = False
                 return self._send(200, app.sync_now(full))
+            if self.path == "/api/manual":                # save a manual input (rewind/gullay/weft count ...)
+                from .. import licence
+                if not licence.status(app.cfg).allowed:
+                    return self._send(403, {"error": "Licence: " + licence.status(app.cfg).message})
+                try:
+                    n = min(int(self.headers.get("Content-Length", 0)), 20000)
+                    b = json.loads(self.rfile.read(n) or b"{}")
+                    return self._send(200, app.manual_set(str(b.get("scope", ""))[:40], str(b.get("key", ""))[:80],
+                                                          str(b.get("field", ""))[:40], b.get("value"),
+                                                          str(b.get("who", ""))[:60], str(b.get("note", ""))[:200]))
+                except Exception as e:
+                    return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path == "/api/ack":                   # mark a Needs-attention finding read (or restore it)
                 from .. import licence
                 if not licence.status(app.cfg).allowed:

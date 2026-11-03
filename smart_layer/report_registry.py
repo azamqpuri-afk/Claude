@@ -10,7 +10,7 @@ Each entry is  name -> (builder, label shown to the owner, day_report)
 from datetime import date, timedelta
 
 from .reports import finance, gatepass, payroll, production, reconcile, stock, store_extra
-from .textile import beams, closing, contracts, pilferage, stock_position
+from .textile import beams, closing, contracts, pilferage, sizing, stock_position
 
 REPORTS = {
     "stock":        (stock.stock_status,            "Store: stock status (out / low / in stock)", False),
@@ -31,6 +31,10 @@ REPORTS = {
     "beams":        (beams.beam_report,             "Beams on looms (days left, backups)", False),
     "weekly-beams": (beams.weekly_beam_report,      "Beams: weekly beam report (ERP + monitor rate)", False),
     "sizers":       (beams.sizer_ledger,            "Empty beams with sizers (by quantity)", False),
+    "sizer-ledger": (sizing.sizer_ledger_full,      "Sizer ledger (yarn, beams, gullay, balances)", False),
+    "empty-beams":  (sizing.empty_beams,            "Empty beams in mill and at sizers (by size)", False),
+    "sized-closing": (sizing.sized_yarn_closing,     "Sizing: sized-yarn closing count (per set)", False),
+    "weft-consumption": (sizing.weft_consumption,    "Yarn: weft consumption vs issued", False),
     "cost-metre":   (finance.cost_per_metre,        "Finance: cost per metre (with / without sizing)", False),
     "contracts":    (contracts.contract_progress,   "Weaving: contract progress", False),
     "yarn-shortage": (contracts.yarn_shortage,       "Yarn: shortage warning", False),
@@ -51,7 +55,7 @@ REPORTS = {
 NAMES = list(REPORTS)
 
 # reports that take a from/to window (builder signature (con, cfg, d0, d1)); everything else takes a single as-of day.
-RANGE = {"unbalanced", "store-expense", "issue-slips", "store-returns", "loom-consumption"}
+RANGE = {"unbalanced", "store-expense", "issue-slips", "store-returns", "loom-consumption", "weft-consumption"}
 
 
 def build(con, cfg, name, day=None, d0=None, d1=None):
