@@ -100,6 +100,61 @@ def parties(con, cfg, as_of=None):
                    f"payable {cur} {pay:,.0f} to {sum(1 for r in rows if r[0] == 'Payable')}."])
 
 
+COST_KEYWORDS = {"sizing": "sizing", "size ": "sizing", "salary": "payroll", "wage": "payroll",
+                 "payroll": "payroll", "labour": "payroll", "power": "power", "electric": "power",
+                 "diesel": "power", "fuel": "power", "gas": "power", "store": "store", "spare": "store",
+                 "packing": "store"}
+COST_BUCKETS = ("store", "payroll", "power", "other", "sizing")
+
+
+def _bucket_of(head, name, cfg):
+    """Which cost bucket a ledger expense head falls in. [cost] heads in config maps a substring -> bucket and
+    wins; otherwise sensible keyword defaults; otherwise 'other'. Sizing is kept separate (the 'without/with
+    sizing' cost per metre)."""
+    text = f"{head or ''} {name or ''}".lower()
+    for patt, bucket in (cfg["cost"].get("heads") or {}).items():
+        if str(patt).lower() in text:
+            return bucket
+    for kw, bucket in COST_KEYWORDS.items():
+        if kw in text:
+            return bucket
+    return "other"
+
+
+def cost_per_metre(con, cfg, as_of=None, months=12):
+    """Monthly cost per metre woven: each expense head per metre, the total WITHOUT sizing and WITH sizing.
+    Expense ledger heads are grouped into store / payroll / power / other / sizing (configurable in [cost].heads).
+    Metres are the ERP's woven metres for the month. Sizing is shown separately so both views are visible."""
+    as_of = as_of or date.today()
+    ms = _months(as_of, months)
+    cur = cfg["company"]["currency"]
+    woven = dict(con.execute("SELECT strftime('%Y-%m', prod_date), SUM(meters) FROM loom_production WHERE prod_date >= ? AND prod_date <= ? GROUP BY 1",
+                             (ms[0] + "-01", as_of.isoformat())))
+    bybucket = {m: {b: 0.0 for b in COST_BUCKETS} for m in ms}
+    for month, head, name, amt in con.execute("""
+            SELECT strftime('%Y-%m', l.voucher_date), a.head_name, a.account_name, SUM(l.amount)
+            FROM ledger_entries l JOIN accounts a USING (account_code)
+            WHERE a.account_group = 'expense' AND l.voucher_kind <> 'opening' AND l.voucher_date >= ? AND l.voucher_date <= ?
+            GROUP BY 1, a.account_code""", (ms[0] + "-01", as_of.isoformat())):
+        if month in bybucket:
+            bybucket[month][_bucket_of(head, name, cfg)] += (amt or 0)
+    while len(ms) > 1 and not (woven.get(ms[0]) or any(bybucket[ms[0]].values())):
+        ms.pop(0)                                        # months before the data starts
+    rows = []
+    for m in ms:
+        w = woven.get(m, 0) or 0
+        b = bybucket[m]
+        ns = b["store"] + b["payroll"] + b["power"] + b["other"]    # without sizing
+        per = lambda v: round(v / w, 2) if w else None   # noqa: E731
+        rows.append([m, round(w), per(b["store"]), per(b["payroll"]), per(b["power"]), per(b["other"]),
+                     per(ns), per(b["sizing"]), per(ns + b["sizing"])])
+    summary = [f"Cost per metre woven by month, in {cur}/m. 'No sizing' = store + payroll + power + other; "
+               "'With sizing' adds sizing charges. Group the ledger heads in [cost].heads for accuracy."]
+    return Report(f"Cost per metre - {ms[0]} to {ms[-1]}",
+                  ["Month", "Woven m", f"Store/m", "Payroll/m", "Power/m", "Other/m", "Cost/m (no sizing)",
+                   "Sizing/m", "Cost/m (with sizing)"], rows, summary)
+
+
 def _tolerance(cfg):
     return float((cfg["audit"] or {}).get("trial_balance_tolerance", 10) or 0)
 
