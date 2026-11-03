@@ -352,6 +352,7 @@ def build(con, cfg, as_of=None):
             "confirmed": sum(1 for f in findings if f["severity"] == "CONFIRMED"),
             "yarn_flags": len(flags),
             "beam_alerts": sum(1 for b in beam_rows if b["alert"]),
+            **_scb_today(con),                           # live scoreboard efficiency for the current/last day
         },
         "production": production, "looms": looms, "finance": finance, "findings": findings,
         "acknowledged": acknowledged, "stock": stock,
@@ -383,6 +384,101 @@ def changes(con, cfg, since):
     `since` is the change_log id cursor. Returns {events, cursor}; a blank/absent cursor yields no events."""
     from .. import changes as _changes
     return _changes.feed(con, cfg, since)
+
+
+def feed_day(con, cfg, day=None):
+    """The whole day's change_log for the Overview live-feed panel: each row with its own time, a line and the
+    payload for a tap-detail. Newest first. Store issues are grouped per sync by who they went to."""
+    import json
+    day = (day or date.today()).isoformat()
+    rows = con.execute("""SELECT id, synced_at, kind, payload FROM change_log WHERE substr(synced_at,1,10) = ?
+                          ORDER BY id DESC LIMIT 400""", (day,)).fetchall()
+    grouped, out = {}, []
+    for _id, at, kind, payload in rows:
+        try:
+            e = json.loads(payload)
+        except (ValueError, TypeError):
+            e = {}
+        t = str(at)[11:16]
+        if kind == "store":                               # group store issues of one sync by destination
+            key = (at, e.get("to") or "?")
+            g = grouped.get(key)
+            if g is None:
+                g = grouped[key] = {"time": t, "kind": "store", "to": e.get("to") or "?", "items": [], "payload": {}}
+                out.append(g)
+            g["items"].append(e.get("item"))
+            continue
+        out.append({"time": t, "kind": kind, "payload": e})
+    # render a line per row
+    def line(r):
+        if r["kind"] == "store":
+            n = len(r["items"])
+            head = ", ".join(x for x in r["items"][:3] if x)
+            return f"Store → {r['to']} · {head}" + (f" (+{n - 3} more)" if n > 3 else f" ({n} item{'s' if n != 1 else ''})" if n > 1 else "")
+        e = r["payload"]
+        if r["kind"] == "cash":
+            return f"Cash {('+' if e.get('delta',0)>=0 else '')}{e.get('delta',0):,} {e.get('label','') or ''}".strip()
+        if r["kind"] == "woven":
+            return f"Woven +{e.get('meters',0):,} m"
+        if r["kind"] == "out":
+            m = e.get("meters")
+            return f"{(e.get('what') or 'goods').title()} out" + (f" · {m:,} m" if m else "") + (f" → {e.get('party')}" if e.get('party') else "")
+        if r["kind"] == "in":
+            return f"{(e.get('what') or 'goods').title()} in" + (f" · {e.get('bags')} bags" if e.get('bags') else "") + (f" ← {e.get('party')}" if e.get('party') else "")
+        if r["kind"] == "alert":
+            return "Alert: " + str(e.get("title", ""))
+        return r["kind"]
+    return {"rows": [{"time": r["time"], "kind": r["kind"], "line": line(r)} for r in out]}
+
+
+def fabric_history(con, cfg, d0=None, d1=None):
+    """Fabric detail (#24): per contract/quality - produced (woven), dispatched, returned, rejection, and the
+    balance in stock now; dispatch lines; totals on top. In-stock uses the ERP's own fabric_stock so it agrees
+    with the fabric-stock report. Date range filters produced/dispatched/returned/rejection."""
+    d1 = d1 or date.today()
+    d0 = d0 or (d1 - timedelta(days=365))
+    lo, hi = d0.isoformat(), d1.isoformat()
+    prod = {}
+    for cno, q, m, rej in con.execute("""SELECT contract_no, quality, SUM(meters), SUM(COALESCE(rejected_m,0))
+            FROM loom_production WHERE prod_date BETWEEN ? AND ? GROUP BY contract_no, quality""", (lo, hi)):
+        prod[(cno, q)] = {"produced": round(m or 0), "rejection": round(rej or 0)}
+    disp = {}
+    for cno, q, out_m, in_m in con.execute("""SELECT contract_no, quality,
+            SUM(CASE direction WHEN 'out' THEN meters ELSE 0 END), SUM(CASE direction WHEN 'in' THEN meters ELSE 0 END)
+            FROM fabric_dispatches WHERE dispatch_date BETWEEN ? AND ? GROUP BY contract_no, quality""", (lo, hi)):
+        disp[(cno, q)] = {"dispatched": round(out_m or 0), "returned": round(in_m or 0)}
+    stock = {}
+    for cno, q, m in con.execute("SELECT contract_no, quality, SUM(meters) FROM fabric_stock GROUP BY contract_no, quality"):
+        stock[(cno, q)] = round(m or 0)
+    pname = dict(con.execute("SELECT contract_no, party_name FROM contracts"))
+    keys = set(prod) | set(disp) | set(stock)
+    rows = []
+    for k in keys:
+        p = prod.get(k, {}); dd = disp.get(k, {})
+        rows.append({"contract": k[0], "quality": k[1], "party": pname.get(k[0]),
+                     "produced": p.get("produced", 0), "dispatched": dd.get("dispatched", 0),
+                     "returned": dd.get("returned", 0), "rejection": p.get("rejection", 0),
+                     "stock": stock.get(k, 0)})
+    rows.sort(key=lambda r: -r["stock"])
+    lines = [{"date": a, "doc_no": b, "party": c, "contract": d, "meters": round(e or 0), "direction": f}
+             for a, b, c, d, e, f in con.execute("""SELECT dispatch_date, doc_no, party_code, contract_no, meters, direction
+                 FROM fabric_dispatches WHERE dispatch_date BETWEEN ? AND ? ORDER BY dispatch_date DESC LIMIT 500""", (lo, hi))]
+    totals = {"produced": sum(r["produced"] for r in rows), "dispatched": sum(r["dispatched"] for r in rows),
+              "returned": sum(r["returned"] for r in rows), "rejection": sum(r["rejection"] for r in rows),
+              "stock": sum(r["stock"] for r in rows)}
+    return {"totals": totals, "rows": rows, "dispatches": lines, "from": lo, "to": hi}
+
+
+def _scb_today(con):
+    """The scoreboard's own efficiency for its most recent day (the live 'current shift' figure) - read as-is,
+    meters-weighted across looms, with meters and average RPM and the day it is for. Empty when no monitor."""
+    last = con.execute("SELECT MAX(read_date) FROM loom_monitor").fetchone()[0]
+    if not last:
+        return {}
+    eff, m, rpm = con.execute("""SELECT SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0),
+                                 SUM(meters), AVG(rpm) FROM loom_monitor WHERE read_date = ?""", (last,)).fetchone()
+    return {"scb_eff_today": round(eff, 1) if eff is not None else None, "scb_meters_today": round(m or 0),
+            "scb_rpm_today": round(rpm) if rpm else None, "scb_today_date": last}
 
 
 def _sync_health(con, cfg):

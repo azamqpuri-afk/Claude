@@ -127,6 +127,40 @@ class App:
     def loom_lines(self, loom, d0, d1):
         return self._store_drill("loom_lines", loom, d0, d1)
 
+    def feed(self, day=None):
+        """The Overview live-feed panel: the whole day's change_log, newest first."""
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return data.feed_day(con, self.cfg, day)
+        finally:
+            con.close()
+
+    def fabric_history(self, d0=None, d1=None):
+        """Fabric-in-stock history drill (#24): produced / dispatched / returned / rejection / stock per contract."""
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return data.fabric_history(con, self.cfg, d0, d1)
+        finally:
+            con.close()
+
+    def month_sales(self, d0=None, d1=None):
+        """Sales tile drill (#1): this month's sale vouchers (or a date range)."""
+        from . import finance as _fin
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return _fin.month_sales(con, d0=d0, d1=d1)
+        finally:
+            con.close()
+
+    def bank_accounts(self):
+        """Bank tile drill (#2): each bank account's current balance."""
+        from . import finance as _fin
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return _fin.bank_accounts(con)
+        finally:
+            con.close()
+
     def manual_list(self, scope, field=None):
         from .. import manual
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -490,6 +524,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts",
                 "/api/store/issues", "/api/store/rates", "/api/store/slip", "/api/store/loom",
                 "/api/manual", "/api/manual/history", "/api/closing/contracts", "/api/closing/sheet",
+                "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks",
                 "/api/reports/files", "/api/changes"):
         if check_licence:
             st = licence.status(app.cfg)
@@ -510,6 +545,8 @@ def get_response(app, path, query, check_licence=True):
         if path == "/api/finance/group":                 # cash/bank transaction history for the Overview drill-down
             g = params.get("group", "cash")
             return 200, app.fin_group(g if g in ("cash", "bank") else "cash"), "application/json", {}
+        if path == "/api/finance/banks":                 # per-bank balances (Overview bank tile drill, #2)
+            return 200, app.bank_accounts(), "application/json", {}
         if path == "/api/store/issues":                  # last issues of one item (store drill-down)
             return 200, app.issue_history(params.get("item", ""), params.get("limit", 20)), "application/json", {}
         if path in ("/api/store/rates", "/api/store/loom"):   # rates audit / loom consumption drill (optional from/to)
@@ -535,6 +572,21 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.changes(params.get("since", "")), "application/json", {}
         if path == "/api/reports/files":                 # saved report files for the Reports page
             return 200, app.reports_files(), "application/json", {}
+        if path in ("/api/fabric/history", "/api/finance/sales"):   # optional from/to range (#24 fabric, #1 sales)
+            try:
+                a0 = date.fromisoformat(params["from"]) if params.get("from") else None
+                a1 = date.fromisoformat(params["to"]) if params.get("to") else None
+            except ValueError:
+                return 400, {"error": "from/to must be YYYY-MM-DD"}, "application/json", {}
+            if path == "/api/fabric/history":
+                return 200, app.fabric_history(a0, a1), "application/json", {}
+            return 200, app.month_sales(a0, a1), "application/json", {}
+        if path == "/api/feed":                          # the Overview live-feed panel (optional ?date=)
+            try:
+                fday = date.fromisoformat(params["date"]) if params.get("date") else None
+            except ValueError:
+                return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
+            return 200, app.feed(fday), "application/json", {}
         try:
             day = date.fromisoformat(params["date"]) if params.get("date") else None
         except ValueError:

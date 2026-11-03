@@ -217,6 +217,42 @@ def group_ledger(con, group="cash", limit=300):
     return {"group": group, "balance": round(total), "count": len(rows), "rows": rows[:int(limit)]}
 
 
+def month_sales(con, as_of=None, d0=None, d1=None):
+    """Sales billed this month (or a date range) for the Overview sales tile drill (#1): one line per sale
+    voucher, its invoice value = the debit posted to the customer/party account. Total + voucher list, newest
+    first. ERP-agnostic: reads voucher_kind='sale' postings to customer-group accounts."""
+    if d0 and d1:
+        lo = d0.isoformat() if hasattr(d0, "isoformat") else str(d0)
+        hi = d1.isoformat() if hasattr(d1, "isoformat") else str(d1)
+        label = f"{lo} to {hi}"
+    else:
+        as_of = as_of or date.today()
+        lo, hi = as_of.replace(day=1).isoformat(), as_of.isoformat()
+        label = as_of.strftime("%b %Y")
+    rows = con.execute("""
+        SELECT l.voucher_date, l.voucher_no, a.account_name, SUM(l.amount) AS val
+        FROM ledger_entries l JOIN accounts a USING (account_code)
+        WHERE l.voucher_kind = 'sale' AND a.account_group = 'customer'
+              AND l.voucher_date >= ? AND l.voucher_date <= ?
+        GROUP BY l.voucher_id, l.voucher_date, l.voucher_no, a.account_name
+        HAVING SUM(l.amount) > 0
+        ORDER BY l.voucher_date DESC, l.voucher_no DESC
+        LIMIT 500""", (lo, hi)).fetchall()
+    out = [{"date": vd, "voucher_no": vno, "party": an, "amount": round(val or 0)} for vd, vno, an, val in rows]
+    return {"label": label, "from": lo, "to": hi, "total": round(sum(r["amount"] for r in out)),
+            "count": len(out), "rows": out}
+
+
+def bank_accounts(con):
+    """Each bank account's current balance for the Overview bank tile drill (#2), overdrawn ones first; total
+    on top. 'in hand' / 'overdrawn' label per account."""
+    rows = con.execute("""SELECT a.account_code, a.account_name, COALESCE(b.balance, 0)
+                          FROM accounts a JOIN account_balances b USING (account_code)
+                          WHERE a.account_group = 'bank' ORDER BY b.balance""").fetchall()
+    accts = [{"code": c, "name": n, "balance": round(bal), "side": _side("bank", bal)} for c, n, bal in rows]
+    return {"total": round(sum(a["balance"] for a in accts)), "count": len(accts), "accounts": accts}
+
+
 def overview(con):
     """What the dashboard's /api/data embeds for the Finance tab's first paint."""
     return {"kpis": kpis(con), "chips": chips(con), "go_live": _go_live(con),
