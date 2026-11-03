@@ -421,3 +421,55 @@ def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None):
                    f"Value {cur}", "Note"],
                   [[r["contract"], r["party"], r["status"], r["yarn_name"], round(r["meters"]), round(r["received_bags"], 1),
                     round(r["used_bags"], 1), round(r["balance_bags"], 1), r["value"], r["note"]] for r in rows], summary)
+
+
+# ---- #6 yarn-closing sheet (party + yarn + contract; IGP yarn and OGP fabric date-wise) -----------------------
+def contract_list(con, party=None):
+    """Contracts for the closing picker: [{contract, party, quality, date}], optionally filtered to one party
+    (substring, case-insensitive). Most recent first."""
+    p = (party or "").strip().lower()
+    out = []
+    for cno, pn, q, cd in con.execute(
+            "SELECT contract_no, party_name, quality, contract_date FROM contracts ORDER BY contract_date DESC"):
+        if p and p not in str(pn or "").lower():
+            continue
+        out.append({"contract": cno, "party": pn, "quality": q, "date": cd})
+    return out
+
+
+def closing_sheet(con, cfg, party=None, contract=None, quality=None):
+    """A neat per-contract closing sheet: IGP yarn date-wise (date, doc, bags, kg), OGP fabric date-wise (date,
+    doc, metres), the warp/weft weight & count used, and totals. mode is implied by the arguments:
+      contract set            -> that one contract
+      party + quality set     -> every contract of that party and quality, combined (lines still per contract)
+      party set only          -> every contract of that party
+    Returns a dict (served at /api/closing/sheet); a live-formula workbook is built by the caller if exporting."""
+    # choose contracts
+    conds, params = [], []
+    if contract:
+        conds.append("contract_no = ?"); params.append(contract)
+    if party:
+        conds.append("LOWER(party_name) LIKE ?"); params.append(f"%{party.strip().lower()}%")
+    if quality:
+        conds.append("quality = ?"); params.append(quality)
+    where = (" WHERE " + " AND ".join(conds)) if conds else ""
+    meta = con.execute(f"""SELECT contract_no, party_name, quality, ends_per_inch, picks_per_inch, width_in,
+                           warp_count, weft_count, rate_per_meter FROM contracts{where}""", params).fetchall()
+    if not meta:
+        return {"contracts": [], "igp": [], "ogp": [], "counts": {}, "totals": {}}
+    cnos = [m[0] for m in meta]
+    qmarks = ",".join("?" * len(cnos))
+    igp = [{"date": a, "doc_no": b, "bags": round(c or 0, 1), "kg": round(d or 0)} for a, b, c, d in con.execute(
+        f"""SELECT move_date, doc_no, SUM(COALESCE(bags,0)), SUM(kg) FROM yarn_movements
+            WHERE contract_no IN ({qmarks}) AND move_type IN ('party_receipt','sized_beams_received')
+            GROUP BY move_date, doc_no ORDER BY move_date""", cnos)]
+    ogp = [{"date": a, "doc_no": b, "meters": round(c or 0), "grade": "fresh"} for a, b, c in con.execute(
+        f"""SELECT dispatch_date, doc_no, SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters) FROM fabric_dispatches
+            WHERE contract_no IN ({qmarks}) GROUP BY dispatch_date, doc_no ORDER BY dispatch_date""", cnos)]
+    m0 = meta[0]
+    counts = {"warp_count": m0[6], "weft_count": m0[7], "ends_per_inch": m0[3], "picks_per_inch": m0[4],
+              "width_in": m0[5], "rate_per_meter": m0[8]}
+    totals = {"yarn_in_kg": round(sum(r["kg"] for r in igp)), "yarn_in_bags": round(sum(r["bags"] for r in igp), 1),
+              "fabric_out_m": round(sum(r["meters"] for r in ogp)), "contracts": len(cnos)}
+    return {"contracts": [{"contract": m[0], "party": m[1], "quality": m[2]} for m in meta],
+            "party": m0[1], "quality": m0[2], "igp": igp, "ogp": ogp, "counts": counts, "totals": totals}
