@@ -89,12 +89,13 @@ def yarn_needed(con, cfg, as_of=None):
         bal = max(0.0, (r["ordered"] or 0) - (r["woven"] or 0))
         if bal <= 0:
             continue
+        st = method.settings(r["contract"], None)
         for side, tpi, yarn, cnt in (("warp", r["epi"], r["warp_yarn"], r["warp_count"]),
                                      ("weft", r["ppi"], r["weft_yarn"], r["weft_count"])):
             c = _count_num(cnt)
             if not c or not tpi or not r["width"]:
                 continue
-            lbm = method.weight(side, r["quality"], tpi, r["width"], method.closing_count(side, yarn, cnt, r["quality"]))
+            lbm = method.weight(side, st, tpi, r["width"], method.closing_count(side, yarn, cnt, st))
             if lbm:
                 need[c] = need.get(c, 0.0) + bal * lbm / 2.2046         # lbs/m -> kg
     return need

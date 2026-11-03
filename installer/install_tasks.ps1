@@ -69,6 +69,12 @@ try {
     }
 } catch { Write-Host "Could not verify the live-sync repetition: $_" }
 
+# Morning push (~06:20): the morning production summary, the night-shift sensor report and the weft check.
+$mornPrin = Resolve-Principal "Smart Layer Morning"
+Register-ScheduledTask -TaskName "Smart Layer Morning" -Action (New-RunAction $mornPrin "$AppDir\run_morning.cmd") `
+    -Principal $mornPrin -Force -Trigger (New-ScheduledTaskTrigger -Daily -At "06:20") `
+    -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) | Out-Null
+
 # Dashboard: always on. AtStartup fires for SYSTEM (runs with no session); an Interactive principal has no session
 # at boot, so it must start AtLogOn instead - otherwise the dashboard never comes up on an Interactive install.
 $dashPrin = Resolve-Principal "Smart Layer Dashboard"

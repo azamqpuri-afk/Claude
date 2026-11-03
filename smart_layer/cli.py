@@ -223,6 +223,50 @@ def cmd_serve(cfg, args):
     return 0
 
 
+def _push_day(args):
+    return date.fromisoformat(args.date) if getattr(args, "date", None) else None
+
+
+def cmd_notify_changes(cfg, args):
+    from . import pushes
+    con = _store(cfg)
+    try:
+        print(f"{pushes.notify_changes(cfg, con)} push(es)")
+    finally:
+        con.close()
+    return 0
+
+
+def cmd_morning(cfg, args):
+    from . import pushes
+    con = _store(cfg)
+    try:
+        pushes.morning_summary(cfg, con, _push_day(args))
+    finally:
+        con.close()
+    return 0
+
+
+def cmd_night_sensor(cfg, args):
+    from . import pushes
+    con = _store(cfg)
+    try:
+        pushes.night_sensor(cfg, con, _push_day(args))
+    finally:
+        con.close()
+    return 0
+
+
+def cmd_weft_check(cfg, args):
+    from . import pushes
+    con = _store(cfg)
+    try:
+        pushes.weft_check(cfg, con, _push_day(args))
+    finally:
+        con.close()
+    return 0
+
+
 def cmd_dashboard(cfg, args):
     from .web import static_page
     day = date.fromisoformat(args.date) if args.date else None
@@ -380,6 +424,13 @@ def main(argv=None):
     q.add_argument("question", nargs="*")
     q.add_argument("--show-sql", action="store_true")
     sub.add_parser("serve")
+    sub.add_parser("notify-changes")                     # live-sync pushes: new production + OGP fabric
+    mg = sub.add_parser("morning")
+    mg.add_argument("--date")
+    ns = sub.add_parser("night-sensor")
+    ns.add_argument("--date")
+    wc = sub.add_parser("weft-check")
+    wc.add_argument("--date")
     d = sub.add_parser("dashboard")
     d.add_argument("--date")
     d.add_argument("--out")
@@ -446,11 +497,12 @@ def main(argv=None):
         input("\nPress Enter to close this window.")      # keep the console open so the owner can read the result
         return rc
     cfg = config.load(args.config)
-    if args.cmd in ("sync", "report", "audit", "ask"):   # the dashboard (serve) starts regardless, so the
+    if args.cmd in ("sync", "report", "audit", "ask", "notify-changes", "morning", "night-sensor", "weft-check"):
         from .licence import require                      # licence can be installed from its own Licence screen
         require(cfg)
     return {"check": cmd_check, "sync": cmd_sync, "report": cmd_report, "audit": cmd_audit, "ask": cmd_ask, "serve": cmd_serve,
-            "dashboard": cmd_dashboard, "autoprofile": cmd_autoprofile,
+            "dashboard": cmd_dashboard, "autoprofile": cmd_autoprofile, "notify-changes": cmd_notify_changes,
+            "morning": cmd_morning, "night-sensor": cmd_night_sensor, "weft-check": cmd_weft_check,
             "status": cmd_status, "grants": cmd_grants, "licence": cmd_licence}[args.cmd](cfg, args)
 
 

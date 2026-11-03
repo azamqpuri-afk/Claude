@@ -18,6 +18,8 @@ $syncRc = $LASTEXITCODE
 # urgent, send-once alerts only (loom silent, beam out with no backup, confirmed error, negative stock)
 & $py -m smart_layer audit --push --urgent 2>&1 | Out-File $log -Append -Encoding utf8
 $auditRc = $LASTEXITCODE
+# new-production and new-OGP-fabric pushes from the change log (replaces the old hourly production task)
+& $py -m smart_layer notify-changes 2>&1 | Out-File $log -Append -Encoding utf8
 # always write a result line, success or failure, so a silent problem (e.g. the ERP login) is visible in the log
 "---- done $(Get-Date -Format 'HH:mm:ss'): sync exit $syncRc, audit exit $auditRc ----" | Out-File $log -Append -Encoding utf8
 & $py -m smart_layer logtrim $log --max-mb 5 --keep-mb 1 | Out-Null   # lock-safe trim (temp file + rename)

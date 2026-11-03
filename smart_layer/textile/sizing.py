@@ -166,7 +166,7 @@ def weft_consumption(con, cfg, d0=None, d1=None):
         count = oc or fc
         if not (ppi and width and count):
             continue
-        lbm = method.weight("weft", q, ppi, width, count)
+        lbm = method.weight("weft", method.settings(cno, None), ppi, width, count)
         if lbm:
             agg[q][0] += (m or 0) * lbm / 2.2046
             agg[q][1] += m or 0

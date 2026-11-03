@@ -15,5 +15,7 @@ set SYNCRC=%ERRORLEVEL%
 rem Urgent, send-once alerts (loom silent, beam out with no backup, confirmed error, negative stock) - each pushed once.
 SmartLayer.exe audit --push --urgent >> "%LOG%" 2>&1
 set AUDITRC=%ERRORLEVEL%
+rem new-production and new-OGP-fabric pushes from the change log (replaces the old hourly production task)
+SmartLayer.exe notify-changes >> "%LOG%" 2>&1
 rem always write a result line, success or failure, so a silent problem (e.g. the ERP login) is visible in the log
 echo ---- done %time%: sync exit %SYNCRC%, audit exit %AUDITRC% ---- >> "%LOG%"
