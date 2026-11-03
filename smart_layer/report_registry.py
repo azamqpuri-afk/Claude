@@ -9,7 +9,7 @@ Each entry is  name -> (builder, label shown to the owner, day_report)
 
 from datetime import date, timedelta
 
-from .reports import finance, gatepass, payroll, production, reconcile, stock
+from .reports import finance, gatepass, payroll, production, reconcile, stock, store_extra
 from .textile import beams, closing, pilferage, stock_position
 
 REPORTS = {
@@ -17,6 +17,11 @@ REPORTS = {
     "zero":         (stock.new_zero,                "Store: items newly at zero", False),
     "reorder":      (stock.reorder_list,            "Store: reorder list", False),
     "demand":       (stock.demand_list,             "Store: demand (what to buy, on usage)", False),
+    "store-expense": (store_extra.store_expense,     "Store: expense (issues − returns), net", False),
+    "issue-slips":  (store_extra.issue_slips,       "Store: issue slips", False),
+    "store-returns": (store_extra.store_returns,     "Store: returns", False),
+    "unused-stock": (store_extra.unused_stock,      "Store: unused stock (no issue for months)", False),
+    "loom-consumption": (store_extra.loom_consumption, "Store: consumption by loom (monthly)", False),
     "production":   (production.daily_production,   "Production on the day (per loom)", True),
     "value":        (production.production_value,   "Production value (earnings per loom / contract)", True),
     "closing":      (closing.contract_closing,      "Contract closing (party yarn balance)", False),
@@ -43,7 +48,7 @@ REPORTS = {
 NAMES = list(REPORTS)
 
 # reports that take a from/to window (builder signature (con, cfg, d0, d1)); everything else takes a single as-of day.
-RANGE = {"unbalanced"}
+RANGE = {"unbalanced", "store-expense", "issue-slips", "store-returns", "loom-consumption"}
 
 
 def build(con, cfg, name, day=None, d0=None, d1=None):

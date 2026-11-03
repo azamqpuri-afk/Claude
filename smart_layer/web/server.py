@@ -110,6 +110,23 @@ class App:
         finally:
             con.close()
 
+    def _store_drill(self, fn, *a):
+        from ..reports import store_extra
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return getattr(store_extra, fn)(con, *a)
+        finally:
+            con.close()
+
+    def rates_audit(self, item, d0, d1):
+        return self._store_drill("rates_audit", self.cfg, item, d0, d1)
+
+    def slip_lines(self, doc):
+        return self._store_drill("slip_lines", doc)
+
+    def loom_lines(self, loom, d0, d1):
+        return self._store_drill("loom_lines", loom, d0, d1)
+
     def reports_files(self):
         """Saved report files (PDF/CSV) in output_dir, for the Reports page's download list."""
         from ..reports import delivery
@@ -430,7 +447,8 @@ def get_response(app, path, query, check_licence=True):
         return 200, body, ctype, {"Content-Disposition": f'attachment; filename="{name}"'}
     if path in ("/api/data", "/api/report", "/api/entities", "/api/browse", "/api/ledger",
                 "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts",
-                "/api/store/issues", "/api/reports/files", "/api/changes"):
+                "/api/store/issues", "/api/store/rates", "/api/store/slip", "/api/store/loom",
+                "/api/reports/files", "/api/changes"):
         if check_licence:
             st = licence.status(app.cfg)
             if not st.allowed:
@@ -452,6 +470,17 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.fin_group(g if g in ("cash", "bank") else "cash"), "application/json", {}
         if path == "/api/store/issues":                  # last issues of one item (store drill-down)
             return 200, app.issue_history(params.get("item", ""), params.get("limit", 20)), "application/json", {}
+        if path in ("/api/store/rates", "/api/store/loom"):   # rates audit / loom consumption drill (optional from/to)
+            try:
+                a0 = date.fromisoformat(params["from"]) if params.get("from") else None
+                a1 = date.fromisoformat(params["to"]) if params.get("to") else None
+            except ValueError:
+                return 400, {"error": "from/to must be YYYY-MM-DD"}, "application/json", {}
+            if path == "/api/store/rates":
+                return 200, app.rates_audit(params.get("item", ""), a0, a1), "application/json", {}
+            return 200, app.loom_lines(params.get("loom", ""), a0, a1), "application/json", {}
+        if path == "/api/store/slip":                    # one issue slip's lines
+            return 200, app.slip_lines(params.get("doc", "")), "application/json", {}
         if path == "/api/changes":                       # what changed since the client's last refresh (animations)
             return 200, app.changes(params.get("since", "")), "application/json", {}
         if path == "/api/reports/files":                 # saved report files for the Reports page
