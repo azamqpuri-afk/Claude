@@ -334,7 +334,7 @@ def build(con, cfg, as_of=None):
         "synced_at": _one(con, "SELECT MAX(synced_at) FROM sync_log") or None,
         "now": datetime.now().isoformat(sep=" ", timespec="seconds"),   # server clock, for the "Live HH:MM" display
         "change_cursor": _change_cursor(con),           # the change_log id to pass back as `since` on the next refresh
-        "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound")},
+        "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound", "colour_scheme")},
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "kpis": {
             "meters": round(today[1] or 0) if today else 0,
