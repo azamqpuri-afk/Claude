@@ -96,6 +96,9 @@ shrink_pct = 7           # default sizing shrinkage % (metres after shrink); per
 # Buckets: store | payroll | power | sizing | other. Example:
 # heads = { "Electricity" = "power", "Wages" = "payroll", "Store consumption" = "store" }
 heads = {}
+# A month counts as "closed" (its month-end entries posted) when ALL of these buckets are > 0 — the cost-per-metre
+# headline and averages use only closed months, so a part-posted current month never misleads. Default: store + payroll.
+# closed_requires = ["store", "payroll"]
 
 [pilferage]
 lookback_days = 90

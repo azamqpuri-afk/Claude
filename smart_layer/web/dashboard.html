@@ -678,7 +678,8 @@ function render(){
     tile("🧾 Sales this month", M("Rs "+rs(k.sales_month)), "tap for invoices", "", "", "sales") +
     tile("📥 Receivable", M("Rs "+rs(fk.receivable_gross!=null?fk.receivable_gross:k.receivable)), recMeta, "", "", "receivable") +
     tile("📤 Payable", M("Rs "+rs(fk.owe_store_suppliers!=null?fk.owe_store_suppliers:k.payable)), payMeta, "", "", "payable") +
-    tile("📈 Avg sales / month", M("Rs "+rs(k.sales_avg_12m)), avgMeta, "accent");
+    tile("📈 Avg sales / month", M("Rs "+rs(k.sales_avg_12m)), avgMeta, "accent") +
+    costTile();
   // mill (fabric & yarn tiles drill into detail)
   var yf=D.yarn_fabric||{};
   // live scoreboard efficiency tile (#8): shown only when the scoreboard is connected (kpis carry scb_*_today)
@@ -811,8 +812,17 @@ function wireDrills(){
     t.onkeydown=(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); drill(w); } };
   });
 }
+// #25 cost-per-metre tile: the last CLOSED month's cost/m (without sizing), with-sizing + month in the meta
+function costTile(){
+  var c=(D&&D.cost)||{};
+  if(!c.closed) return tile("🧮 Cost / metre", "—", (c.latest_open? (c.latest_open+" · month-end pending"):"needs [cost] heads")+" · tap", "", "", "cost");
+  var cur=c.currency||"Rs";
+  return tile("🧮 Cost / metre ("+esc(c.month)+")", cur+" "+c.no_sizing,
+    cur+" "+c.with_sizing+" with sizing · tap for history", "", "", "cost");
+}
 function drill(which){
   if(which==='cash') return drawCash();
+  if(which==='cost') return drawCost();
   if(which==='banks') return drawBanks();
   if(which==='sales') return drawSales();
   if(which==='receivable') return drawParties('customer','📥 Receivable — who owes us');
@@ -830,6 +840,28 @@ async function drawBanks(){
     var head=`<div class="lkpi" style="grid-template-columns:repeat(2,1fr);margin-bottom:10px"><div><div class="t">All banks</div><div class="v">Rs ${num(j.total)}</div></div><div><div class="t">Accounts</div><div class="v">${num(j.count)}</div></div></div>`;
     $("#drawer-body").innerHTML=head+(rows.length?table(["Bank account","","Rs"],rows,[2]):'<p class="muted">No bank accounts.</p>');
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load bank balances.</p>'; }
+}
+async function drawCost(){
+  openDrawer("🧮 Cost per metre",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see the cost history.</p>'; return; }
+  try{
+    var j=await (await fetch("api/finance/cost"+(($("#day")&&$("#day").value)?("?date="+$("#day").value):""))).json();
+    var h=j.headline||{};
+    var head="";
+    if(h.closed){
+      var cur=h.currency||"Rs";
+      head=`<div class="lkpi" style="margin-bottom:10px"><div><div class="t">${esc(h.month)} · no sizing</div><div class="v">${cur} ${h.no_sizing}</div></div>`+
+        `<div><div class="t">with sizing</div><div class="v">${cur} ${h.with_sizing}</div></div>`+
+        `<div><div class="t">avg (${h.closed_months} closed mo)</div><div class="v">${cur} ${h.avg_no_sizing}</div></div>`+
+        `<div><div class="t">low / high</div><div class="v" style="font-size:14px">${h.low.no_sizing} (${esc(h.low.month).slice(5)}) · ${h.high.no_sizing} (${esc(h.high.month).slice(5)})</div></div></div>`+
+        `<p class="muted" style="margin:0 0 8px;font-size:12px">Headline is the last CLOSED month (month-end posted). Heads: store ${h.heads.store}, payroll ${h.heads.payroll}, power ${h.heads.power}, other ${h.heads.other}, sizing ${h.heads.sizing} ${cur}/m.</p>`;
+    } else {
+      head=`<p class="muted" style="margin:0 0 8px">No closed month yet${h.latest_open?(" (latest "+esc(h.latest_open)+" has month-end entries pending)"):""}.</p>`;
+    }
+    var nums=(j.columns||[]).map((_,i)=>i).filter(i=>i>=1 && i<=8);
+    var rows=(j.rows||[]).slice().reverse().map(r=>r.map((c,i)=>i===9 && c==="not closed" ? '<span class="tag mid">not closed</span>' : esc(c)));
+    $("#drawer-body").innerHTML=head+(rows.length?table(j.columns,rows,nums):'<p class="muted">No cost data.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load the cost history.</p>'; }
 }
 async function drawSales(){
   openDrawer("🧾 Sales this month",'<p class="muted">Loading…</p>');

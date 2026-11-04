@@ -161,6 +161,17 @@ class App:
         finally:
             con.close()
 
+    def cost_metre(self, day=None):
+        """Cost-per-metre headline (last closed month + 12-closed-month average) and the historic table (#25)."""
+        from ..reports import finance as _rf
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            h = _rf.cost_headline(con, self.cfg, day)
+            rep = _rf.cost_per_metre(con, self.cfg, day)
+            return {"headline": h, "columns": rep.columns, "rows": rep.rows, "summary": rep.summary}
+        finally:
+            con.close()
+
     def manual_list(self, scope, field=None):
         from .. import manual
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -533,7 +544,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts",
                 "/api/store/issues", "/api/store/rates", "/api/store/slip", "/api/store/loom",
                 "/api/manual", "/api/manual/history", "/api/closing/contracts", "/api/closing/sheet",
-                "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks",
+                "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
                 "/api/reports/files", "/api/changes"):
         if check_licence:
             st = licence.status(app.cfg)
@@ -556,6 +567,12 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.fin_group(g if g in ("cash", "bank") else "cash"), "application/json", {}
         if path == "/api/finance/banks":                 # per-bank balances (Overview bank tile drill, #2)
             return 200, app.bank_accounts(), "application/json", {}
+        if path == "/api/finance/cost":                  # cost per metre: headline + historic (Overview tile drill, #25)
+            try:
+                cday = date.fromisoformat(params["date"]) if params.get("date") else None
+            except ValueError:
+                return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
+            return 200, app.cost_metre(cday), "application/json", {}
         if path == "/api/store/issues":                  # last issues of one item (store drill-down)
             return 200, app.issue_history(params.get("item", ""), params.get("limit", 20)), "application/json", {}
         if path in ("/api/store/rates", "/api/store/loom"):   # rates audit / loom consumption drill (optional from/to)

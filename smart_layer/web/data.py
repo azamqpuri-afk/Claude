@@ -366,6 +366,7 @@ def build(con, cfg, as_of=None):
         "beam_stock": _beam_stock(con, cfg, as_of),
         "charts": {**_chart_series(con, as_of), "sales": sales_series},
         "fin": fin_mod.overview(con),
+        "cost": _cost_head(con, cfg, as_of),
         "weaving": _weaving(con, as_of),
         "yarn_fabric": _yarn_fabric(con, cfg, as_of),
     }
@@ -467,6 +468,16 @@ def fabric_history(con, cfg, d0=None, d1=None):
               "returned": sum(r["returned"] for r in rows), "rejection": sum(r["rejection"] for r in rows),
               "stock": sum(r["stock"] for r in rows)}
     return {"totals": totals, "rows": rows, "dispatches": lines, "from": lo, "to": hi}
+
+
+def _cost_head(con, cfg, as_of):
+    """The cost-per-metre headline (last closed month) for the Overview tile's first paint (#25). Cheap enough to
+    embed; the tile taps through to /api/finance/cost for the historic table."""
+    try:
+        from ..reports import finance as _rf
+        return _rf.cost_headline(con, cfg, as_of)
+    except Exception:
+        return {}
 
 
 def _scb_today(con):

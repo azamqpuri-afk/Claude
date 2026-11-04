@@ -121,13 +121,18 @@ def _bucket_of(head, name, cfg):
     return "other"
 
 
-def cost_per_metre(con, cfg, as_of=None, months=12):
-    """Monthly cost per metre woven: each expense head per metre, the total WITHOUT sizing and WITH sizing.
-    Expense ledger heads are grouped into store / payroll / power / other / sizing (configurable in [cost].heads).
-    Metres are the ERP's woven metres for the month. Sizing is shown separately so both views are visible."""
-    as_of = as_of or date.today()
+def _month_closed(buckets, cfg):
+    """Is a month's month-end posted? True when every bucket in [cost] closed_requires is > 0 (default store +
+    payroll - the store month-end journal and salaries). A month with woven metres but these not posted yet is
+    'not closed' and is kept out of the headline and the averages, so a part-posted month never misleads."""
+    need = cfg["cost"].get("closed_requires") or ["store", "payroll"]
+    return all((buckets.get(b, 0) or 0) > 0 for b in need)
+
+
+def _cost_months(con, cfg, as_of, months):
+    """Per-month cost data: [{month, woven, buckets{...}, no_sizing_per, sizing_per, with_sizing_per, closed}],
+    oldest first, trimmed to where the data starts. Shared by the report and the headline."""
     ms = _months(as_of, months)
-    cur = cfg["company"]["currency"]
     woven = dict(con.execute("SELECT strftime('%Y-%m', prod_date), SUM(meters) FROM loom_production WHERE prod_date >= ? AND prod_date <= ? GROUP BY 1",
                              (ms[0] + "-01", as_of.isoformat())))
     bybucket = {m: {b: 0.0 for b in COST_BUCKETS} for m in ms}
@@ -139,20 +144,80 @@ def cost_per_metre(con, cfg, as_of=None, months=12):
         if month in bybucket:
             bybucket[month][_bucket_of(head, name, cfg)] += (amt or 0)
     while len(ms) > 1 and not (woven.get(ms[0]) or any(bybucket[ms[0]].values())):
-        ms.pop(0)                                        # months before the data starts
-    rows = []
+        ms.pop(0)
+    running = as_of.strftime("%Y-%m")                     # the current month is never "closed" - it is not over yet
+    # a month with production far below the normal run is incomplete (a truncated / part-keyed month), so it is not
+    # a representative closed month even if its heads are posted - guard against a misleading cost/m from it.
+    wv = sorted(w for w in woven.values() if (w or 0) > 0)
+    median_w = wv[len(wv) // 2] if wv else 0
+    out = []
     for m in ms:
         w = woven.get(m, 0) or 0
         b = bybucket[m]
-        ns = b["store"] + b["payroll"] + b["power"] + b["other"]    # without sizing
-        per = lambda v: round(v / w, 2) if w else None   # noqa: E731
-        rows.append([m, round(w), per(b["store"]), per(b["payroll"]), per(b["power"]), per(b["other"]),
-                     per(ns), per(b["sizing"]), per(ns + b["sizing"])])
-    summary = [f"Cost per metre woven by month, in {cur}/m. 'No sizing' = store + payroll + power + other; "
-               "'With sizing' adds sizing charges. Group the ledger heads in [cost].heads for accuracy."]
-    return Report(f"Cost per metre - {ms[0]} to {ms[-1]}",
-                  ["Month", "Woven m", f"Store/m", "Payroll/m", "Power/m", "Other/m", "Cost/m (no sizing)",
-                   "Sizing/m", "Cost/m (with sizing)"], rows, summary)
+        ns = b["store"] + b["payroll"] + b["power"] + b["other"]
+        per = (lambda v: round(v / w, 2) if w else None)
+        full_month = w >= 0.2 * median_w if median_w else (w > 0)
+        out.append({"month": m, "woven": round(w), "buckets": b,
+                    "store": per(b["store"]), "payroll": per(b["payroll"]), "power": per(b["power"]),
+                    "other": per(b["other"]), "no_sizing": per(ns), "sizing": per(b["sizing"]),
+                    "with_sizing": per(ns + b["sizing"]),
+                    "closed": (w > 0 and m < running and full_month and _month_closed(b, cfg))})
+    return out
+
+
+def cost_headline(con, cfg, as_of=None, months=12):
+    """The cost-per-metre headline for the Overview tile / cost report: the LAST CLOSED month (month-end posted)
+    with its cost/m without and with sizing and the per-head breakdown, plus the average, lowest and highest over
+    the last 12 CLOSED months. Months not yet closed are excluded. Returns {} when no month is closed."""
+    data = _cost_months(con, cfg, as_of or date.today(), months)
+    closed = [d for d in data if d["closed"]]
+    if not closed:
+        return {"closed": False, "latest_open": (data[-1]["month"] if data else None)}
+    last = closed[-1]
+    ns = [d["no_sizing"] for d in closed if d["no_sizing"] is not None]
+    ws = [d["with_sizing"] for d in closed if d["with_sizing"] is not None]
+    lo = min(closed, key=lambda d: d["no_sizing"] if d["no_sizing"] is not None else 9e9)
+    hi = max(closed, key=lambda d: d["no_sizing"] if d["no_sizing"] is not None else -9e9)
+    return {"closed": True, "month": last["month"], "no_sizing": last["no_sizing"], "with_sizing": last["with_sizing"],
+            "heads": {"store": last["store"], "payroll": last["payroll"], "power": last["power"],
+                      "other": last["other"], "sizing": last["sizing"]},
+            "closed_months": len(closed),
+            "avg_no_sizing": round(sum(ns) / len(ns), 2) if ns else None,
+            "avg_with_sizing": round(sum(ws) / len(ws), 2) if ws else None,
+            "low": {"month": lo["month"], "no_sizing": lo["no_sizing"]},
+            "high": {"month": hi["month"], "no_sizing": hi["no_sizing"]},
+            "currency": cfg["company"]["currency"]}
+
+
+def cost_per_metre(con, cfg, as_of=None, months=12):
+    """Monthly cost per metre woven: each expense head per metre, the total WITHOUT sizing and WITH sizing, with a
+    'Closed?' column. Expense ledger heads are grouped into store/payroll/power/other/sizing ([cost].heads). The
+    headline (last CLOSED month) and the 12-closed-month average/low/high lead the summary; months whose month-end
+    entries are not posted yet are marked 'not closed' and excluded from the headline and the averages."""
+    as_of = as_of or date.today()
+    cur = cfg["company"]["currency"]
+    data = _cost_months(con, cfg, as_of, months)
+    rows = [[d["month"], d["woven"], d["store"], d["payroll"], d["power"], d["other"],
+             d["no_sizing"], d["sizing"], d["with_sizing"], ("yes" if d["closed"] else "not closed")]
+            for d in data]
+    h = cost_headline(con, cfg, as_of, months)
+    summary = []
+    if h.get("closed"):
+        summary.append(f"{h['month']} (last closed month): {cur} {h['no_sizing']:.2f}/m without sizing, "
+                       f"{h['with_sizing']:.2f}/m with sizing.")
+        if h.get("avg_no_sizing") is not None:
+            summary.append(f"Average over {h['closed_months']} closed month(s): {cur} {h['avg_no_sizing']:.2f}/m "
+                           f"(with sizing {h['avg_with_sizing']:.2f}); lowest {h['low']['no_sizing']:.2f} ({h['low']['month']}), "
+                           f"highest {h['high']['no_sizing']:.2f} ({h['high']['month']}).")
+    elif h.get("latest_open"):
+        summary.append(f"No closed month yet (latest {h['latest_open']} has month-end entries pending).")
+    summary.append(f"In {cur}/m. 'No sizing' = store + payroll + power + other; 'with sizing' adds sizing. A month "
+                   "is 'closed' once its month-end journals (store, salaries, power) are posted; not-closed months "
+                   "are excluded from the headline and averages. Group the ledger heads in [cost].heads for accuracy.")
+    first, last = (data[0]["month"] if data else ""), (data[-1]["month"] if data else "")
+    return Report(f"Cost per metre - {first} to {last}",
+                  ["Month", "Woven m", "Store/m", "Payroll/m", "Power/m", "Other/m", "Cost/m (no sizing)",
+                   "Sizing/m", "Cost/m (with sizing)", "Closed?"], rows, summary)
 
 
 def _tolerance(cfg):

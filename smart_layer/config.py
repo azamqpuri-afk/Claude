@@ -27,7 +27,8 @@ DEFAULTS = {
     "sizing": {"gullay_g": 55,                    # grams of yarn left on each returned baby cone (gullay)
                "pick_factor": 1.0936,             # metres-to-yards-ish factor in the closing-count formula
                "shrink_pct": 7},                  # default warp->fabric shrinkage for the sized-yarn closing count
-    "cost": {"heads": {}},                        # map a ledger account_group/head -> a cost bucket (store/payroll/power/sizing/other)
+    "cost": {"heads": {},                         # map a ledger account_group/head -> a cost bucket (store/payroll/power/sizing/other)
+             "closed_requires": ["store", "payroll"]},   # a month is "closed" (month-end entries posted) when these buckets are all > 0
     "sensor": {                                   # loom sensor duplicate-timings (sensor-swap) check - needs loom_stops
         "tol_seconds": 2,                         # two looms "twin" if they stop AND restart within this many seconds
         "gap_minutes": 20,                        # twin stops of one pair no more than this apart are one episode

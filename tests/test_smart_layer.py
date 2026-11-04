@@ -1456,3 +1456,25 @@ def test_v015_cost_per_metre_and_yarn_shortage(env):
     assert cm.columns and cm.rows is not None
     ys = _contracts.yarn_shortage(con, cfg, END)
     assert ys.columns[0] == "Count"
+
+
+def test_v015_cost_headline_closed_months(env):
+    cfg, con = env
+    h = _repfin.cost_headline(con, cfg, END)                    # END = 2026-10-02, so Oct is the running month
+    assert h["closed"] is True
+    assert h["month"] < END.strftime("%Y-%m")                  # headline is a COMPLETE closed month, never the running one
+    assert h["avg_no_sizing"] is not None and h["closed_months"] >= 1
+    assert h["low"]["no_sizing"] <= h["high"]["no_sizing"]
+    # the report has a Closed? column and marks the running month "not closed"
+    cm = _repfin.cost_per_metre(con, cfg, END)
+    assert cm.columns[-1] == "Closed?"
+    run = [r for r in cm.rows if r[0] == END.strftime("%Y-%m")]
+    assert run and run[0][-1] == "not closed"
+    assert any("last closed month" in line for line in cm.summary)
+    # the closed rule is configurable: require a bucket that is never posted -> nothing is closed
+    cfg.data.setdefault("cost", {})["closed_requires"] = ["power", "sizing", "store", "payroll", "other"]
+    try:
+        h2 = _repfin.cost_headline(con, cfg, END)
+    finally:
+        cfg.data["cost"]["closed_requires"] = ["store", "payroll"]
+    assert h2.get("closed") in (False, None)
