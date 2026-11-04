@@ -472,24 +472,50 @@ def closing_sheet(con, cfg, party=None, contract=None, quality=None):
     method = Method(cfg["closing"])
     cset = {str(x) for x in cnos}
     mrows = [r for r in contract_rows(con, method, date.today()) if str(r["contract"]) in cset]
+    # the CLOSING count used for each yarn GROUP across the selected contracts (warp group -> warp count, weft
+    # group -> weft count); config [yarns]/[parties] override the nominal count.
+    cbg = {}
+    for cc in cset:
+        cr = con.execute("SELECT warp_yarn, warp_count, weft_yarn, weft_count FROM contracts WHERE contract_no = ?", (cc,)).fetchone()
+        if not cr:
+            continue
+        st = method.settings(cc, None)
+        cbg.setdefault(method.group(cr[0]), method.closing_count("warp", cr[0], cr[1], st))
+        cbg.setdefault(method.group(cr[2]), method.closing_count("weft", cr[2], cr[3], st))
     st0 = method.settings(m0[0], None)
-    warp_cc = weft_cc = None
     crow = con.execute("SELECT warp_yarn, warp_count, weft_yarn, weft_count FROM contracts WHERE contract_no = ?", (m0[0],)).fetchone()
-    if crow:
-        warp_cc = method.closing_count("warp", crow[0], crow[1], st0)
-        weft_cc = method.closing_count("weft", crow[2], crow[3], st0)
+    warp_cc = method.closing_count("warp", crow[0], crow[1], st0) if crow else None
+    weft_cc = method.closing_count("weft", crow[2], crow[3], st0) if crow else None
+    # per-yarn balance rows (one per yarn group, summed across the selected contracts), as the closing report shows.
+    per = {}
+    for r in mrows:
+        gkey = r["yarn"]
+        a = per.setdefault(gkey, {"yarn": gkey, "yarn_name": r["yarn_name"], "received_bags": 0.0, "used_bags": 0.0,
+                                  "balance_lb": 0.0})
+        a["received_bags"] += r["received_bags"] or 0
+        a["used_bags"] += r["used_bags"] or 0
+        a["balance_lb"] += r["balance_lb"] or 0
+    bag_lb = float(st0["bag_lb"])
+    balance_rows = [{"yarn": a["yarn"], "yarn_name": a["yarn_name"], "count": cbg.get(a["yarn"]),
+                     "received_bags": round(a["received_bags"], 1), "used_bags": round(a["used_bags"], 1),
+                     "balance_bags": round(a["balance_lb"] / bag_lb, 1),
+                     "balance_kg": round(a["balance_lb"] / KG_PER_LB)}
+                    for a in per.values()]
+    balance_rows.sort(key=lambda x: x["yarn_name"] or "")
     balance = {"bags": round(sum(r["balance_bags"] or 0 for r in mrows), 1),
                "kg": round(sum((r["balance_lb"] or 0) for r in mrows) / KG_PER_LB),
                "received_bags": round(sum(r["received_bags"] or 0 for r in mrows), 1),
-               "used_bags": round(sum(r["used_bags"] or 0 for r in mrows), 1)}
+               "used_bags": round(sum(r["used_bags"] or 0 for r in mrows), 1),
+               "rows": balance_rows}
     counts = {"warp_count": m0[6], "weft_count": m0[7], "ends_per_inch": m0[3], "picks_per_inch": m0[4],
               "width_in": m0[5], "rate_per_meter": m0[8],
               "warp_closing_count": warp_cc, "weft_closing_count": weft_cc}
+    counts_used = {"warp": warp_cc, "weft": weft_cc, "warp_nominal": m0[6], "weft_nominal": m0[7]}
     totals = {"yarn_in_kg": round(sum(r["kg"] for r in igp)), "yarn_in_bags": round(sum(r["bags"] for r in igp), 1),
               "fabric_out_m": round(sum(r["meters"] for r in ogp)), "contracts": len(cnos)}
     return {"contracts": [{"contract": m[0], "party": m[1], "quality": m[2]} for m in meta],
-            "party": m0[1], "quality": m0[2], "igp": igp, "ogp": ogp, "counts": counts, "totals": totals,
-            "balance": balance}
+            "party": m0[1], "quality": m0[2], "igp": igp, "ogp": ogp, "counts": counts, "counts_used": counts_used,
+            "totals": totals, "balance": balance}
 
 
 def closing_sheet_report(con, cfg, party=None, contract=None, quality=None, as_of=None):
@@ -501,18 +527,16 @@ def closing_sheet_report(con, cfg, party=None, contract=None, quality=None, as_o
     from ..reports.xlsx import Fx, Inp
     as_of = as_of or date.today()
     s = closing_sheet(con, cfg, party, contract, quality)
-    cnos = {str(c["contract"]) for c in s["contracts"]}
     counts, tot = s["counts"], s["totals"]
     method = Method(cfg["closing"])
 
-    # authoritative per-contract/group balance from the mill's method (same as the closing report), filtered to
-    # the selected contracts - summed in bags and lb so the sheet's balance equals `report closing`.
-    mrows = [r for r in contract_rows(con, method, as_of) if str(r["contract"]) in cnos]
-    recv_bags = sum(r["received_bags"] or 0 for r in mrows)
-    used_bags = sum(r["used_bags"] or 0 for r in mrows)
-    bal_bags = sum(r["balance_bags"] or 0 for r in mrows)
-    bal_lb = sum(r["balance_lb"] or 0 for r in mrows)
-    bal_kg = round(bal_lb / KG_PER_LB)
+    # authoritative balance from the mill's method (same as the closing report), PER YARN plus the combined total.
+    bl = s.get("balance", {})
+    bal_rows = bl.get("rows", [])
+    recv_bags = bl.get("received_bags", 0)
+    used_bags = bl.get("used_bags", 0)
+    bal_bags = bl.get("bags", 0)
+    bal_kg = bl.get("kg", 0)
 
     # the CLOSING counts actually used (config [yarns]/[parties] override the nominal count) + lb/m, for the first
     # selected contract - shown so the owner sees the counts the balance was built on.
@@ -535,8 +559,11 @@ def closing_sheet_report(con, cfg, party=None, contract=None, quality=None, as_o
 
     who = (contract and f"contract {contract}") or (party and quality and f"{party} · {quality}") or (party or "all contracts")
     title = f"Closing sheet - {who}"
-    columns = ["Section", "Date", "Doc", "Bags", "Qty"]
-    rows = [["Yarn in", r["date"], r["doc_no"], r["bags"], f"{r['kg']:,} kg"] for r in s["igp"]]
+    # table: the per-yarn balance first (as the closing report shows it), then the date-wise yarn-in and fabric-out.
+    columns = ["Section", "Date / Yarn", "Doc / Count", "Bags", "Qty / Balance"]
+    rows = [["Balance", f"{r['yarn_name']}", (f"count {r['count']:g}" if r.get('count') else ""),
+             f"{r['balance_bags']:+,.1f}", f"{r['balance_kg']:+,} kg"] for r in bal_rows]
+    rows += [["Yarn in", r["date"], r["doc_no"], r["bags"], f"{r['kg']:,} kg"] for r in s["igp"]]
     rows += [["Fabric out", r["date"], r["doc_no"], "", f"{r['meters']:,} m"] for r in s["ogp"]]
     summary = [
         f"{tot.get('contracts', 0)} contract(s): {who}.",
@@ -544,9 +571,9 @@ def closing_sheet_report(con, cfg, party=None, contract=None, quality=None, as_o
         (f"Closing counts used: warp {warp_cc:g}, weft {weft_cc:g} (warp {warp_lbm:.4f} + weft {weft_lbm:.4f} lb/m, "
          f"{counts.get('ends_per_inch')}/{counts.get('picks_per_inch')} @ {counts.get('width_in')}\", divisor {divisor:g})."
          if warp_cc and weft_cc else "Closing counts not available (missing construction)."),
-        (f"Closing balance (mill's method, = closing report): {bal_bags:+,.1f} bags ({bal_kg:+,} kg) - "
-         f"{'mill holds party yarn' if bal_lb >= 0 else 'party short'}. Received {recv_bags:,.1f} bags, "
-         f"accounted {used_bags:,.1f} bags."),
+        (f"Closing balance (mill's method, = closing report) PER YARN above; combined {bal_bags:+,.1f} bags "
+         f"({bal_kg:+,} kg) - {'mill holds party yarn' if bal_bags >= 0 else 'party short'}. "
+         f"Received {recv_bags:,.1f} bags, accounted {used_bags:,.1f} bags."),
     ]
     rep = Report(title, columns, rows, summary)
     # live-formula workbook. Summary is ONE row so every formula uses only same-row ({r}) references (robust to the
@@ -571,9 +598,15 @@ def closing_sheet_report(con, cfg, party=None, contract=None, quality=None, as_o
                       Fx("=B{r}*C{r}*1.0936/F{r}/E{r}*(1+H{r}/100)"),
                       Inp(tot.get("fabric_out_m", 0)), Fx("=K{r}*(I{r}+J{r})/2.2046"),
                       Inp(tot.get("yarn_in_kg", 0)), Fx("=M{r}-L{r}"), bal_kg]]}
+    # per-yarn balance sheet (one row per yarn, as the closing report shows), with the combined total
+    ybal = {"name": "Yarn balance", "title": "Closing balance per yarn (mill's method)",
+            "headers": ["Yarn", "Closing count", "Received bags", "Accounted bags", "Balance bags", "Balance kg"],
+            "money_cols": [5],
+            "rows": [[r["yarn_name"], r.get("count"), r["received_bags"], r["used_bags"], r["balance_bags"], r["balance_kg"]]
+                     for r in bal_rows] + [["TOTAL", "", round(recv_bags, 1), round(used_bags, 1), bal_bags, bal_kg]]}
     yin = {"name": "Yarn in (IGP)", "title": "Yarn received - date-wise", "headers": ["Date", "Doc", "Bags", "Kg"],
            "money_cols": [3], "rows": [[r["date"], r["doc_no"], r["bags"], Inp(r["kg"])] for r in s["igp"]]}
     fout = {"name": "Fabric out (OGP)", "title": "Fabric dispatched - date-wise", "headers": ["Date", "Doc", "Meters"],
             "money_cols": [2], "rows": [[r["date"], r["doc_no"], Inp(r["meters"])] for r in s["ogp"]]}
-    rep.xlsx_sheets = [summ, yin, fout]
+    rep.xlsx_sheets = [summ, ybal, yin, fout]
     return rep

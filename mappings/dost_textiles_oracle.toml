@@ -191,22 +191,24 @@ WHERE m.td >= :since
 """
 
 # Sized warp sets received from sizers (the sizing IGP), for the sized-yarn closing count (#12). Same WYTM/WYTD
-# tables as yarn_movements, filtered to the sized-beam receipt (tt='IGP_SIZED_BEAMS'); the set number comes from
-# WYBEAMS and the sizer from WYTM.AC1 -> ACH.AN. NOT YET RUN against the live DB: DBSERVER to confirm the WYTD
-# column names (GULLY / WASTE / SET_LENGTH / YARN_WT / CONE_PBAG), the WYBEAMS join (REF_SR = WYTD.SR_NO and
-# TRANS_NO), and the date column; see legacy 13_daily_production_email.py SETS_SIZED_DETAIL_SQL. Run
-# `python -m smart_layer check`, which names a failing entity, before trusting it. Smart Layer manual inputs
-# override any field per set.
+# tables as yarn_movements, filtered to the sized-beam receipt (tt='IGP_SIZED_BEAMS'), ONE ROW PER SET. VERIFIED
+# on the live DB by DBSERVER: joining WYBEAMS per beam fans out to one row per beam (up to 6 per set, NULL set_no
+# on multi-brand receipts), so we take MAX(setno) per transaction (one sizing transaction = one SETNO) and GROUP
+# by set. 111 sets since Sep-25, 278 all-time, matching legacy 13_daily_production_email.py. yarn_sent_kg =
+# WYTD.YARN_WT is the yarn used in sizing (the closing-count basis); sized_kg is the beams' weight after paste.
+# Smart Layer manual inputs override any field per set.
 [entities.sized_sets]
 sql = """
-SELECT TO_CHAR(wb.setno) AS set_no, TRUNC(m.td) AS set_date, a.an AS sizer_name, TO_CHAR(c.cont_no) AS contract_no,
-       d.ends AS ends, d.set_length AS set_length_m, d.bags AS bags, d.cone_pbag AS cones_per_bag, d.cones AS loose_cones,
-       d.gully AS gullay_kg, d.waste AS waste_kg, d.yarn_wt AS yarn_sent_kg, d.sized_kg AS sized_kg
+SELECT TO_CHAR(s.setno) AS set_no, TRUNC(m.td) AS set_date, a.an AS sizer_name, TO_CHAR(MAX(c.cont_no)) AS contract_no,
+       MAX(d.ends) AS ends, MAX(d.set_length) AS set_length_m, SUM(d.bags) AS bags, MAX(d.cone_pbag) AS cones_per_bag,
+       SUM(d.cones) AS loose_cones, SUM(d.gully) AS gullay_kg, SUM(d.waste) AS waste_kg, SUM(d.yarn_wt) AS yarn_sent_kg,
+       SUM(d.sized_kg) AS sized_kg
 FROM dostex.wytm m JOIN dostex.wytd d ON d.trans_no = m.trans_no
-     LEFT JOIN dostex.wybeams wb ON wb.ref_sr = d.sr_no AND wb.trans_no = m.trans_no
+     JOIN (SELECT trans_no, MAX(setno) AS setno FROM dostex.wybeams GROUP BY trans_no) s ON s.trans_no = m.trans_no
      LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id
      LEFT JOIN dostex.ach a ON a.ac = m.ac1
 WHERE m.tt = 'IGP_SIZED_BEAMS' AND m.td >= :since
+GROUP BY s.setno, TRUNC(m.td), a.an
 """
 
 # Fabric gate passes (FAB_GP_V): GPOUT = to the party, GPIN = returned. Fresh = A + A2, rejected = B + C + CP.

@@ -80,10 +80,12 @@ def contract_progress(con, cfg, as_of=None):
 
 
 def _canon_map(cfg):
-    """Map a nominal count to the canonical count of its combine-group ([reports] combine_counts, e.g. [[52,54]]);
-    the smallest count in a group names it. Counts not in any group map to themselves."""
+    """Map a nominal count to the canonical count of its combine-group; the smallest count in a group names it.
+    Counts not in any group map to themselves. The groups come from [yarn] combine_counts (where mills that already
+    have a [yarn] section put it) or [reports] combine_counts, e.g. [[52, 54]]."""
     canon = {}
-    for grp in (cfg["reports"].get("combine_counts") or []):
+    groups = (cfg["yarn"].get("combine_counts") if cfg["yarn"] else None) or cfg["reports"].get("combine_counts") or []
+    for grp in groups:
         nums = sorted(round(float(x)) for x in grp)
         if nums:
             for x in nums:

@@ -1356,8 +1356,12 @@ def test_v015_closing_sheet_three_modes_and_export(env, tmp_path):
     assert whole["totals"]["contracts"] >= 1                 # party mode spans >= the one contract
     # IGP yarn + OGP fabric are date-wise lists
     assert isinstance(one["igp"], list) and isinstance(one["ogp"], list)
+    # closing counts used and a per-yarn balance are exposed
+    assert one.get("counts_used") and "warp" in one["counts_used"]
+    assert isinstance(one.get("balance", {}).get("rows"), list)
     rep = _cl.closing_sheet_report(con, cfg, contract=cno)
-    assert rep.xlsx_sheets and len(rep.xlsx_sheets) == 3      # Summary + Yarn in + Fabric out
+    assert rep.xlsx_sheets and len(rep.xlsx_sheets) == 4      # Summary + Yarn balance + Yarn in + Fabric out
+    assert any(sh["name"] == "Yarn balance" for sh in rep.xlsx_sheets)
     p = rep.write_xlsx(tmp_path, "closing.xlsx", cfg["company"]["name"])
     assert p.exists() and p.stat().st_size > 0
 

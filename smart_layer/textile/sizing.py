@@ -260,13 +260,14 @@ def _sets(con):
 
 
 def sized_yarn_closing(con, cfg, as_of=None):
-    """The owner's sized-yarn closing count per set, with a live-formula workbook. Inputs (sized kg, gullay kg,
-    gullay cones, rewind kg) are PREFILLED from the ERP's sized-set receipt and are editable (shaded); a Smart
-    Layer manual input overrides the ERP value per set. Gullay cones default to bags x cone/bag + loose cones.
-    Every result is a formula. Constants (gullay allowance g/cone, pick factor, divisor) come from config.
+    """The owner's sized-yarn closing count per set, with a live-formula workbook. The count is built on the YARN
+    USED in sizing (the mill's step 1 = kg of yarn from bags and cones, ERP WYTD.YARN_WT / sized_sets.yarn_sent_kg),
+    NOT the sized-beam weight (which includes size paste and is partial for warping-only parties). The sized-beam
+    weight is shown separately as a paste-pickup %. Inputs (yarn used, gullay kg, gullay cones, rewind kg) are
+    PREFILLED from the ERP and editable (shaded); a Smart Layer manual input overrides any of them per set.
 
-    Closing count = (ends / widths) x pick_factor / divisor / (lb per metre), where lb/m = sized-yarn kg/m x 2.2046
-    (kg -> lb). Net sized = sized kg - net gullay; net gullay = gullay kg - (g x gullay cones / 1000)."""
+    Closing count = (ends / widths) x pick_factor / divisor / (lb per metre), where lb/m = net-yarn kg/m x 2.2046
+    (kg -> lb). Net yarn = yarn used - net gullay; net gullay = gullay kg - (g x gullay cones / 1000)."""
     as_of = as_of or date.today()
     s = cfg["sizing"]
     g = float(s.get("gullay_g", 55))
@@ -278,35 +279,40 @@ def sized_yarn_closing(con, cfg, as_of=None):
     rows, xrows = [], []
     for st in sets:
         man = mset.get(str(st["set_no"]), {})
-        # ERP value is the default; a manual input overrides it. Gullay cones default = bags x cone/bag + loose cones.
-        sized = man.get("sized_kg") if man.get("sized_kg") is not None else st["erp_sized_kg"]
+        # yarn USED in sizing = ERP yarn_sent (WYTD.YARN_WT); the manual "sized_kg" input overrides it (the owner's
+        # "sized weight" is the yarn weight). Gullay cones default = bags x cone/bag + loose cones.
+        yarn_used = man.get("sized_kg") if man.get("sized_kg") is not None else st["erp_yarn_sent"]
         gk = man.get("gullay_kg") if man.get("gullay_kg") is not None else st["erp_gullay_kg"]
         gc = man.get("gullay_cones") if man.get("gullay_cones") is not None \
             else (st["erp_bags"] * st["erp_cone_pbag"] + st["erp_cones"])
         rw = man.get("rewind_kg") or 0
-        sized, gk, gc = sized or 0, gk or 0, gc or 0
+        yarn_used, gk, gc = yarn_used or 0, gk or 0, gc or 0
+        sized_beam = st["erp_sized_kg"] or 0             # beams' weight after paste (for the pickup %), not the count
         metres = st["length"] * st["widths"] * (1 - shrink / 100)
         net_gullay = gk - (g * gc / 1000)
-        net_sized = sized - net_gullay
-        kgm = net_sized / metres if metres else 0
+        net_yarn = yarn_used - net_gullay
+        kgm = net_yarn / metres if metres else 0
         lbm = kgm * 2.2046 if kgm else 0                 # kg/m -> lb/m (1 kg = 2.2046 lb)
         cc = (st["ends"] / st["widths"]) * pf / divisor / lbm if lbm else 0
+        pickup = round((sized_beam - yarn_used) / yarn_used * 100, 1) if yarn_used else 0
         rows.append([st["set_no"], st["contract"], st["quality"], st["sizer"], round(st["ends"]), st["widths"],
-                     round(st["length"]), round(metres), round(sized), round(net_gullay), round(net_sized),
-                     round(kgm, 4), round(lbm, 5), round(cc, 2)])
+                     round(st["length"]), round(metres), round(yarn_used), round(net_gullay), round(net_yarn),
+                     round(kgm, 4), round(lbm, 5), round(cc, 2), round(sized_beam), pickup])
         # xlsx columns: A set B contract C quality D sizer E ends F widths G setm H shrink%
-        #               I metres J sized(Inp) K gullaykg(Inp) L gullaycones(Inp) M rewind(Inp)
-        #               N netgullay O netsized P kg/m Q lbs/m R closing count S rewind check
+        #               I metres J yarn used(Inp) K gullaykg(Inp) L gullaycones(Inp) M rewind(Inp) N sized beam(Inp)
+        #               O netgullay P netyarn Q kg/m R lbs/m S closing count T pickup% U rewind check
         xrows.append([st["set_no"], st["contract"], st["quality"], st["sizer"], round(st["ends"]), st["widths"],
                       round(st["length"]), Inp(shrink),
-                      Fx("=G{r}*F{r}*(1-H{r}/100)"), Inp(round(sized)), Inp(round(gk)), Inp(round(gc)), Inp(round(rw)),
-                      Fx(f"=K{{r}}-({g}*L{{r}}/1000)"), Fx("=J{r}-N{r}"), Fx("=O{r}/I{r}"), Fx("=P{r}*2.2046"),
-                      Fx(f"=(E{{r}}/F{{r}})*{pf}/{divisor}/Q{{r}}"), Fx("=M{r}-N{r}")])
+                      Fx("=G{r}*F{r}*(1-H{r}/100)"), Inp(round(yarn_used)), Inp(round(gk)), Inp(round(gc)), Inp(round(rw)),
+                      Inp(round(sized_beam)),
+                      Fx(f"=K{{r}}-({g}*L{{r}}/1000)"), Fx("=J{r}-O{r}"), Fx("=P{r}/I{r}"), Fx("=Q{r}*2.2046"),
+                      Fx(f"=(E{{r}}/F{{r}})*{pf}/{divisor}/R{{r}}"), Fx("=IF(J{r}=0,0,(N{r}-J{r})/J{r}*100)"),
+                      Fx("=M{r}-O{r}")])
     headers = ["Set", "Contract", "Quality", "Sizer", "Ends", "Widths", "Set m", "Shrink %", "Metres after shrink",
-               "Sized kg", "Gullay kg", "Gullay cones", "Rewind kg", "Net gullay kg", "Net sized kg", "kg/m",
-               "lbs/m", "Closing count", "Rewind check"]
-    disp_cols = ["Set", "Contract", "Quality", "Sizer", "Ends", "Widths", "Set m", "Metres", "Sized kg",
-                 "Net gullay kg", "Net sized kg", "kg/m", "lbs/m", "Closing count"]
+               "Yarn used kg", "Gullay kg", "Gullay cones", "Rewind kg", "Sized beam kg", "Net gullay kg",
+               "Net yarn kg", "kg/m", "lbs/m", "Closing count", "Size pickup %", "Rewind check"]
+    disp_cols = ["Set", "Contract", "Quality", "Sizer", "Ends", "Widths", "Set m", "Metres", "Yarn used kg",
+                 "Net gullay kg", "Net yarn kg", "kg/m", "lbs/m", "Closing count", "Sized beam kg", "Size pickup %"]
     # view (b): by count (from closing count), avg/min/max
     bycount = defaultdict(list)
     for r in rows:
@@ -321,13 +327,16 @@ def sized_yarn_closing(con, cfg, as_of=None):
             bysizer[r[3] or "?"].append(r[13])
     bys_rows = sorted(([s2, len(v), round(sum(v) / len(v), 2), round(min(v), 2), round(max(v), 2)]
                        for s2, v in bysizer.items()), key=lambda x: x[2])
-    summary = [f"{len(rows)} sized sets. Closing count = (ends ÷ widths) × {pf} ÷ {divisor:g} ÷ (lbs/m); "
-               f"net sized = sized − (gullay kg − {g:g} g × gullay cones). Shaded cells in Excel are editable inputs.",
+    summary = [f"{len(rows)} sized sets. Closing count = (ends ÷ widths) × {pf} ÷ {divisor:g} ÷ (lbs/m), "
+               f"lbs/m = net-yarn kg/m × 2.2046; net yarn = yarn used − (gullay kg − {g:g} g × gullay cones). "
+               "The count is built on the YARN used in sizing, not the sized-beam weight (shown as the pickup %). "
+               "Shaded cells in Excel are editable inputs.",
                "Views: all sets; by count (avg/min/max); sizer comparison (which sizer gives back more yarn). "
                "Verify against one real set with the owner."]
+    # display order: set..closing count, then the sized-beam weight (14) and pickup % (15)
     rep = Report(f"Sized-yarn closing count - {as_of:%d-%b-%Y}", disp_cols,
-                 [[r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13]] for r in rows],
-                 summary)
+                 [[r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]]
+                  for r in rows], summary)
     rep.xlsx_sheets = [
         {"name": "All sets", "title": rep.title, "note": summary, "headers": headers, "rows": xrows},
         {"name": "By count", "title": "By yarn count", "headers": ["Count", "Sets", "Avg", "Min", "Max"], "rows": byc_rows},

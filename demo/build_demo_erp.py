@@ -440,16 +440,22 @@ def build_beams(db, lsegs, lday, end, warn=6):
     gp = [9000]
 
     # one sized-set receipt row per set, consistent with its ends/length and the warp count (so the sized-yarn
-    # closing count comes back near the warp count). gullay is small and in kg; sized_kg is gross (net yarn + gullay).
+    # closing count comes back near the warp count). The count is built on the YARN USED (yarn_sent_kg); the gullay
+    # kg is set so the net gullay is a small fixed 25 kg given the cone count, and sized_kg (gross, with paste) is
+    # ~8% heavier for the pickup %.
     def sized_set(set_no, set_dt, order, ends, length):
         c = ORDER_COUNT.get(order, 30.0)
         lbm = ends * 1.0936 / (840.0 * c)                  # warp lb per metre (widths = 1)
-        warp_kg = (lbm * length) / 2.2046
-        gullay_kg = 20.0
+        warp_kg = (lbm * length) / 2.2046                  # the YARN in the warp
+        bags, cpb, cones = max(1, round(ends / 3500)), 24, round(ends / 100) % 24
+        cones_total = bags * cpb + cones
+        net_gullay = 25.0
+        gullay_kg = round(55.0 * cones_total / 1000 + net_gullay, 1)   # so net gullay = gullay_kg - 55g*cones = 25
+        yarn_sent = round(warp_kg + net_gullay, 1)                     # so net yarn used = yarn_sent - 25 = warp_kg
+        sized_kg = round(warp_kg * 1.08, 1)                            # beams' gross weight after paste (pickup ~8%)
         db.execute("INSERT INTO szn_set VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                    (set_no, set_dt.isoformat(), SIZER[order], order, ends, round(length),
-                    max(1, round(ends / 3500)), 24, round(ends / 100) % 24, gullay_kg, round(warp_kg * 0.01, 1),
-                    round(warp_kg * 1.03, 1), round(warp_kg + gullay_kg, 1)))
+                    bags, cpb, cones, gullay_kg, round(warp_kg * 0.01, 1), yarn_sent, sized_kg))
 
     def move(d, beam, kind, sizer=None, set_no=None, order=None, loom=None, length=None, woven=None):
         gp[0] += 1

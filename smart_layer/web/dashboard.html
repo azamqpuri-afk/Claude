@@ -1295,11 +1295,17 @@ async function renderClosingSheet(){
       `</div>`;
     var igp=(j.igp||[]).map(r=>[dshort(r.date), esc(r.doc_no||""), num(r.bags), num(r.kg)]);
     var ogp=(j.ogp||[]).map(r=>[dshort(r.date), esc(r.doc_no||""), num(r.meters)]);
+    // per-yarn closing balance (as the closing report shows it), plus the combined total
+    var brows=(b.rows||[]).map(r=>[esc(r.yarn_name||r.yarn), (r.count!=null?esc(r.count):"—"),
+      num(r.received_bags), num(r.used_bags), (r.balance_bags>=0?"+":"")+num(r.balance_bags), (r.balance_kg>=0?"+":"")+num(r.balance_kg)]);
+    var balCard = b.rows&&b.rows.length ? `<div class="card" style="margin-bottom:16px"><div class="hd"><h3>Closing balance — by yarn</h3><span class="count">mill's method · = closing report</span></div><div class="tscroll">`+
+      table(["Yarn","Closing count","Received bags","Accounted bags","Balance bags","Balance kg"],
+        brows.concat([["<b>TOTAL</b>","",num(b.received_bags),num(b.used_bags),"<b>"+(b.bags>=0?"+":"")+num(b.bags)+"</b>","<b>"+(b.kg>=0?"+":"")+num(b.kg)+"</b>"]]),[2,3,4,5])+`</div></div>` : "";
     var igpCard=`<div class="card"><div class="hd"><h3>Yarn in (IGP) — date-wise</h3><span class="count">${igp.length} entr${igp.length===1?'y':'ies'} · ${num(t.yarn_in_kg)} kg</span></div><div class="tscroll">`+
       (igp.length?table(["Date","Doc","Bags","Kg"],igp,[2,3]):'<p class="cnote">No yarn received.</p>')+`</div></div>`;
     var ogpCard=`<div class="card"><div class="hd"><h3>Fabric out (OGP) — date-wise</h3><span class="count">${ogp.length} entr${ogp.length===1?'y':'ies'} · ${num(t.fabric_out_m)} m</span></div><div class="tscroll">`+
       (ogp.length?table(["Date","Doc","Meters"],ogp,[2]):'<p class="cnote">No fabric dispatched.</p>')+`</div></div>`;
-    $("#yf-out").innerHTML = head+`<div class="cols">${igpCard}${ogpCard}</div>`;
+    $("#yf-out").innerHTML = head+balCard+`<div class="cols">${igpCard}${ogpCard}</div>`;
     $("#yf-msg").textContent = (clMode==="contract"?("Contract "+clContract):clMode==="quality"?((j.party||clParty)+" · "+clQuality):("All contracts of "+(j.party||clParty)))+
       " — closing counts warp "+esc(wc||"?")+" / weft "+esc(wfc||"?")+(b.bags!=null?(". Balance "+(balBags>=0?"+":"")+num(balBags)+" bags (mill's method, = closing report)"):"")+
       ". Excel export has count-driven live formulas.";
