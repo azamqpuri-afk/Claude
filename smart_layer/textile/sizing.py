@@ -63,13 +63,15 @@ def sizer_ledger_full(con, cfg, as_of=None):
         sy, sg = round(sized_yarn.get(s, 0)), round(sized_gross.get(s, 0))
         g = round((gullay.get(s, {}) or {}).get("gullay_kg", 0) or 0)
         bal = ys - yl - sy - g
-        pickup = round((sg - sy) / sy * 100, 1) if sy else 0
+        # pickup % is only meaningful when the beams were actually sized (gross >= yarn). Warping-only centres have
+        # a partial / nil sized weight, so show "—" rather than a misleading negative %.
+        pickup = round((sg - sy) / sy * 100, 1) if (sy and sg >= sy) else "—"
         es, eb = esent.get(s, 0), eback.get(s, 0)
         rows.append([s, ys, yl, sy, g, bal, pickup, es, eb, es - eb])
         # xlsx (its own columns, with the sized gross so pickup is a live formula):
         # A sizer B sent C loose back D sized yarn E sized gross F gullay G balance H pickup% I empty sent J empty back K empty bal
         xrows.append([s, Inp(ys), Inp(yl), Inp(sy), Inp(sg), Inp(g),
-                      Fx("=B{r}-C{r}-D{r}-F{r}"), Fx("=IF(D{r}=0,0,(E{r}-D{r})/D{r}*100)"),
+                      Fx("=B{r}-C{r}-D{r}-F{r}"), Fx('=IF(OR(D{r}=0,E{r}<D{r}),"-",(E{r}-D{r})/D{r}*100)'),
                       Inp(es), Inp(eb), Fx("=I{r}-J{r}")])
     cols = ["Sizer", "Yarn sent kg", "Loose back kg", "Sized-beam yarn kg", "Gullay kg", "Yarn balance kg",
             "Size pickup %", "Empty sent", "Empty back", "Empty balance"]
@@ -78,7 +80,10 @@ def sizer_ledger_full(con, cfg, as_of=None):
     summary = [f"{len(rows)} sizers. Yarn balance = sent − loose back − yarn in sized beams − gullay; "
                "empty balance = sent − back.",
                "Sized beams come back heavier than the yarn sent (size paste); the balance uses the yarn CONTENT of "
-               "the sized beams, and the size pickup % = (gross sized − yarn) ÷ yarn. Gullay kg is a manual input."]
+               "the sized beams, and the size pickup % = (gross sized − yarn) ÷ yarn. Gullay kg is a manual input.",
+               "A negative yarn balance = more yarn came back in beams than was recorded sent to the sizer — check "
+               "opening / old-ERP history, or yarn sent outside the 'to sizer' movement. Pickup % shows “—” for "
+               "warping-only centres (no sizing, so no paste pickup)."]
     rep = Report(f"Sizer ledger - {as_of:%d-%b-%Y}", cols, rows, summary)
     rep.xlsx_sheets = [{"name": "Sizer ledger", "title": rep.title, "note": summary, "headers": xcols, "rows": xrows}]
     return rep

@@ -1430,6 +1430,26 @@ def test_v015_notify_changes_per_date_and_dedupe(env, tmp_path, monkeypatch):
     con.close()
 
 
+def test_v015_combine_counts_formats_no_crash(env):
+    from smart_layer.config import Config
+    from smart_layer.textile.contracts import _canon_map
+    # real [yarn] shape: element 0 is a display label, the rest are yarn NAMES (not numbers) - must not raise
+    cfg = Config({"yarn": {"combine_counts": [["52/1 & 54/1 CTN", "52/1 CTN", "54/1 CTN"]]}, "reports": {}}, ".")
+    canon = _canon_map(cfg)
+    assert canon.get(52) == 52 and canon.get(54) == 52          # 52 and 54 netted under the smaller, 52
+    # numeric [reports] shape still works; an unparsable group element is skipped, not raised
+    cfg2 = Config({"yarn": {}, "reports": {"combine_counts": [[52, 54], ["no number here"]]}}, ".")
+    assert _canon_map(cfg2).get(54) == 52
+    # and yarn_shortage runs end-to-end with the label format in place
+    cfg3, con = env
+    cfg3.data.setdefault("yarn", {})["combine_counts"] = [["52/1 & 54/1 CTN", "52/1 CTN", "54/1 CTN"]]
+    try:
+        rep = _contracts.yarn_shortage(con, cfg3, END)
+        assert rep.columns[0] == "Count"
+    finally:
+        cfg3.data.get("yarn", {}).pop("combine_counts", None)
+
+
 def test_v015_cost_per_metre_and_yarn_shortage(env):
     cfg, con = env
     cm = _repfin.cost_per_metre(con, cfg, END)

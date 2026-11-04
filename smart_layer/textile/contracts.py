@@ -82,14 +82,22 @@ def contract_progress(con, cfg, as_of=None):
 def _canon_map(cfg):
     """Map a nominal count to the canonical count of its combine-group; the smallest count in a group names it.
     Counts not in any group map to themselves. The groups come from [yarn] combine_counts (where mills that already
-    have a [yarn] section put it) or [reports] combine_counts, e.g. [[52, 54]]."""
+    have a [yarn] section put it) or [reports] combine_counts.
+
+    Two shapes are accepted, and anything unparsable in a group is skipped (never raises):
+      numbers      [[52, 54]]
+      label+names  [["52/1 & 54/1 CTN", "52/1 CTN", "54/1 CTN"]]  (as the yarn-stock report uses it: element 0 is a
+                   display label, the rest are yarn names). Each element is reduced to its leading count number via
+                   _count_num, so the label "52/1 & 54/1 CTN" harmlessly yields 52 (already in the group)."""
     canon = {}
     groups = (cfg["yarn"].get("combine_counts") if cfg["yarn"] else None) or cfg["reports"].get("combine_counts") or []
     for grp in groups:
-        nums = sorted(round(float(x)) for x in grp)
-        if nums:
-            for x in nums:
-                canon[x] = nums[0]
+        try:
+            nums = sorted({c for c in (_count_num(x) for x in grp) if c})
+        except TypeError:
+            continue                                          # not an iterable group - ignore it
+        for n in nums:
+            canon[n] = nums[0]
     return canon
 
 
