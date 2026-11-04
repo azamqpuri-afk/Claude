@@ -158,6 +158,10 @@ def rates_audit(con, cfg, item, d0=None, d1=None):
     d1 = d1 or date.today()
     d0 = d0 or (d1 - timedelta(days=365))
     name = con.execute("SELECT item_name FROM items WHERE item_code = ?", (item,)).fetchone()
+    if not name:                                          # not a code - the caller passed an item NAME; resolve it
+        byname = con.execute("SELECT item_code, item_name FROM items WHERE item_name = ? LIMIT 1", (item,)).fetchone()
+        if byname:
+            item, name = byname[0], (byname[1],)
     rows = con.execute("""SELECT doc_date, doc_no, supplier_name, qty, rate, amount FROM store_receipts
                           WHERE item_code = ? AND doc_date BETWEEN ? AND ? AND rate > 0
                           ORDER BY doc_date DESC, doc_no DESC""", (item, d0.isoformat(), d1.isoformat())).fetchall()

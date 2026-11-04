@@ -23,33 +23,64 @@ from .method import Method
 
 # ---- #17 sizer ledger -----------------------------------------------------------------------------------------
 def sizer_ledger_full(con, cfg, as_of=None):
+    """Per sizer: yarn sent, loose yarn back, the YARN embodied in sized beams received, gullay, and the running
+    yarn balance - plus the sizing size-pickup %. The sized beams come back heavier than the yarn sent (size paste),
+    so the balance uses the yarn CONTENT of the sized beams (sized_sets.yarn_sent_kg), not their gross weight; the
+    gross is shown only as the pickup %. Without the sized_sets entity it falls back to the gross sized weight."""
     as_of = as_of or date.today()
     own = settings(cfg)["own_beam_sizers"]
     d = as_of.isoformat()
-    ysent, yback = defaultdict(float), defaultdict(float)
+    ysent, yloose = defaultdict(float), defaultdict(float)
     for party, mt, kg in con.execute("""SELECT party_name, move_type, SUM(kg) FROM yarn_movements
-            WHERE move_date <= ? AND move_type IN ('to_sizer','from_sizer','sized_beams_received') GROUP BY party_name, move_type""", (d,)):
+            WHERE move_date <= ? AND move_type IN ('to_sizer','from_sizer') GROUP BY party_name, move_type""", (d,)):
         if party and not is_own_sizer(party, own):
-            (ysent if mt == "to_sizer" else yback)[party] += kg or 0
+            (ysent if mt == "to_sizer" else yloose)[party] += kg or 0
+    # yarn that came back inside sized beams: its YARN content (not the paste-laden gross). Prefer sized_sets.
+    sized_yarn, sized_gross = defaultdict(float), defaultdict(float)
+    has_sized = con.execute("SELECT 1 FROM sized_sets LIMIT 1").fetchone()
+    if has_sized:
+        for party, ykg, skg in con.execute("""SELECT sizer_name, SUM(COALESCE(yarn_sent_kg,0)), SUM(COALESCE(sized_kg,0))
+                FROM sized_sets WHERE set_date <= ? GROUP BY sizer_name""", (d,)):
+            if party and not is_own_sizer(party, own):
+                sized_yarn[party] += ykg or 0
+                sized_gross[party] += skg or 0
+    else:                                                 # fallback: gross sized weight (no yarn/paste split available)
+        for party, kg in con.execute("""SELECT party_name, SUM(kg) FROM yarn_movements
+                WHERE move_date <= ? AND move_type = 'sized_beams_received' GROUP BY party_name""", (d,)):
+            if party and not is_own_sizer(party, own):
+                sized_yarn[party] += kg or 0
+                sized_gross[party] += kg or 0
     esent, eback = defaultdict(int), defaultdict(int)
     for party, mt, n in con.execute("""SELECT party_name, move_type, COUNT(*) FROM beam_movements
             WHERE move_date <= ? AND move_type IN ('empty_to_sizer','empty_from_sizer','sized_received') GROUP BY party_name, move_type""", (d,)):
         if party and not is_own_sizer(party, own):
             (esent if mt == "empty_to_sizer" else eback)[party] += n or 0
     gullay = manual.latest(con, "sizer", "gullay_kg")
-    sizers = sorted(set(ysent) | set(yback) | set(esent) | set(eback), key=str)
+    sizers = sorted(set(ysent) | set(yloose) | set(sized_yarn) | set(esent) | set(eback), key=str)
     rows, xrows = [], []
     for s in sizers:
-        ys, yb = round(ysent.get(s, 0)), round(yback.get(s, 0))
+        ys, yl = round(ysent.get(s, 0)), round(yloose.get(s, 0))
+        sy, sg = round(sized_yarn.get(s, 0)), round(sized_gross.get(s, 0))
         g = round((gullay.get(s, {}) or {}).get("gullay_kg", 0) or 0)
+        bal = ys - yl - sy - g
+        pickup = round((sg - sy) / sy * 100, 1) if sy else 0
         es, eb = esent.get(s, 0), eback.get(s, 0)
-        rows.append([s, ys, yb, g, ys - yb - g, es, eb, es - eb])
-        xrows.append([s, Inp(ys), Inp(yb), Inp(g), Fx("=B{r}-C{r}-D{r}"), Inp(es), Inp(eb), Fx("=F{r}-G{r}")])
-    cols = ["Sizer", "Yarn sent kg", "Yarn back kg", "Gullay kg", "Yarn balance kg", "Empty sent", "Empty back", "Empty balance"]
-    summary = [f"{len(rows)} sizers. Yarn balance = sent − back − gullay; empty balance = sent − back.",
-               "Gullay kg is a manual input (the yarn returned on baby cones)."]
+        rows.append([s, ys, yl, sy, g, bal, pickup, es, eb, es - eb])
+        # xlsx (its own columns, with the sized gross so pickup is a live formula):
+        # A sizer B sent C loose back D sized yarn E sized gross F gullay G balance H pickup% I empty sent J empty back K empty bal
+        xrows.append([s, Inp(ys), Inp(yl), Inp(sy), Inp(sg), Inp(g),
+                      Fx("=B{r}-C{r}-D{r}-F{r}"), Fx("=IF(D{r}=0,0,(E{r}-D{r})/D{r}*100)"),
+                      Inp(es), Inp(eb), Fx("=I{r}-J{r}")])
+    cols = ["Sizer", "Yarn sent kg", "Loose back kg", "Sized-beam yarn kg", "Gullay kg", "Yarn balance kg",
+            "Size pickup %", "Empty sent", "Empty back", "Empty balance"]
+    xcols = ["Sizer", "Yarn sent kg", "Loose back kg", "Sized-beam yarn kg", "Sized-beam gross kg", "Gullay kg",
+             "Yarn balance kg", "Size pickup %", "Empty sent", "Empty back", "Empty balance"]
+    summary = [f"{len(rows)} sizers. Yarn balance = sent − loose back − yarn in sized beams − gullay; "
+               "empty balance = sent − back.",
+               "Sized beams come back heavier than the yarn sent (size paste); the balance uses the yarn CONTENT of "
+               "the sized beams, and the size pickup % = (gross sized − yarn) ÷ yarn. Gullay kg is a manual input."]
     rep = Report(f"Sizer ledger - {as_of:%d-%b-%Y}", cols, rows, summary)
-    rep.xlsx_sheets = [{"name": "Sizer ledger", "title": rep.title, "note": summary, "headers": cols, "rows": xrows}]
+    rep.xlsx_sheets = [{"name": "Sizer ledger", "title": rep.title, "note": summary, "headers": xcols, "rows": xrows}]
     return rep
 
 

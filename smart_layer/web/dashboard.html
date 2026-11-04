@@ -1277,12 +1277,21 @@ async function renderClosingSheet(){
   try{
     var j=await (await fetch("api/closing/sheet?"+closingQ())).json();
     if(!j.contracts||!j.contracts.length){ $("#yf-msg").textContent="Pick a party or contract to see its closing."; $("#yf-out").innerHTML=""; return; }
-    var c=j.counts||{}, t=j.totals||{};
-    var head = `<div class="grid g4" style="margin-bottom:14px">`+
-      tile("🧶 Yarn in", num(t.yarn_in_kg)+' <span class="cur">kg</span>', num(t.yarn_in_bags)+" bags","accent")+
+    var c=j.counts||{}, t=j.totals||{}, b=j.balance||{};
+    var balBags=(b.bags!=null?b.bags:0);
+    var balTile = (b.bags!=null)
+      ? tile("⚖️ Closing balance", (balBags>=0?"+":"")+num(balBags)+' <span class="cur">bags</span>',
+             (b.kg!=null?((b.kg>=0?"+":"")+num(b.kg)+" kg · "):"")+(balBags>=0?"mill holds party yarn":"party short"),
+             balBags>=0?"accent":"bad")
+      : "";
+    // closing counts used (config overrides the nominal count) shown next to the nominal
+    var wc=(c.warp_closing_count!=null?c.warp_closing_count:c.warp_count), wfc=(c.weft_closing_count!=null?c.weft_closing_count:c.weft_count);
+    var head = `<div class="grid g5" style="margin-bottom:14px">`+
+      balTile+
+      tile("🧶 Yarn in", num(t.yarn_in_kg)+' <span class="cur">kg</span>', num(t.yarn_in_bags)+" bags")+
       tile("📦 Fabric out", num(t.fabric_out_m)+' <span class="cur">m</span>', t.contracts+" contract(s)")+
-      tile("🧵 Warp count", esc(c.warp_count||"—"), (c.ends_per_inch||"?")+" ends/in")+
-      tile("🧵 Weft count", esc(c.weft_count||"—"), (c.picks_per_inch||"?")+" picks/in · "+(c.width_in||"?")+'"')+
+      tile("🧵 Warp count", esc(wc||"—"), "closing · nominal "+esc(c.warp_count||"?")+" · "+(c.ends_per_inch||"?")+" ends/in")+
+      tile("🧵 Weft count", esc(wfc||"—"), "closing · nominal "+esc(c.weft_count||"?")+" · "+(c.picks_per_inch||"?")+" picks/in")+
       `</div>`;
     var igp=(j.igp||[]).map(r=>[dshort(r.date), esc(r.doc_no||""), num(r.bags), num(r.kg)]);
     var ogp=(j.ogp||[]).map(r=>[dshort(r.date), esc(r.doc_no||""), num(r.meters)]);
@@ -1292,7 +1301,8 @@ async function renderClosingSheet(){
       (ogp.length?table(["Date","Doc","Meters"],ogp,[2]):'<p class="cnote">No fabric dispatched.</p>')+`</div></div>`;
     $("#yf-out").innerHTML = head+`<div class="cols">${igpCard}${ogpCard}</div>`;
     $("#yf-msg").textContent = (clMode==="contract"?("Contract "+clContract):clMode==="quality"?((j.party||clParty)+" · "+clQuality):("All contracts of "+(j.party||clParty)))+
-      " — warp "+esc(c.warp_count||"?")+" / weft "+esc(c.weft_count||"?")+". Excel export has a live yarn-balance sheet.";
+      " — closing counts warp "+esc(wc||"?")+" / weft "+esc(wfc||"?")+(b.bags!=null?(". Balance "+(balBags>=0?"+":"")+num(balBags)+" bags (mill's method, = closing report)"):"")+
+      ". Excel export has count-driven live formulas.";
   }catch(e){ $("#yf-msg").textContent="Could not load the closing sheet."; }
 }
 

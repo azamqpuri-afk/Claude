@@ -22,7 +22,8 @@ DEFAULTS = {
                "quiet_from": None, "quiet_to": None},   # hours (0-23): suppress non-urgent pushes in this window
     "reports": {"tracked_issue_days": 90, "reorder_cover_months": 1, "output_dir": "",
                 "retention_weeks": 26,            # saved report files older than this are pruned (0 = keep all)
-                "unused_stock_months": 6},        # the Unused-stock tab flags items not issued for this many months
+                "unused_stock_months": 6,         # the Unused-stock tab flags items not issued for this many months
+                "combine_counts": []},            # nominal counts that are the same yarn for shortage, e.g. [[52, 54]]
     "sizing": {"gullay_g": 55,                    # grams of yarn left on each returned baby cone (gullay)
                "pick_factor": 1.0936,             # metres-to-yards-ish factor in the closing-count formula
                "shrink_pct": 7},                  # default warp->fabric shrinkage for the sized-yarn closing count

@@ -63,7 +63,7 @@ def contract_progress(con, cfg, as_of=None):
         bal = max(0, r["ordered"] - r["woven"])
         mday = (rate30.get(r["contract"], 0) or 0) / 30.0
         days = bal / mday if mday > 0 else None
-        finish = (as_of + timedelta(days=round(days))).isoformat() if days is not None else None
+        finish = (as_of + timedelta(days=round(days))) if days is not None else None
         note = ""
         if r["looms"] == 0 and bal > 0:
             note = "no loom running it"; slow += 1
@@ -71,7 +71,7 @@ def contract_progress(con, cfg, as_of=None):
             note = "slow"; slow += 1
         rows.append([r["contract"], r["party"], r["quality"], round(r["ordered"]), round(r["woven"]),
                      round(disp.get(r["contract"], 0) or 0), round(bal), r["looms"], round(mday),
-                     (f"{days:.0f} d → {finish[5:]}" if days is not None else "—"), note])
+                     (f"{days:.0f} d → {finish:%d-%b-%Y}" if days is not None else "—"), note])
     summary = [f"{len(rows)} running contracts; {slow} slow or with no loom on them.",
                "Balance = ordered − woven. m/day is the last 30 days; finish = balance ÷ m/day."]
     return Report(f"Contract progress - {as_of:%d-%b-%Y}",
@@ -79,11 +79,25 @@ def contract_progress(con, cfg, as_of=None):
                    "m/day", "Finish (est)", "Note"], rows, summary)
 
 
+def _canon_map(cfg):
+    """Map a nominal count to the canonical count of its combine-group ([reports] combine_counts, e.g. [[52,54]]);
+    the smallest count in a group names it. Counts not in any group map to themselves."""
+    canon = {}
+    for grp in (cfg["reports"].get("combine_counts") or []):
+        nums = sorted(round(float(x)) for x in grp)
+        if nums:
+            for x in nums:
+                canon[x] = nums[0]
+    return canon
+
+
 def yarn_needed(con, cfg, as_of=None):
-    """kg of yarn needed for the remaining metres of running contracts, bucketed by nominal count. Returns
-    {count: kg}. Uses the mill's closing weight formula for warp and weft per metre."""
+    """kg of yarn needed for the remaining metres of running contracts, split into WARP and WEFT, bucketed by
+    (combined) nominal count. Returns {count: {"warp": kg, "weft": kg}}. Warp and weft are kept apart because
+    warp is provisioned as sized beams while weft is drawn from loose yarn."""
     as_of = as_of or date.today()
     method = Method(cfg["closing"])
+    canon = _canon_map(cfg)
     need = {}
     for r in _running(con, as_of):
         bal = max(0.0, (r["ordered"] or 0) - (r["woven"] or 0))
@@ -95,22 +109,25 @@ def yarn_needed(con, cfg, as_of=None):
             c = _count_num(cnt)
             if not c or not tpi or not r["width"]:
                 continue
+            c = canon.get(c, c)
             lbm = method.weight(side, st, tpi, r["width"], method.closing_count(side, yarn, cnt, st))
             if lbm:
-                need[c] = need.get(c, 0.0) + bal * lbm / 2.2046         # lbs/m -> kg
+                need.setdefault(c, {"warp": 0.0, "weft": 0.0})[side] += bal * lbm / 2.2046   # lbs/m -> kg
     return need
 
 
-def yarn_available(con, as_of=None):
-    """kg of yarn available now by nominal count: net mill movements (received − consumed/sold) plus yarn at
-    sizers, from yarn_movements (kg), bucketed by the count parsed from the yarn name."""
+def yarn_available(con, cfg=None, as_of=None):
+    """kg of LOOSE yarn available now by (combined) nominal count: net mill movements (received − consumed/sold)
+    plus yarn at sizers, from yarn_movements (kg), bucketed by the count parsed from the yarn name."""
     as_of = as_of or date.today()
+    canon = _canon_map(cfg) if cfg else {}
     avail = {}
     for name, mt, kg in con.execute("""SELECT yarn_name, move_type, SUM(kg) FROM yarn_movements
             WHERE move_date <= ? GROUP BY yarn_name, move_type""", (as_of.isoformat(),)):
         c = _count_num(name)
         if not c:
             continue
+        c = canon.get(c, c)
         sign = 1 if mt in ("party_receipt", "from_looms", "from_sizer", "opening", "sized_beams_received") else -1
         if mt in ("sale", "party_return"):
             sign = -1
@@ -118,19 +135,48 @@ def yarn_available(con, as_of=None):
     return avail
 
 
-def yarn_shortage(con, cfg, as_of=None):
-    """Counts where the yarn needed for running contracts exceeds what is available; worst (most short) first."""
+def warp_on_beams(con, cfg, as_of=None):
+    """kg of warp yarn already provisioned as sized beams (not loose), by (combined) warp count. From the ERP's
+    sized-set receipts (sized_sets.yarn_sent_kg) for running contracts, so warp need is seen as already covered."""
     as_of = as_of or date.today()
-    need, avail = yarn_needed(con, cfg, as_of), yarn_available(con, as_of)
+    canon = _canon_map(cfg)
+    running = {r["contract"]: _count_num(r["warp_count"]) for r in _running(con, as_of)}
+    out = {}
+    try:
+        rows = con.execute("SELECT contract_no, SUM(COALESCE(yarn_sent_kg,0)) FROM sized_sets GROUP BY contract_no").fetchall()
+    except Exception:
+        return out
+    for cno, kg in rows:
+        c = running.get(cno)
+        if not c:
+            continue
+        c = canon.get(c, c)
+        out[c] = out.get(c, 0.0) + (kg or 0)
+    return out
+
+
+def yarn_shortage(con, cfg, as_of=None):
+    """Counts where LOOSE weft yarn will run short for the running contracts' remaining metres; worst first. Warp
+    is provisioned as sized beams (shown separately), so only the weft need is compared against loose yarn stock;
+    counts that are the same yarn are combined via [reports] combine_counts."""
+    as_of = as_of or date.today()
+    need = yarn_needed(con, cfg, as_of)
+    avail = yarn_available(con, cfg, as_of)
+    beams = warp_on_beams(con, cfg, as_of)
     rows = []
-    for c in sorted(set(need) | set(avail)):
-        n, a = round(need.get(c, 0)), round(max(0.0, avail.get(c, 0)))
-        short = n - a
-        rows.append([f"{c}s", n, a, short, ("SHORT" if short > 0 else "ok")])
+    for c in sorted(set(need) | set(avail) | set(beams)):
+        weft = round(need.get(c, {}).get("weft", 0))
+        warp = round(need.get(c, {}).get("warp", 0))
+        loose = round(max(0.0, avail.get(c, 0)))
+        onbeam = round(max(0.0, beams.get(c, 0)))
+        short = weft - loose                                   # only weft draws on loose yarn
+        rows.append([f"{c}s", weft, loose, short, warp, onbeam, ("SHORT" if short > 0 else "ok")])
     rows.sort(key=lambda r: -r[3])
     shorts = [r for r in rows if r[3] > 0]
-    summary = [f"{len(shorts)} count(s) will run short for the running contracts' remaining metres."
-               if shorts else "No yarn shortage for the running contracts.",
-               "Needed = remaining metres × the construction's warp+weft weight; available = net mill yarn + at sizers, by nominal count."]
+    summary = [f"{len(shorts)} count(s) will run short of loose weft yarn for the running contracts' remaining metres."
+               if shorts else "No weft-yarn shortage for the running contracts.",
+               "Weft need = remaining metres × weft weight; loose = net mill + sizer yarn. Warp is provisioned as "
+               "sized beams (warp need and warp-on-beams shown for reference), so it is not a loose-yarn shortage."]
     return Report(f"Yarn shortage - {as_of:%d-%b-%Y}",
-                  ["Count", "Needed kg", "Available kg", "Short kg", "Status"], rows, summary)
+                  ["Count", "Weft need kg", "Loose yarn kg", "Short kg", "Warp need kg", "Warp on beams kg", "Status"],
+                  rows, summary)

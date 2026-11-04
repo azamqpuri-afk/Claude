@@ -467,66 +467,113 @@ def closing_sheet(con, cfg, party=None, contract=None, quality=None):
         f"""SELECT dispatch_date, doc_no, SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters) FROM fabric_dispatches
             WHERE contract_no IN ({qmarks}) GROUP BY dispatch_date, doc_no ORDER BY dispatch_date""", cnos)]
     m0 = meta[0]
+    # the mill's own method balance for the selected contracts (same engine as `report closing`), plus the CLOSING
+    # counts actually used (config overrides the nominal count), so the screen shows the authoritative figure.
+    method = Method(cfg["closing"])
+    cset = {str(x) for x in cnos}
+    mrows = [r for r in contract_rows(con, method, date.today()) if str(r["contract"]) in cset]
+    st0 = method.settings(m0[0], None)
+    warp_cc = weft_cc = None
+    crow = con.execute("SELECT warp_yarn, warp_count, weft_yarn, weft_count FROM contracts WHERE contract_no = ?", (m0[0],)).fetchone()
+    if crow:
+        warp_cc = method.closing_count("warp", crow[0], crow[1], st0)
+        weft_cc = method.closing_count("weft", crow[2], crow[3], st0)
+    balance = {"bags": round(sum(r["balance_bags"] or 0 for r in mrows), 1),
+               "kg": round(sum((r["balance_lb"] or 0) for r in mrows) / KG_PER_LB),
+               "received_bags": round(sum(r["received_bags"] or 0 for r in mrows), 1),
+               "used_bags": round(sum(r["used_bags"] or 0 for r in mrows), 1)}
     counts = {"warp_count": m0[6], "weft_count": m0[7], "ends_per_inch": m0[3], "picks_per_inch": m0[4],
-              "width_in": m0[5], "rate_per_meter": m0[8]}
+              "width_in": m0[5], "rate_per_meter": m0[8],
+              "warp_closing_count": warp_cc, "weft_closing_count": weft_cc}
     totals = {"yarn_in_kg": round(sum(r["kg"] for r in igp)), "yarn_in_bags": round(sum(r["bags"] for r in igp), 1),
               "fabric_out_m": round(sum(r["meters"] for r in ogp)), "contracts": len(cnos)}
     return {"contracts": [{"contract": m[0], "party": m[1], "quality": m[2]} for m in meta],
-            "party": m0[1], "quality": m0[2], "igp": igp, "ogp": ogp, "counts": counts, "totals": totals}
+            "party": m0[1], "quality": m0[2], "igp": igp, "ogp": ogp, "counts": counts, "totals": totals,
+            "balance": balance}
 
 
-def closing_sheet_report(con, cfg, party=None, contract=None, quality=None):
-    """The closing sheet (closing_sheet) as a downloadable Report: a combined IGP-yarn + OGP-fabric table for
-    PDF/CSV, and a live-formula workbook (reports.xlsx) with a Summary balance sheet (yarn received vs yarn needed
-    for the fabric produced, recalculated live) plus date-wise Yarn-in and Fabric-out sheets with editable cells."""
+def closing_sheet_report(con, cfg, party=None, contract=None, quality=None, as_of=None):
+    """The closing sheet as a downloadable Report. The BALANCE is the mill's own method balance (contract_rows,
+    the same engine as `report closing`): net yarn received less the party's yarn the mill can account for, using
+    the mill's CLOSING counts, rejection rule, basis and WIP - so it ties out to the closing report. The sheet adds
+    the date-wise IGP yarn and OGP fabric that the closing report does not show, and a live-formula workbook whose
+    warp/weft lb-per-metre are built from the ends/picks/width/count/divisor cells, so a count edit recalculates."""
     from ..reports.xlsx import Fx, Inp
+    as_of = as_of or date.today()
     s = closing_sheet(con, cfg, party, contract, quality)
-    cnos = [c["contract"] for c in s["contracts"]]
-    cur = cfg["company"]["currency"]
+    cnos = {str(c["contract"]) for c in s["contracts"]}
     counts, tot = s["counts"], s["totals"]
-    # warp / weft weight per metre from the mill's own method (so it follows the closing construction rules)
-    warp_lbm = weft_lbm = None
-    if cnos:
-        method = Method(cfg["closing"])
-        st = method.settings(cnos[0], None)
-        try:
-            warp_lbm = method.weight("warp", st, counts.get("ends_per_inch"), counts.get("width_in"),
-                                     method.closing_count("warp", None, counts.get("warp_count"), st))
-            weft_lbm = method.weight("weft", st, counts.get("picks_per_inch"), counts.get("width_in"),
-                                     method.closing_count("weft", None, counts.get("weft_count"), st))
-        except Exception:
-            warp_lbm = weft_lbm = None
-    lbm = (warp_lbm or 0) + (weft_lbm or 0)
-    needed_kg = round(tot.get("fabric_out_m", 0) * lbm / KG_PER_LB) if lbm else None
-    balance_kg = (round(tot.get("yarn_in_kg", 0) - needed_kg) if needed_kg is not None else None)
+    method = Method(cfg["closing"])
+
+    # authoritative per-contract/group balance from the mill's method (same as the closing report), filtered to
+    # the selected contracts - summed in bags and lb so the sheet's balance equals `report closing`.
+    mrows = [r for r in contract_rows(con, method, as_of) if str(r["contract"]) in cnos]
+    recv_bags = sum(r["received_bags"] or 0 for r in mrows)
+    used_bags = sum(r["used_bags"] or 0 for r in mrows)
+    bal_bags = sum(r["balance_bags"] or 0 for r in mrows)
+    bal_lb = sum(r["balance_lb"] or 0 for r in mrows)
+    bal_kg = round(bal_lb / KG_PER_LB)
+
+    # the CLOSING counts actually used (config [yarns]/[parties] override the nominal count) + lb/m, for the first
+    # selected contract - shown so the owner sees the counts the balance was built on.
+    warp_cc = weft_cc = warp_lbm = weft_lbm = None
+    divisor = float(method.cfg.get("divisor", 840) or 840)
+    wc_crimp = fc_crimp = 0.0
+    c0 = next(iter(s["contracts"]), None)
+    if c0:
+        row = con.execute("""SELECT ends_per_inch, picks_per_inch, width_in, warp_yarn, warp_count, weft_yarn, weft_count
+                             FROM contracts WHERE contract_no = ?""", (c0["contract"],)).fetchone()
+        if row:
+            epi, ppi, width, wy, wc, fy, fc = row
+            st = method.settings(c0["contract"], None)
+            divisor = float(st["divisor"])
+            wc_crimp, fc_crimp = float(st["warp_crimp_pct"]), float(st["weft_crimp_pct"])
+            warp_cc = method.closing_count("warp", wy, wc, st)
+            weft_cc = method.closing_count("weft", fy, fc, st)
+            warp_lbm = method.weight("warp", st, epi, width, warp_cc)
+            weft_lbm = method.weight("weft", st, ppi, width, weft_cc)
 
     who = (contract and f"contract {contract}") or (party and quality and f"{party} · {quality}") or (party or "all contracts")
     title = f"Closing sheet - {who}"
-    # on-screen / PDF / CSV: one combined table
-    columns = ["Section", "Date", "Doc", "Bags", f"Qty"]
+    columns = ["Section", "Date", "Doc", "Bags", "Qty"]
     rows = [["Yarn in", r["date"], r["doc_no"], r["bags"], f"{r['kg']:,} kg"] for r in s["igp"]]
     rows += [["Fabric out", r["date"], r["doc_no"], "", f"{r['meters']:,} m"] for r in s["ogp"]]
     summary = [
-        f"{tot.get('contracts',0)} contract(s): {who}.",
-        f"Yarn in {tot.get('yarn_in_kg',0):,} kg ({tot.get('yarn_in_bags',0):,} bags); fabric out {tot.get('fabric_out_m',0):,} m.",
-        (f"Warp {warp_lbm:.4f} + weft {weft_lbm:.4f} lb/m (count warp {counts.get('warp_count')}, weft {counts.get('weft_count')}, "
-         f"{counts.get('ends_per_inch')}/{counts.get('picks_per_inch')} @ {counts.get('width_in')}\")." if lbm else
-         "Warp/weft weight per metre not available (missing construction)."),
+        f"{tot.get('contracts', 0)} contract(s): {who}.",
+        f"Yarn in {tot.get('yarn_in_kg', 0):,} kg ({tot.get('yarn_in_bags', 0):,} bags); fabric out {tot.get('fabric_out_m', 0):,} m.",
+        (f"Closing counts used: warp {warp_cc:g}, weft {weft_cc:g} (warp {warp_lbm:.4f} + weft {weft_lbm:.4f} lb/m, "
+         f"{counts.get('ends_per_inch')}/{counts.get('picks_per_inch')} @ {counts.get('width_in')}\", divisor {divisor:g})."
+         if warp_cc and weft_cc else "Closing counts not available (missing construction)."),
+        (f"Closing balance (mill's method, = closing report): {bal_bags:+,.1f} bags ({bal_kg:+,} kg) - "
+         f"{'mill holds party yarn' if bal_lb >= 0 else 'party short'}. Received {recv_bags:,.1f} bags, "
+         f"accounted {used_bags:,.1f} bags."),
     ]
-    if needed_kg is not None:
-        summary.append(f"Yarn needed for the fabric out ≈ {needed_kg:,} kg → balance {balance_kg:+,} kg "
-                       f"({'mill holds party yarn' if balance_kg >= 0 else 'party short'}).")
     rep = Report(title, columns, rows, summary)
-    # live-formula workbook
-    bal = {"name": "Summary", "title": title, "note": [f"{who}"],
-           "headers": ["Fabric out (m)", "Warp lb/m", "Weft lb/m", "Yarn needed (kg)", "Yarn received (kg)", "Balance (kg)"],
-           "money_cols": [3, 4, 5],
-           "rows": [[Inp(tot.get("fabric_out_m", 0)), Inp(round(warp_lbm or 0, 4)), Inp(round(weft_lbm or 0, 4)),
-                     Fx("=A{r}*(B{r}+C{r})/2.2046"), Inp(tot.get("yarn_in_kg", 0)), Fx("=E{r}-D{r}")]],
-           "legend": "Edit fabric out, lb/m or yarn received and the needed-kg and balance recalculate."}
+    # live-formula workbook. Summary is ONE row so every formula uses only same-row ({r}) references (robust to the
+    # sheet's title/note offset): lb/m is BUILT from the count cells, so editing a count, the ends/picks/width or
+    # the divisor recalculates the per-metre weights (standard weight formula:
+    # threads x width x 1.0936 / divisor / count x (1 + crimp/100)) and the what-if yarn-needed and balance.
+    # A B C D E F G H  = ends, picks, width, warp count, weft count, divisor, warp crimp%, weft crimp%
+    # I warp lb/m  J weft lb/m  K fabric out  L yarn needed(what-if)  M yarn received  N what-if balance  O closing balance
+    summ = {"name": "Summary", "title": title,
+            "note": [who, "Edit a count, the ends/picks/width or the divisor and the lb/m, what-if yarn-needed and "
+                     "what-if balance recalculate. The Closing balance (last column) is the mill's method balance "
+                     "(= the closing report) and does not change with these what-if edits."],
+            "headers": ["Ends/in", "Picks/in", "Width in", "Warp count", "Weft count", "Divisor", "Warp crimp %",
+                        "Weft crimp %", "Warp lb/m", "Weft lb/m", "Fabric out m", "Yarn needed kg (what-if)",
+                        "Yarn received kg", "What-if balance kg", "Closing balance kg (mill method)"],
+            "money_cols": [11, 12, 13, 14],
+            "rows": [[Inp(counts.get("ends_per_inch") or 0), Inp(counts.get("picks_per_inch") or 0),
+                      Inp(counts.get("width_in") or 0), Inp(warp_cc or counts.get("warp_count") or 0),
+                      Inp(weft_cc or counts.get("weft_count") or 0), Inp(divisor),
+                      Inp(round(wc_crimp, 2)), Inp(round(fc_crimp, 2)),
+                      Fx("=A{r}*C{r}*1.0936/F{r}/D{r}*(1+G{r}/100)"),
+                      Fx("=B{r}*C{r}*1.0936/F{r}/E{r}*(1+H{r}/100)"),
+                      Inp(tot.get("fabric_out_m", 0)), Fx("=K{r}*(I{r}+J{r})/2.2046"),
+                      Inp(tot.get("yarn_in_kg", 0)), Fx("=M{r}-L{r}"), bal_kg]]}
     yin = {"name": "Yarn in (IGP)", "title": "Yarn received - date-wise", "headers": ["Date", "Doc", "Bags", "Kg"],
            "money_cols": [3], "rows": [[r["date"], r["doc_no"], r["bags"], Inp(r["kg"])] for r in s["igp"]]}
     fout = {"name": "Fabric out (OGP)", "title": "Fabric dispatched - date-wise", "headers": ["Date", "Doc", "Meters"],
             "money_cols": [2], "rows": [[r["date"], r["doc_no"], Inp(r["meters"])] for r in s["ogp"]]}
-    rep.xlsx_sheets = [bal, yin, fout]
+    rep.xlsx_sheets = [summ, yin, fout]
     return rep
