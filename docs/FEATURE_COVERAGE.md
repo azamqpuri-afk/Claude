@@ -26,6 +26,37 @@ product on the standard model (so they work with any ERP); the rest are listed w
 | 40, 51, 53 business dashboard, dashboard pages, dashboard verification | Owner dashboard (phone/PC) with chat; every figure from the same verified store | `serve` · `dashboard` |
 | 42, 44, 46, 47 detail / correction PDFs | PDF output of every report and the audit | `--pdf` on any report or audit |
 
+## New in 0.15.0 (owner's 24-item list)
+
+These were added in one build on top of the model above. All read-only, all ERP-agnostic (mill-specifics stay in
+the mapping/config, never the core).
+
+| # | Feature | Where |
+|---|---|---|
+| 1 | Sales-this-month tile + drill to each invoice | Overview · `api/finance/sales` |
+| 2 | Bank tile → balance per bank account | Overview · `api/finance/banks` |
+| 3 | Dispatch truck animation driven from the Dispatched tile | Overview (live sync) |
+| 4, 5 | Live-feed panel on Overview from the sync change-log (store issues grouped per loom), totals-only "Since" chips, animations only for big events | Overview · `api/feed` |
+| 6 | Yarn-closing redesign: party → contract/quality dropdowns, 3 modes, IGP yarn + OGP fabric date-wise, warp/weft count, live-formula Excel + PDF | Yarn & Fabric → Closing · `api/closing/sheet` |
+| 7 | Empty beams with sizes, opening CSV roll-forward, double-location flag | `report empty-beams` |
+| 8 | Live scoreboard efficiency tile (reads the scoreboard's own current-shift figure) | Overview |
+| 9 | Store additions: slip-no search, store expense (net of returns) + tile, issue-slips tab, store-returns tab (+`store_returns` entity) | Store Room tabs · `report store-expense/issue-slips/store-returns` |
+| 10 | Loom-parts expense per loom, monthly matrix | `report loom-consumption` |
+| 11 | Rates audit per item (purchase history + suppliers + similar items) | Store item drawer · `api/store/rates` |
+| 12 | Sized-yarn closing count per set (6-step formula, 3 views, live-formula Excel) | `report sized-closing` |
+| 13 | Manual rewind input per set (Smart Layer store, edit history, never ERP; generic manual inputs) | `manual_inputs` · `api/manual` |
+| 14 | Cost per metre monthly, with / without sizing | `report cost-metre` |
+| 15 | Contract progress (ordered/woven/dispatched/balance, m-day, est. finish) | `report contracts` |
+| 16 | Yarn shortage warning (needed vs available by count) | `report yarn-shortage` (+ push) |
+| 17 | Sizer ledger per sizer, live-formula Excel + PDF | `report sizer-ledger` |
+| 18 | Unused-stock tab (in stock, not issued for N months) | Store Room → Unused stock · `report unused-stock` |
+| 19 | Pushes from the sync: new production (once/day) and each new OGP fabric gate pass (replaces the hourly task) | `notify-changes` on every live sync |
+| 20 | Morning summary + night-shift sensor result (~06:20) | `morning` / `night-sensor` |
+| 21 | Scoreboard vs ERP weft comparison push | `weft-check` |
+| 22 | Weft-only consumption by owner-given counts | `report weft-consumption` |
+| 23 | Logo + 6 colour schemes + weave-forming opening animation + thread-to-signal header + colour picker | Overview 🎨 · `[dashboard] colour_scheme` |
+| 24 | Fabric-in-stock history drill (produced / dispatched / returned / rejection / stock per contract) | Overview Dispatched tile · `api/fabric/history` |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |

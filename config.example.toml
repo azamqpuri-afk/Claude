@@ -35,16 +35,22 @@ password = "${DASHBOARD_PASSWORD}"
 [notify]
 channels = ["console", "ntfy"]
 ntfy_topic = "${NTFY_TOPIC}"
+# quiet_from / quiet_to: hours 0-23. Non-urgent pushes (new production, morning summary) are held during this
+# window and sent when it ends - nothing is lost. Leave unset for no quiet hours. Example: 22 to 6 = overnight.
+# quiet_from = 22
+# quiet_to = 6
 
 [dashboard]
 animations = true       # Overview "what changed" animations on each 5-minute auto-refresh
 show_amounts = true     # show money amounts (set false to hide them on a shared office screen)
 refresh_seconds = 300   # auto-refresh interval (aligned to the live sync)
 sound = false           # play a sound on changes
+colour_scheme = "teal"  # default palette: teal | indigo | copper | madder | olive | navy (the 🎨 picker overrides per browser)
 
 [reports]
 tracked_issue_days = 60
 reorder_cover_months = 2
+unused_stock_months = 6            # the Unused-stock tab flags items in stock but not issued for this many months
 # Where saved reports (PDF/CSV) are written. Leave blank for the per-machine default
 # (Windows: C:\ProgramData\Smart Layer\output - Program Files is read-only). Point it at a synced
 # OneDrive / Google-Drive-for-desktop folder to get the files in the cloud; Smart Layer uses no cloud API.
@@ -75,6 +81,17 @@ yarn_groups = []                   # e.g. [["6", "18"]] when one yarn is booked 
 # warp_closing_count = 38
 # weft_closing_count = 39
 # rate_per_lb = 550
+
+[sizing]
+gullay_g = 55            # grams of yarn left on each returned baby cone (gullay), for the sized-yarn closing count
+pick_factor = 1.0936     # picks-per-metre factor used in the closing weight formula
+shrink_pct = 7           # default sizing shrinkage % (metres after shrink); per-set input overrides it in the sheet
+
+[cost]
+# Map a ledger account_group or head name to a cost bucket for the cost-per-metre report.
+# Buckets: store | payroll | power | sizing | other. Example:
+# heads = { "Electricity" = "power", "Wages" = "payroll", "Store consumption" = "store" }
+heads = {}
 
 [pilferage]
 lookback_days = 90

@@ -1285,3 +1285,105 @@ def test_change_feed_records_at_sync_time(env, tmp_path):
     kinds = {e["kind"] for e in res["events"]}
     assert "store" in kinds                                  # the new slip shows up for the real client cursor
     assert any(e.get("item") == "Bearing" for e in res["events"] if e["kind"] == "store")
+
+
+# ---- 0.15.0 feature coverage -----------------------------------------------------------------------------------
+from datetime import date as _d, timedelta as _td   # noqa: E402
+from smart_layer import manual as _manual, pushes as _pushes   # noqa: E402
+from smart_layer.reports import store_extra as _se   # noqa: E402
+from smart_layer.reports import finance as _repfin   # noqa: E402
+from smart_layer.textile import closing as _cl, contracts as _contracts, sizing as _sizing   # noqa: E402
+from smart_layer.web import finance as _webfin   # noqa: E402
+
+_V15_RANGE = {"store-expense", "issue-slips", "store-returns", "loom-consumption", "weft-consumption"}
+_V15_REPORTS = ["store-expense", "issue-slips", "store-returns", "unused-stock", "loom-consumption",
+                "cost-metre", "contracts", "yarn-shortage", "sizer-ledger", "empty-beams",
+                "sized-closing", "weft-consumption"]
+
+
+def test_v015_every_new_report_builds(env):
+    cfg, con = env
+    d0 = date(END.year, END.month, 1)
+    for name in _V15_REPORTS:
+        rep = report_registry.build(con, cfg, name, END, d0, END) if name in _V15_RANGE \
+            else report_registry.build(con, cfg, name, END)
+        assert rep is not None and rep.columns, f"{name} returned no columns"
+        assert isinstance(rep.text(), str)                   # renders without error
+
+
+def test_v015_live_formula_xlsx_exports(env, tmp_path):
+    cfg, con = env
+    # a report that ships a live-formula workbook (sized_yarn_closing / sizer_ledger set xlsx_sheets)
+    rep = _sizing.sizer_ledger_full(con, cfg, END)
+    assert rep.xlsx_sheets, "sizer ledger should carry a live-formula workbook spec"
+    p = rep.write_xlsx(tmp_path, "sizer.xlsx", cfg["company"]["name"])
+    assert p.exists() and p.stat().st_size > 0
+    # the workbook really contains formulas (not just values)
+    import openpyxl
+    wb = openpyxl.load_workbook(p)
+    formulas = [c.value for ws in wb.worksheets for row in ws.iter_rows() for c in row
+                if isinstance(c.value, str) and c.value.startswith("=")]
+    assert formulas, "no live formulas written"
+
+
+def test_v015_month_sales_and_bank_accounts(env):
+    cfg, con = env
+    ms = _webfin.month_sales(con, d0=date(2000, 1, 1), d1=date(2099, 1, 1))
+    assert ms["count"] == len(ms["rows"]) and ms["total"] == sum(r["amount"] for r in ms["rows"])
+    assert all(r["amount"] > 0 for r in ms["rows"])          # invoice value is the customer debit
+    ba = _webfin.bank_accounts(con)
+    assert ba["count"] == len(ba["accounts"]) and ba["total"] == sum(a["balance"] for a in ba["accounts"])
+    assert all(a["side"] in ("in hand", "overdrawn") for a in ba["accounts"])
+
+
+def test_v015_fabric_history_stock_matches_report(env):
+    cfg, con = env
+    fh = web_data.fabric_history(con, cfg, date(2000, 1, 1), END)
+    # per-row stock sums to the totals, and totals.stock equals the fabric-stock report total
+    assert fh["totals"]["stock"] == sum(r["stock"] for r in fh["rows"])
+    live = con.execute("SELECT COALESCE(SUM(meters),0) FROM fabric_stock").fetchone()[0]
+    assert fh["totals"]["stock"] == round(live)
+
+
+def test_v015_closing_sheet_three_modes_and_export(env, tmp_path):
+    cfg, con = env
+    lst = _cl.contract_list(con)
+    assert lst, "demo has contracts"
+    cno, party = lst[0]["contract"], lst[0]["party"]
+    one = _cl.closing_sheet(con, cfg, contract=cno)
+    assert one["contracts"] and one["totals"]["contracts"] == 1
+    whole = _cl.closing_sheet(con, cfg, party=party)
+    assert whole["totals"]["contracts"] >= 1                 # party mode spans >= the one contract
+    # IGP yarn + OGP fabric are date-wise lists
+    assert isinstance(one["igp"], list) and isinstance(one["ogp"], list)
+    rep = _cl.closing_sheet_report(con, cfg, contract=cno)
+    assert rep.xlsx_sheets and len(rep.xlsx_sheets) == 3      # Summary + Yarn in + Fabric out
+    p = rep.write_xlsx(tmp_path, "closing.xlsx", cfg["company"]["name"])
+    assert p.exists() and p.stat().st_size > 0
+
+
+def test_v015_manual_inputs_roundtrip(env):
+    cfg, con = env
+    _manual.set_value(con, "rewind", "SET-1", "kg", "123.5", who="tester", note="counted")
+    assert float(_manual.get(con, "rewind", "SET-1", "kg")) == 123.5
+    _manual.set_value(con, "rewind", "SET-1", "kg", "130", who="tester")
+    hist = _manual.history(con, "rewind", "SET-1", "kg")
+    assert len(hist) >= 2 and float(hist[0]["value"]) == 130   # newest first, edit history kept
+    latest = _manual.latest(con, "rewind")                     # {key: {field: value}}
+    assert float(latest["SET-1"]["kg"]) == 130
+
+
+def test_v015_pushes_run(env):
+    cfg, con = env
+    assert isinstance(_pushes._production_line(con, END), str)
+    assert isinstance(_pushes.morning_summary(cfg, con, END), str)   # console channel: prints, returns the body
+    wc = _pushes.weft_check(cfg, con, END)
+    assert wc is None or isinstance(wc, str)                 # None only if the ERP day is not keyed
+
+
+def test_v015_cost_per_metre_and_yarn_shortage(env):
+    cfg, con = env
+    cm = _repfin.cost_per_metre(con, cfg, END)
+    assert cm.columns and cm.rows is not None
+    ys = _contracts.yarn_shortage(con, cfg, END)
+    assert ys.columns[0] == "Count"
