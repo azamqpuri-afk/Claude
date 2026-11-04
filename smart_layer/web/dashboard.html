@@ -319,8 +319,13 @@
   <section class="pane" data-pane="store" hidden>
     <div class="subtabs" id="store-sub">
       <button data-v="stock" aria-selected="true">Store room</button>
+      <button data-v="slips">Issue slips</button>
+      <button data-v="returns">Returns</button>
+      <button data-v="expense">Store expense</button>
+      <button data-v="unused">Unused stock</button>
       <button data-v="demand">Store demand</button>
     </div>
+    <div class="grid g4" id="store-tiles" style="margin-bottom:14px"></div>
     <div class="tools" id="store-tools"></div>
     <div id="store-out"></div>
     <div class="rep-sum" id="store-msg"></div>
@@ -331,6 +336,7 @@
     <div class="subtabs" id="yf-sub">
       <button data-v="yarn" aria-selected="true">🧶 Yarn</button>
       <button data-v="fabric">📦 Fabric</button>
+      <button data-v="closing">📑 Closing</button>
     </div>
     <div class="grid g4" id="yf-tiles" style="margin-bottom:16px"></div>
     <div class="tools" id="yf-tools"></div>
@@ -690,8 +696,25 @@ async function drawIssues(code, name, limit){
     var rows=(j.rows||[]).map(function(r){ var a=[dshort(r.date), esc(r.to||"—"),
       (r.zero?`<span class="tag low">${num(r.qty)}</span>`:num(r.qty)), num(r.amount), esc(r.slip||"")]; if(showBy) a.push(esc(r.by||"")); return a; });
     var more = j.more ? `<div style="padding:10px 2px"><button class="btn ghost" onclick="drawIssues('${esc(code)}','${esc((name||code)).replace(/'/g,"")}',100)">Show more</button></div>` : "";
-    $("#drawer-body").innerHTML=head+(rows.length?table(cols,rows,[2,3])+more:'<p class="muted">No issues on record for this item.</p>');
+    var ratesLink = `<div style="padding:4px 2px 10px"><button class="btn ghost" onclick="drawRates('${esc(code)}','${esc((name||code)).replace(/'/g,"")}')">💰 Purchase rates &amp; suppliers ›</button></div>`;
+    $("#drawer-body").innerHTML=head+ratesLink+(rows.length?table(cols,rows,[2,3])+more:'<p class="muted">No issues on record for this item.</p>');
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load issue history.</p>'; }
+}
+// #11 rates audit: one item's purchase history, lowest/highest/last rate, each supplier's last & average, similar items
+async function drawRates(code, name){
+  openDrawer("💰 "+esc(name||code)+" — purchase rates",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see purchase rates.</p>'; return; }
+  try{
+    var j=await (await fetch("api/store/rates?item="+encodeURIComponent(code))).json(), s=j.summary||{};
+    var head=`<div class="lkpi" style="margin-bottom:10px"><div><div class="t">Last rate</div><div class="v">${s.last!=null?num(s.last):"–"}</div></div><div><div class="t">Lowest</div><div class="v">${s.low!=null?num(s.low):"–"}</div></div><div><div class="t">Highest</div><div class="v">${s.high!=null?num(s.high):"–"}</div></div><div><div class="t">Purchases</div><div class="v">${num(s.n)}</div></div></div>`;
+    var sup=(j.suppliers||[]).map(x=>[esc(x.supplier), num(x.n), num(x.last_rate), num(x.avg_rate)]);
+    var supt = sup.length? `<div class="sec" style="margin:2px 0 6px">By supplier — cheapest average first</div>`+table(["Supplier","Buys","Last rate","Avg rate"],sup,[1,2,3]) : "";
+    var rows=(j.rows||[]).map(r=>[dshort(r.date), esc(r.doc_no||""), esc(r.supplier||""), num(r.qty), num(r.rate), num(r.amount)]);
+    var hist = rows.length? `<div class="sec" style="margin:14px 0 6px">Purchase history</div>`+table(["Date","GRN","Supplier","Qty","Rate","Amount"],rows,[3,4,5]) : '<p class="muted">No purchases on record in the last year.</p>';
+    var sim=(j.similar||[]).map(x=>`<li>${esc(x.item_name||x.name||x)} ${x.stock!=null?('· '+num(x.stock)+' in stock'):''}</li>`).join("");
+    var simb = sim? `<div class="sec" style="margin:14px 0 6px">Similar items in stock</div><ul style="margin:0;padding-left:18px;color:var(--muted)">${sim}</ul>` : "";
+    $("#drawer-body").innerHTML=head+supt+hist+simb;
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load purchase rates.</p>'; }
 }
 
 /* ---------- Overview drill-downs (drawer) ---------- */
@@ -992,14 +1015,95 @@ function statusCell(v){ var s=String(v==null?"":v); var map={"OUT OF STOCK":"out
 
 /* ---------- store ---------- */
 var storeView="stock";
+// month-to-date default for the range views; the To box is the as-of, From the period start
+function storeRange(){ var t=$("#st-to"), f=$("#st-from"); return { to:(t&&t.value)||"", from:(f&&f.value)||"" }; }
+function storeRangeQ(){ var r=storeRange(); return (r.from?`&from=${r.from}`:"")+(r.to?`&to=${r.to}`:""); }
+function monthStart(iso){ iso=iso||(D&&D.as_of)||""; return iso?iso.slice(0,8)+"01":""; }
+function rangeToolbar(extra){
+  var r=storeRange(), to=r.to||(D&&D.as_of)||"", from=r.from||monthStart(to);
+  return `<label class="fld">From <input type="date" id="st-from" value="${esc(from)}"></label>`+
+         `<label class="fld">To <input type="date" id="st-to" value="${esc(to)}"></label>`+(extra||"");
+}
+function wireRange(reload){ ["#st-from","#st-to"].forEach(s=>{var el=$(s); if(el) el.onchange=reload;}); }
 $("#store-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{storeView=b.dataset.v;$("#store-sub").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x===b));loadStore();});
 function loadStore(){
+  $("#store-tiles").innerHTML="";
+  if(storeView==="stock"){ renderStoreRoom(); return; }
   if(storeView==="demand"){
     $("#store-tools").innerHTML = SEARCH_BOX('#store-out','Find item…')+`<span class="countline" style="margin-left:10px">Items to buy, on usage not the ERP's reorder levels: out &amp; still used, below 90-day average use, or a demand slip with no stock.</span><span class="spacer" style="flex:1"></span><button class="btn" onclick="window.print()">🖨 Print</button><a class="btn ghost" href="api/report?name=demand&fmt=pdf${dayq()}">⤓ PDF</a>`;
-    loadReport("demand", "#store-out", "#store-msg");
-  } else {
-    renderStoreRoom();
+    loadReport("demand", "#store-out", "#store-msg"); return;
   }
+  if(storeView==="unused"){
+    $("#store-tools").innerHTML = SEARCH_BOX('#store-out','Find item…')+`<span class="countline" style="margin-left:10px">In stock but not issued for months — slow-moving money sitting on the shelf.</span><span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=unused-stock&fmt=pdf${dayq()}">⤓ PDF</a><a class="btn ghost" href="api/report?name=unused-stock&fmt=xlsx${dayq()}">⤓ Excel</a>`;
+    loadReport("unused-stock", "#store-out", "#store-msg"); return;
+  }
+  if(storeView==="slips"){ return loadSlips(); }
+  if(storeView==="returns"){
+    $("#store-tools").innerHTML = rangeToolbar(`<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=store-returns&fmt=pdf${dayq()}${storeRangeQ()}">⤓ PDF</a><a class="btn ghost" href="api/report?name=store-returns&fmt=xlsx${dayq()}${storeRangeQ()}">⤓ Excel</a>`);
+    wireRange(loadStore); loadReportRange("store-returns", "#store-out", "#store-msg"); return;
+  }
+  if(storeView==="expense"){ return loadExpense(); }
+}
+// a range report: like loadReport but passes From/To
+async function loadReportRange(name, outSel, msgSel){
+  if(STATIC_DATA){ $(msgSel).textContent="Open from the server to see this."; $(outSel).innerHTML=""; return; }
+  $(msgSel).textContent="Loading…"; $(outSel).innerHTML="";
+  try{
+    var r=await fetch(`api/report?name=${name}&fmt=json`+dayq()+storeRangeQ());
+    if(!r.ok){ $(msgSel).textContent="Could not load (licence or data)."; return; }
+    var j=await r.json();
+    var nums=j.columns.map((_,i)=>i).filter(i=>j.rows.length && j.rows.every(row=>row[i]===""||/^[-+\d.,%\s]+$/.test(String(row[i]))));
+    $(msgSel).textContent = j.title + (j.summary&&j.summary.length? "  —  "+j.summary.join("  ·  ") : "");
+    $(outSel).innerHTML = `<div class="card"><div class="tscroll">`+table(j.columns, j.rows.map(row=>row.map(c=>statusCell(c))), nums)+`</div></div>`;
+    applyFilter();
+  }catch(e){ $(msgSel).textContent="Could not reach the server."; }
+}
+async function loadExpense(){
+  $("#store-tools").innerHTML = rangeToolbar(`<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=store-expense&fmt=pdf${dayq()}${storeRangeQ()}">⤓ PDF</a><a class="btn ghost" href="api/report?name=store-expense&fmt=xlsx${dayq()}${storeRangeQ()}">⤓ Excel</a>`);
+  wireRange(loadExpense);
+  if(STATIC_DATA){ $("#store-msg").textContent="Open from the server to see store expense."; return; }
+  $("#store-msg").textContent="Loading…"; $("#store-out").innerHTML="";
+  try{
+    var j=await (await fetch(`api/report?name=store-expense&fmt=json`+dayq()+storeRangeQ())).json();
+    // net store expense = issued − returned (last column total)
+    var issued=j.rows.reduce((a,r)=>a+(+String(r[2]).replace(/[^\d.-]/g,"")||0),0);
+    var retd=j.rows.reduce((a,r)=>a+(+String(r[3]).replace(/[^\d.-]/g,"")||0),0);
+    $("#store-tiles").innerHTML =
+      tile("🧾 Net store expense", "Rs "+rs(issued-retd), "issued − returned","accent") +
+      tile("📤 Issued", "Rs "+rs(issued), "") +
+      tile("↩ Returned", "Rs "+rs(retd), "") +
+      tile("📦 Items", num(j.rows.length), "with movement");
+    var nums=j.columns.map((_,i)=>i).filter(i=>j.rows.length && j.rows.every(row=>row[i]===""||/^[-+\d.,%\s]+$/.test(String(row[i]))));
+    $("#store-msg").textContent = j.title + (j.summary&&j.summary.length? "  —  "+j.summary.join("  ·  ") : "");
+    $("#store-out").innerHTML = `<div class="card"><div class="tscroll">`+table(j.columns, j.rows.map(row=>row.map(c=>esc(c))), nums)+`</div></div>`;
+  }catch(e){ $("#store-msg").textContent="Could not load store expense."; }
+}
+async function loadSlips(){
+  var searchBox=`<label class="fld">🔎 <input id="st-slip-q" placeholder="Slip no. — press Enter for its lines" style="min-width:230px"></label>`;
+  $("#store-tools").innerHTML = rangeToolbar(searchBox+`<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=issue-slips&fmt=pdf${dayq()}${storeRangeQ()}">⤓ PDF</a><a class="btn ghost" href="api/report?name=issue-slips&fmt=xlsx${dayq()}${storeRangeQ()}">⤓ Excel</a>`);
+  wireRange(loadSlips);
+  var sq=$("#st-slip-q"); if(sq) sq.addEventListener("keydown",ev=>{ if(ev.key==="Enter"){ var v=sq.value.trim(); if(v) drawSlip(v); } });
+  if(STATIC_DATA){ $("#store-msg").textContent="Open from the server to see issue slips."; return; }
+  $("#store-msg").textContent="Loading…"; $("#store-out").innerHTML="";
+  try{
+    var j=await (await fetch(`api/report?name=issue-slips&fmt=json`+dayq()+storeRangeQ())).json();
+    $("#store-msg").textContent = j.title + (j.summary&&j.summary.length? "  —  "+j.summary.join("  ·  ") : "");
+    var rows=j.rows.map((r,ri)=>`<tr class="clickrow" data-doc="${esc(r[1])}" style="cursor:pointer">`+
+      `<td>${esc(dshort(r[0]))}</td><td><b>${esc(r[1])}</b></td><td class="num">${esc(r[2])}</td><td>${esc(r[3])}</td><td class="num">${num(r[4])}</td></tr>`).join("");
+    $("#store-out").innerHTML=`<div class="card"><div class="tscroll"><table><thead><tr><th>Date</th><th>Slip no.</th><th class="num">Lines</th><th>To</th><th class="num">Value</th></tr></thead><tbody>${rows||'<tr><td colspan="5" class="muted">No issue slips in this period.</td></tr>'}</tbody></table></div></div>`;
+    $("#store-out").querySelectorAll(".clickrow").forEach(tr=>tr.onclick=()=>drawSlip(tr.dataset.doc));
+  }catch(e){ $("#store-msg").textContent="Could not load issue slips."; }
+}
+async function drawSlip(doc){
+  openDrawer("🧾 Issue slip "+esc(doc),'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see slip lines.</p>'; return; }
+  try{
+    var j=await (await fetch("api/store/slip?doc="+encodeURIComponent(doc))).json();
+    var rows=(j.rows||[]).map(r=>[esc(r.item), esc(r.code), num(r.qty), num(r.amount), esc(r.to||"")]);
+    var tot=(j.rows||[]).reduce((a,r)=>a+(r.amount||0),0);
+    var head=`<p class="muted" style="margin:0 0 8px">Slip ${esc(doc)}${j.date?" · "+dshort(j.date):""} · ${(j.rows||[]).length} line(s) · Rs ${num(tot)}</p>`;
+    $("#drawer-body").innerHTML=head+(rows.length?table(["Item","Code","Qty","Amount","To"],rows,[2,3]):'<p class="muted">No lines found for this slip number.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load this slip.</p>'; }
 }
 // The whole store room (BUG: it used to show only out/low items issued in the last window). Every item with stock
 // or any movement, searchable, each one clickable for its issue history. Status/avg still use the window.
@@ -1034,9 +1138,79 @@ var SEARCH_BOX = (sel, ph)=>`<input type="search" placeholder="🔍 ${ph}" oninp
 var yfView="yarn";
 $("#yf-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>{yfView=b.dataset.v;$("#yf-sub").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x===b));loadYF();});
 function loadYF(){
+  var showTiles = yfView!=="closing";
+  $("#yf-tiles").style.display = showTiles?"":"none";
+  if(yfView==="closing"){ return loadClosingSheet(); }
   var name = yfView==="yarn"?"yarn-stock":"fabric-stock";
   $("#yf-tools").innerHTML = `<span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=${name}&fmt=pdf${dayq()}">⤓ PDF</a>`;
   if(yfView==="yarn"){ renderYarn(); } else { loadReport(name, "#yf-out", "#yf-msg"); }
+}
+
+/* ---------- yarn-closing redesign (#6): party → contract → 3 modes, IGP yarn + OGP fabric date-wise ---------- */
+var clParty="", clContract="", clQuality="", clMode="contract", clContracts=[];
+function closingQ(){
+  // 3 modes: one contract / party+quality across contracts / whole party
+  if(clMode==="contract") return "contract="+encodeURIComponent(clContract);
+  if(clMode==="quality") return "party="+encodeURIComponent(clParty)+"&quality="+encodeURIComponent(clQuality);
+  return "party="+encodeURIComponent(clParty);
+}
+async function loadClosingSheet(){
+  $("#yf-tools").innerHTML = `<label class="fld">Party <input id="cl-party" placeholder="all parties" value="${esc(clParty)}" style="min-width:160px"></label>
+    <label class="fld">Contract <select id="cl-contract" style="min-width:150px"></select></label>
+    <label class="fld">Quality <select id="cl-quality" style="min-width:130px"></select></label>
+    <span class="subtabs" id="cl-mode" style="margin:0;border:0">
+      <button data-m="contract" aria-selected="${clMode==='contract'}">This contract</button>
+      <button data-m="quality" aria-selected="${clMode==='quality'}">Party + quality</button>
+      <button data-m="party" aria-selected="${clMode==='party'}">Whole party</button></span>
+    <span class="spacer" style="flex:1"></span>
+    <a class="btn ghost" id="cl-pdf">⤓ PDF</a><a class="btn ghost" id="cl-xlsx">⤓ Excel</a>`;
+  $("#yf-out").innerHTML=""; $("#yf-msg").textContent="";
+  if(STATIC_DATA){ $("#yf-msg").textContent="Open from the server to see the closing sheet."; return; }
+  $("#cl-party").addEventListener("keydown",ev=>{ if(ev.key==="Enter"){ clParty=$("#cl-party").value.trim(); clContract=""; clQuality=""; refreshClosingPickers(true); } });
+  $("#cl-party").addEventListener("change",()=>{ clParty=$("#cl-party").value.trim(); clContract=""; clQuality=""; refreshClosingPickers(true); });
+  $("#cl-mode").querySelectorAll("button").forEach(b=>b.onclick=()=>{ clMode=b.dataset.m; $("#cl-mode").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x===b)); renderClosingSheet(); });
+  $("#cl-contract").onchange=()=>{ clContract=$("#cl-contract").value; clMode="contract"; $("#cl-mode").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x.dataset.m==="contract")); renderClosingSheet(); };
+  $("#cl-quality").onchange=()=>{ clQuality=$("#cl-quality").value; clMode="quality"; $("#cl-mode").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x.dataset.m==="quality")); renderClosingSheet(); };
+  $("#cl-pdf").onclick=()=>{ location.href="api/closing/sheet?fmt=pdf&"+closingQ(); };
+  $("#cl-xlsx").onclick=()=>{ location.href="api/closing/sheet?fmt=xlsx&"+closingQ(); };
+  await refreshClosingPickers(false);
+}
+async function refreshClosingPickers(reset){
+  try{
+    var j=await (await fetch("api/closing/contracts?party="+encodeURIComponent(clParty))).json();
+    clContracts=j.contracts||[];
+  }catch(e){ clContracts=[]; }
+  var csel=$("#cl-contract"), qsel=$("#cl-quality"); if(!csel) return;
+  csel.innerHTML = clContracts.map(c=>`<option value="${esc(c.contract)}">${esc(c.contract)}${c.quality?" · "+esc(c.quality):""}</option>`).join("") || '<option value="">(none)</option>';
+  var quals=[...new Set(clContracts.map(c=>c.quality).filter(Boolean))].sort();
+  qsel.innerHTML = quals.map(q=>`<option value="${esc(q)}">${esc(q)}</option>`).join("") || '<option value="">(none)</option>';
+  if(reset || !clContract){ clContract = clContracts.length?clContracts[0].contract:""; }
+  if(reset || !clQuality){ clQuality = quals.length?quals[0]:""; }
+  csel.value=clContract; qsel.value=clQuality;
+  renderClosingSheet();
+}
+async function renderClosingSheet(){
+  $("#yf-msg").textContent="Loading…"; $("#yf-out").innerHTML="";
+  try{
+    var j=await (await fetch("api/closing/sheet?"+closingQ())).json();
+    if(!j.contracts||!j.contracts.length){ $("#yf-msg").textContent="Pick a party or contract to see its closing."; $("#yf-out").innerHTML=""; return; }
+    var c=j.counts||{}, t=j.totals||{};
+    var head = `<div class="grid g4" style="margin-bottom:14px">`+
+      tile("🧶 Yarn in", num(t.yarn_in_kg)+' <span class="cur">kg</span>', num(t.yarn_in_bags)+" bags","accent")+
+      tile("📦 Fabric out", num(t.fabric_out_m)+' <span class="cur">m</span>', t.contracts+" contract(s)")+
+      tile("🧵 Warp count", esc(c.warp_count||"—"), (c.ends_per_inch||"?")+" ends/in")+
+      tile("🧵 Weft count", esc(c.weft_count||"—"), (c.picks_per_inch||"?")+" picks/in · "+(c.width_in||"?")+'"')+
+      `</div>`;
+    var igp=(j.igp||[]).map(r=>[dshort(r.date), esc(r.doc_no||""), num(r.bags), num(r.kg)]);
+    var ogp=(j.ogp||[]).map(r=>[dshort(r.date), esc(r.doc_no||""), num(r.meters)]);
+    var igpCard=`<div class="card"><div class="hd"><h3>Yarn in (IGP) — date-wise</h3><span class="count">${igp.length} entr${igp.length===1?'y':'ies'} · ${num(t.yarn_in_kg)} kg</span></div><div class="tscroll">`+
+      (igp.length?table(["Date","Doc","Bags","Kg"],igp,[2,3]):'<p class="cnote">No yarn received.</p>')+`</div></div>`;
+    var ogpCard=`<div class="card"><div class="hd"><h3>Fabric out (OGP) — date-wise</h3><span class="count">${ogp.length} entr${ogp.length===1?'y':'ies'} · ${num(t.fabric_out_m)} m</span></div><div class="tscroll">`+
+      (ogp.length?table(["Date","Doc","Meters"],ogp,[2]):'<p class="cnote">No fabric dispatched.</p>')+`</div></div>`;
+    $("#yf-out").innerHTML = head+`<div class="cols">${igpCard}${ogpCard}</div>`;
+    $("#yf-msg").textContent = (clMode==="contract"?("Contract "+clContract):clMode==="quality"?((j.party||clParty)+" · "+clQuality):("All contracts of "+(j.party||clParty)))+
+      " — warp "+esc(c.warp_count||"?")+" / weft "+esc(c.weft_count||"?")+". Excel export has a live yarn-balance sheet.";
+  }catch(e){ $("#yf-msg").textContent="Could not load the closing sheet."; }
 }
 
 /* ---------- payroll ---------- */

@@ -326,6 +326,15 @@ class App:
         finally:
             con.close()
 
+    def closing_sheet_report(self, party, contract, quality):
+        """The closing sheet as a downloadable Report (PDF / CSV / live-formula xlsx)."""
+        from ..textile import closing as cl
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return cl.closing_sheet_report(con, self.cfg, party or None, contract or None, quality or None)
+        finally:
+            con.close()
+
     def closing_counts(self, day, party):
         """The warp/weft closing counts in effect for a party's closing, prefilled for the editable dashboard panel."""
         from ..textile import closing as cl
@@ -563,6 +572,10 @@ def get_response(app, path, query, check_licence=True):
         if path == "/api/closing/contracts":             # contracts for the closing picker (optional party filter)
             return 200, app.closing_contracts(params.get("party", "")), "application/json", {}
         if path == "/api/closing/sheet":                 # IGP yarn + OGP fabric date-wise for a party/contract
+            fmt = params.get("fmt", "json")
+            if fmt in ("pdf", "csv", "xlsx", "excel"):   # downloadable: combined table + live-formula workbook
+                rep = app.closing_sheet_report(params.get("party", ""), params.get("contract", ""), params.get("quality", ""))
+                return _report_body(app, rep, "closing-sheet", (date.today()).isoformat(), fmt, cell)
             return 200, app.closing_sheet(params.get("party", ""), params.get("contract", ""), params.get("quality", "")), "application/json", {}
         if path == "/api/manual":                        # manual inputs (latest per key) for a scope
             return 200, app.manual_list(params.get("scope", ""), params.get("field", "")), "application/json", {}

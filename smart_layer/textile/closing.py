@@ -473,3 +473,60 @@ def closing_sheet(con, cfg, party=None, contract=None, quality=None):
               "fabric_out_m": round(sum(r["meters"] for r in ogp)), "contracts": len(cnos)}
     return {"contracts": [{"contract": m[0], "party": m[1], "quality": m[2]} for m in meta],
             "party": m0[1], "quality": m0[2], "igp": igp, "ogp": ogp, "counts": counts, "totals": totals}
+
+
+def closing_sheet_report(con, cfg, party=None, contract=None, quality=None):
+    """The closing sheet (closing_sheet) as a downloadable Report: a combined IGP-yarn + OGP-fabric table for
+    PDF/CSV, and a live-formula workbook (reports.xlsx) with a Summary balance sheet (yarn received vs yarn needed
+    for the fabric produced, recalculated live) plus date-wise Yarn-in and Fabric-out sheets with editable cells."""
+    from ..reports.xlsx import Fx, Inp
+    s = closing_sheet(con, cfg, party, contract, quality)
+    cnos = [c["contract"] for c in s["contracts"]]
+    cur = cfg["company"]["currency"]
+    counts, tot = s["counts"], s["totals"]
+    # warp / weft weight per metre from the mill's own method (so it follows the closing construction rules)
+    warp_lbm = weft_lbm = None
+    if cnos:
+        method = Method(cfg["closing"])
+        st = method.settings(cnos[0], None)
+        try:
+            warp_lbm = method.weight("warp", st, counts.get("ends_per_inch"), counts.get("width_in"),
+                                     method.closing_count("warp", None, counts.get("warp_count"), st))
+            weft_lbm = method.weight("weft", st, counts.get("picks_per_inch"), counts.get("width_in"),
+                                     method.closing_count("weft", None, counts.get("weft_count"), st))
+        except Exception:
+            warp_lbm = weft_lbm = None
+    lbm = (warp_lbm or 0) + (weft_lbm or 0)
+    needed_kg = round(tot.get("fabric_out_m", 0) * lbm / KG_PER_LB) if lbm else None
+    balance_kg = (round(tot.get("yarn_in_kg", 0) - needed_kg) if needed_kg is not None else None)
+
+    who = (contract and f"contract {contract}") or (party and quality and f"{party} · {quality}") or (party or "all contracts")
+    title = f"Closing sheet - {who}"
+    # on-screen / PDF / CSV: one combined table
+    columns = ["Section", "Date", "Doc", "Bags", f"Qty"]
+    rows = [["Yarn in", r["date"], r["doc_no"], r["bags"], f"{r['kg']:,} kg"] for r in s["igp"]]
+    rows += [["Fabric out", r["date"], r["doc_no"], "", f"{r['meters']:,} m"] for r in s["ogp"]]
+    summary = [
+        f"{tot.get('contracts',0)} contract(s): {who}.",
+        f"Yarn in {tot.get('yarn_in_kg',0):,} kg ({tot.get('yarn_in_bags',0):,} bags); fabric out {tot.get('fabric_out_m',0):,} m.",
+        (f"Warp {warp_lbm:.4f} + weft {weft_lbm:.4f} lb/m (count warp {counts.get('warp_count')}, weft {counts.get('weft_count')}, "
+         f"{counts.get('ends_per_inch')}/{counts.get('picks_per_inch')} @ {counts.get('width_in')}\")." if lbm else
+         "Warp/weft weight per metre not available (missing construction)."),
+    ]
+    if needed_kg is not None:
+        summary.append(f"Yarn needed for the fabric out ≈ {needed_kg:,} kg → balance {balance_kg:+,} kg "
+                       f"({'mill holds party yarn' if balance_kg >= 0 else 'party short'}).")
+    rep = Report(title, columns, rows, summary)
+    # live-formula workbook
+    bal = {"name": "Summary", "title": title, "note": [f"{who}"],
+           "headers": ["Fabric out (m)", "Warp lb/m", "Weft lb/m", "Yarn needed (kg)", "Yarn received (kg)", "Balance (kg)"],
+           "money_cols": [3, 4, 5],
+           "rows": [[Inp(tot.get("fabric_out_m", 0)), Inp(round(warp_lbm or 0, 4)), Inp(round(weft_lbm or 0, 4)),
+                     Fx("=A{r}*(B{r}+C{r})/2.2046"), Inp(tot.get("yarn_in_kg", 0)), Fx("=E{r}-D{r}")]],
+           "legend": "Edit fabric out, lb/m or yarn received and the needed-kg and balance recalculate."}
+    yin = {"name": "Yarn in (IGP)", "title": "Yarn received - date-wise", "headers": ["Date", "Doc", "Bags", "Kg"],
+           "money_cols": [3], "rows": [[r["date"], r["doc_no"], r["bags"], Inp(r["kg"])] for r in s["igp"]]}
+    fout = {"name": "Fabric out (OGP)", "title": "Fabric dispatched - date-wise", "headers": ["Date", "Doc", "Meters"],
+            "money_cols": [2], "rows": [[r["date"], r["doc_no"], Inp(r["meters"])] for r in s["ogp"]]}
+    rep.xlsx_sheets = [bal, yin, fout]
+    return rep
