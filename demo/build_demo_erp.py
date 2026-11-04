@@ -13,7 +13,7 @@ import argparse
 import random
 from collections import defaultdict
 import sqlite3
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
 
 ITEMS = [  # code, name, unit, group, typical rate, used per month, issued per loom?
@@ -535,6 +535,30 @@ def build_scoreboard(path, lday, end):
             counted *= 1.35 if n == 15 else (1 / 1.4 if n == 22 else 1)
         sb.execute("INSERT INTO olms_day VALUES (?,?,?,?,?,?)", (n, d.isoformat(), round(counted, 1), round(rnd.uniform(80, 92), 1),
                                                                  rnd.choice([520, 600]), rnd.randint(20, 90)))
+    # the CURRENT (running) shift, one row per loom, as the scoreboard screen shows it now. Looms 10 & 12 are idle
+    # (0 picks, stopped the whole shift) and must be excluded from the shed efficiency; one loom runs genuinely slow
+    # but is NOT idle and must stay in.
+    sb.execute("""CREATE TABLE olms_live (loom_no INTEGER, shift INTEGER, shift_start TEXT, elapsed_sec REAL,
+                  stopped_sec REAL, stops INTEGER, picks REAL, rpm REAL, ppi REAL, quality TEXT, updated_at TEXT)""")
+    looms = sorted({n for (n, _d) in lday})
+    shift_start = datetime.combine(end, dtime(18, 0))
+    elapsed = 3.6 * 3600                                  # ~3.6 h into the night shift
+    now = shift_start + timedelta(seconds=elapsed)
+    for n in looms:
+        if n in (10, 12):                                # idle: down the whole shift, no production
+            stopped, picks, rpm = elapsed, 0, 0
+        elif n == 7:                                     # running but very slow (a few picks) - stays IN the average
+            stopped, rpm = elapsed * 0.985, 540
+            picks = (elapsed - stopped) * rpm / 60
+        else:
+            stopped = elapsed * rnd.uniform(0.05, 0.18)  # 82-95% up
+            rpm = rnd.choice([520, 600])
+            picks = (elapsed - stopped) * rpm / 60
+        q = "Q-6060" if n % 3 == 0 else ("Q-4040" if n % 3 == 1 else "Q-2020")
+        ppi = {"Q-6060": 88, "Q-4040": 80, "Q-2020": 56}[q]
+        sb.execute("INSERT INTO olms_live VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                   (n, 2, shift_start.isoformat(sep=" "), round(elapsed), round(stopped), rnd.randint(2, 40),
+                    round(picks), rpm, ppi, q, now.isoformat(sep=" ")))
     sb.commit()
     sb.close()
 

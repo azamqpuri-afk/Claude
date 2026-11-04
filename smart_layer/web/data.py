@@ -66,9 +66,14 @@ def _chart_series(con, as_of):
     return {"receivables": receivables, "fabric_stock": fabric_stock, "cash_bank": cash_bank}
 
 
-def _weaving(con, as_of):
-    """Loom floor: ERP vs scoreboard efficiency per loom and shed-wide, with a 30-day trend."""
+def _weaving(con, cfg, as_of):
+    """Loom floor: ERP vs scoreboard efficiency per loom and shed-wide, with a 30-day trend. Looms in
+    [monitor] exclude_looms are kept off the shed-wide scoreboard average (they still show on the floor)."""
     d, start = as_of.isoformat(), (as_of - timedelta(days=29)).isoformat()
+    excl = _excluded_looms(cfg)
+    # match the configured loom NUMBERS to the monitor's own loom codes (which differ by mill: 'L10' vs '10')
+    excl_codes = [c for (c,) in con.execute("SELECT DISTINCT loom_code FROM loom_monitor") if _loom_num(c) in excl]
+    ex_clause = (" AND loom_code NOT IN (%s)" % ",".join("?" * len(excl_codes))) if excl_codes else ""
     names = dict(con.execute("SELECT loom_code, loom_name FROM looms"))
     erp = {r[0]: r for r in con.execute(f"""
         SELECT p.loom_code, {EFF_AGG} AS eff, SUM(p.meters) AS m, MAX(p.prod_date) AS last
@@ -98,13 +103,14 @@ def _weaving(con, as_of):
                       "last_date": e[3] if e else None})
     # shed-wide 30-day averages
     shed_erp = _one(con, f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d)
-    real_only = "AND loom_code IN (SELECT DISTINCT loom_code FROM loom_production)"   # drop phantom scoreboard-only looms
-    shed_scb = _one(con, f"""SELECT SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0)
-                            FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", start, d) if scb_avail else None
+    # drop phantom scoreboard-only looms AND the configured exclude_looms from the shed scoreboard average
+    real_only = "AND loom_code IN (SELECT DISTINCT loom_code FROM loom_production)" + ex_clause
+    shed_scb = (con.execute(f"""SELECT SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0)
+                            FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", [start, d, *excl_codes]).fetchone()[0]) if scb_avail else None
     ndays = max((as_of - date.fromisoformat(start)).days + 1, 1)
     ag = con.execute("SELECT SUM(COALESCE(first_quality_m,0)), SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", (start, d)).fetchone()
     erp_tot = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d) or 0
-    scb_tot = (_one(con, f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", start, d) or 0) if scb_avail else None
+    scb_tot = (con.execute(f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", [start, d, *excl_codes]).fetchone()[0] or 0) if scb_avail else None
     shed = {"erp_eff": round(shed_erp, 1) if shed_erp else None,
             "scb_eff": round(shed_scb, 1) if shed_scb else None,
             "a_grade": round(100.0 * ag[0] / ag[1], 1) if ag and ag[1] else None,
@@ -114,7 +120,7 @@ def _weaving(con, as_of):
     # 30-day efficiency trend, ERP vs scoreboard
     erp_day = dict(con.execute(f"SELECT prod_date, {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ? GROUP BY prod_date", (start, d)))
     scb_day = dict(con.execute(f"""SELECT read_date, SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0)
-                                  FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only} GROUP BY read_date""", (start, d))) if scb_avail else {}
+                                  FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only} GROUP BY read_date""", [start, d, *excl_codes])) if scb_avail else {}
     trend = [{"date": (as_of - timedelta(days=29 - i)).isoformat(),
               "erp": round(erp_day[x], 1) if (x := (as_of - timedelta(days=29 - i)).isoformat()) in erp_day and erp_day[x] is not None else None,
               "scb": round(scb_day[x], 1) if x in scb_day and scb_day[x] is not None else None} for i in range(30)]
@@ -352,7 +358,7 @@ def build(con, cfg, as_of=None):
             "confirmed": sum(1 for f in findings if f["severity"] == "CONFIRMED"),
             "yarn_flags": len(flags),
             "beam_alerts": sum(1 for b in beam_rows if b["alert"]),
-            **_scb_today(con),                           # live scoreboard efficiency for the current/last day
+            **_scb_today(con, cfg),                       # live scoreboard efficiency for the current running shift
         },
         "production": production, "looms": looms, "finance": finance, "findings": findings,
         "acknowledged": acknowledged, "stock": stock,
@@ -367,7 +373,7 @@ def build(con, cfg, as_of=None):
         "charts": {**_chart_series(con, as_of), "sales": sales_series},
         "fin": fin_mod.overview(con),
         "cost": _cost_head(con, cfg, as_of),
-        "weaving": _weaving(con, as_of),
+        "weaving": _weaving(con, cfg, as_of),
         "yarn_fabric": _yarn_fabric(con, cfg, as_of),
     }
 
@@ -480,16 +486,68 @@ def _cost_head(con, cfg, as_of):
         return {}
 
 
-def _scb_today(con):
-    """The scoreboard's own efficiency for its most recent day (the live 'current shift' figure) - read as-is,
-    meters-weighted across looms, with meters and average RPM and the day it is for. Empty when no monitor."""
+def _loom_num(code):
+    """The loom number inside a loom code ('L07' -> 7, '6' -> 6, 'LOOM-12' -> 12). None if none."""
+    import re
+    m = re.findall(r"\d+", str(code or ""))
+    return int(m[-1]) if m else None
+
+
+def _excluded_looms(cfg):
+    """Loom numbers to leave out of shed / mill scoreboard efficiency ([monitor] exclude_looms)."""
+    return {int(_loom_num(x)) for x in (cfg["monitor"].get("exclude_looms") or []) if _loom_num(x) is not None}
+
+
+def _scb_today(con, cfg):
+    """The scoreboard's own efficiency for the CURRENT (running) shift, from loom_monitor_live (the live per-shift
+    screen) when it is mapped; otherwise the last finished day from loom_monitor. Efficiency = run time / shift
+    time across the running looms. Idle looms (no production, stopped the whole shift) and the configured
+    exclude_looms are left out, since they would drag a shed average down the way the physical scoreboard does not.
+    A genuinely slow but running loom stays in. Empty when there is no monitor at all."""
+    excl = _excluded_looms(cfg)
+    auto_idle = bool(cfg["monitor"].get("auto_exclude_idle", True))
+    has_live = con.execute("SELECT 1 FROM loom_monitor_live LIMIT 1").fetchone()
+    if has_live:
+        rows = con.execute("""SELECT loom_code, shift, shift_start, COALESCE(elapsed_sec,0), COALESCE(stopped_sec,0),
+                                     COALESCE(picks,0), rpm, picks_per_inch, updated_at
+                              FROM loom_monitor_live""").fetchall()
+        run_sec = shift_sec = meters = rpm_sum = rpm_n = 0.0
+        idle = kept = 0
+        shift = shift_start = updated = None
+        for code, sh, sstart, el, st, picks, rpm, ppi, upd in rows:
+            shift, shift_start, updated = sh, sstart, (upd or updated)
+            n = _loom_num(code)
+            is_idle = (picks or 0) <= 0 and (st or 0) >= (el or 0) - 1    # no production and down the whole shift
+            if (n in excl) or (auto_idle and is_idle):
+                idle += 1
+                continue
+            if (el or 0) <= 0:
+                continue
+            kept += 1
+            shift_sec += el
+            run_sec += max(0.0, el - (st or 0))
+            if ppi and ppi > 0:
+                meters += (picks or 0) / (ppi * 39.37)
+            if rpm:
+                rpm_sum += rpm; rpm_n += 1
+        if shift_sec > 0:
+            return {"scb_eff_today": round(100 * run_sec / shift_sec, 1), "scb_meters_today": round(meters),
+                    "scb_rpm_today": round(rpm_sum / rpm_n) if rpm_n else None,
+                    "scb_today_date": (str(shift_start)[:10] if shift_start else None),
+                    "scb_live": True, "scb_shift": shift, "scb_shift_from": (str(shift_start)[11:16] if shift_start else None),
+                    "scb_updated": (str(updated)[11:16] if updated else None), "scb_idle_excluded": idle, "scb_looms": kept}
+    # fallback: the last finished day from loom_monitor (RTLSUM), excluding the configured looms
     last = con.execute("SELECT MAX(read_date) FROM loom_monitor").fetchone()[0]
     if not last:
         return {}
-    eff, m, rpm = con.execute("""SELECT SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0),
-                                 SUM(meters), AVG(rpm) FROM loom_monitor WHERE read_date = ?""", (last,)).fetchone()
+    ex_sql, params = "", [last]
+    if excl:
+        ex_sql = " AND loom_code NOT IN (%s)" % ",".join("?" * len(excl))
+        params += ["L%02d" % n for n in excl]            # match the common 'Lnn' coding; raw-number looms fall through
+    eff, m, rpm = con.execute(f"""SELECT SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0),
+                                 SUM(meters), AVG(rpm) FROM loom_monitor WHERE read_date = ?{ex_sql}""", params).fetchone()
     return {"scb_eff_today": round(eff, 1) if eff is not None else None, "scb_meters_today": round(m or 0),
-            "scb_rpm_today": round(rpm) if rpm else None, "scb_today_date": last}
+            "scb_rpm_today": round(rpm) if rpm else None, "scb_today_date": last, "scb_live": False}
 
 
 def _sync_health(con, cfg):

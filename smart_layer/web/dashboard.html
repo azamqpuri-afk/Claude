@@ -683,8 +683,15 @@ function render(){
   // mill (fabric & yarn tiles drill into detail)
   var yf=D.yarn_fabric||{};
   // live scoreboard efficiency tile (#8): shown only when the scoreboard is connected (kpis carry scb_*_today)
+  var scbMeta;
+  if(k.scb_live){
+    scbMeta = (k.scb_shift?("shift "+esc(k.scb_shift)):"this shift")+(k.scb_shift_from?" (from "+esc(k.scb_shift_from)+")":"")+
+      (k.scb_updated?" · "+esc(k.scb_updated):"")+(k.scb_idle_excluded?" · "+k.scb_idle_excluded+" idle out":"");
+  } else {
+    scbMeta = "last shift "+(k.scb_today_date?dshort(k.scb_today_date):"")+" · "+num(k.scb_meters_today)+" m";
+  }
   var scbTile = (k.scb_eff_today!=null)
-    ? tile("📟 Scoreboard eff", k.scb_eff_today+'%', "live · "+num(k.scb_meters_today)+" m"+(k.scb_rpm_today?" · "+num(k.scb_rpm_today)+" rpm":""), "accent")
+    ? tile("📟 Scoreboard eff", k.scb_eff_today+'%', scbMeta, "accent")
     : "";
   $("#ov-mill").innerHTML =
     tile("🧵 Meters woven", num(k.meters)+' <span class="cur">m</span>', "today · <b>"+num(k.woven_month)+" m</b> this month","accent") +

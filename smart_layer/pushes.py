@@ -17,6 +17,13 @@ from datetime import date, datetime, timedelta
 from . import notify, store
 
 
+def _lnum(code):
+    """The loom number inside a loom code ('L07' -> 7, '12' -> 12). None if none."""
+    import re
+    m = re.findall(r"\d+", str(code or ""))
+    return int(m[-1]) if m else None
+
+
 def _quiet(cfg, now=None):
     n = cfg["notify"]
     a, b = n.get("quiet_from"), n.get("quiet_to")
@@ -74,7 +81,7 @@ def notify_changes(cfg, con):
             d = date.fromisoformat(ds)
         except (ValueError, TypeError):
             continue
-        notify.send(cfg, f"Production entered {d:%d-%b}", _production_line(con, d), tags="bar_chart")
+        notify.send(cfg, f"Production entered {d:%d-%b}", _production_line(con, d, cfg), tags="bar_chart")
         prod_done.add(ds); sent += 1
     store.set_state(con, "ogp_pushed", sorted(ogp_done)[-5000:])
     store.set_state(con, "prod_pushed", sorted(prod_done)[-400:])
@@ -82,15 +89,19 @@ def notify_changes(cfg, con):
     return sent
 
 
-def _production_line(con, d):
-    """'ERP production <date>: <m> m, eff X% | scoreboard eff Y% · <m> m · RPM Z' for one date."""
+def _production_line(con, d, cfg=None):
+    """'ERP production <date>: <m> m, eff X% | scoreboard eff Y% · <m> m · RPM Z' for one date. The shed scoreboard
+    efficiency leaves out [monitor] exclude_looms, matching the Overview tile and the Weaving tab."""
     ds = d.isoformat()
     em, = con.execute("SELECT SUM(meters) FROM loom_production WHERE prod_date = ?", (ds,)).fetchone()
     from .reports.production import EFF_AGG
     eeff = con.execute(f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date = ?", (ds,)).fetchone()[0]
+    excl = {_lnum(x) for x in (cfg["monitor"].get("exclude_looms") or [])} if cfg else set()
+    excl_codes = [c for (c,) in con.execute("SELECT DISTINCT loom_code FROM loom_monitor") if _lnum(c) in excl] if excl else []
+    ex = (" AND loom_code NOT IN (%s)" % ",".join("?" * len(excl_codes))) if excl_codes else ""
     sm, seff, srpm = con.execute(
-        """SELECT SUM(meters), SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0), AVG(rpm)
-           FROM loom_monitor WHERE read_date = ?""", (ds,)).fetchone()
+        f"""SELECT SUM(meters), SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0), AVG(rpm)
+           FROM loom_monitor WHERE read_date = ?{ex}""", [ds, *excl_codes]).fetchone()
     erp = f"ERP {em:,.0f} m" + (f", eff {eeff:.0f}%" if eeff is not None else "") if em else "ERP: not keyed yet"
     scb = (f"scoreboard eff {seff:.0f}% · {sm:,.0f} m" + (f" · {srpm:.0f} rpm" if srpm else "")) if sm else "no scoreboard data"
     return f"{d:%d-%b}: {erp} | {scb}"
@@ -100,7 +111,7 @@ def morning_summary(cfg, con, d=None):
     """Push the morning line for date d (default yesterday): scoreboard vs ERP production, fabric out, fabric stock.
     If the ERP day is not keyed, say so and show the last keyed day."""
     d = d or (date.today() - timedelta(days=1))
-    line = _production_line(con, d)
+    line = _production_line(con, d, cfg)
     keyed = con.execute("SELECT MAX(prod_date) FROM loom_production").fetchone()[0]
     if not con.execute("SELECT 1 FROM loom_production WHERE prod_date = ? LIMIT 1", (d.isoformat(),)).fetchone():
         line += f"\n(ERP not keyed for {d:%d-%b}; last keyed day {keyed})"

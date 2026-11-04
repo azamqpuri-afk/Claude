@@ -357,6 +357,22 @@ SELECT PDATE AS read_date, PMACH AS loom_code,
 FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
 """
 
+# The CURRENT (running) shift, one row per loom, from the OLMS SCREEN table - a live snapshot (no date window),
+# replaced wholesale each sync. The Overview scoreboard-efficiency tile reads this for the RUNNING shift (eff =
+# sum(USHFTDUR - UTSTPDUR) / sum(USHFTDUR)); loom_monitor (RTLSUM) is only written at shift END, so at mid-shift it
+# would show the previous, finished shift. NOT YET RUN against the live scoreboard: DBSERVER to confirm the SCREEN
+# column names (UMACH / USHIFT / UDATE / USHFTDUR / UTSTPDUR / UTSTOP / UPROD / URPM / UPINCH / USTDESC /
+# ULASTEUPDATED) and run `python -m smart_layer check`. Same [sources.scoreboard] MS Access DB; Jet SQL rejects
+# -- comments, so keep none in the query.
+[entities.loom_monitor_live]
+source = "scoreboard"
+sql = """
+SELECT UMACH AS loom_code, USHIFT AS shift, UDATE AS shift_start,
+       USHFTDUR AS elapsed_sec, UTSTPDUR AS stopped_sec, UTSTOP AS stops,
+       UPROD AS picks, URPM AS rpm, UPINCH AS picks_per_inch, USTDESC AS quality, ULASTEUPDATED AS updated_at
+FROM SCREEN
+"""
+
 # Raw per-stop log (OLMS LOOMSTAT) as a second source, for the sensor duplicate-timings / sensor-swap check.
 # One row per loom stop: RMACH_NO = loom number, RSTOP_TIME = the second it stopped, RCUR_TIME = the second it
 # restarted. RDATE is the shift date (the sync window filter). The twin check pairs looms that stop AND restart

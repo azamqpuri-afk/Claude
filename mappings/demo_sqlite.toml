@@ -217,6 +217,16 @@ SELECT dt AS read_date, 'L' || printf('%02d', loom_no) AS loom_code, mtrs AS met
 FROM olms_day WHERE dt >= :since
 """
 
+# The current running shift, one row per loom (the scoreboard screen as it is now). A live snapshot.
+[entities.loom_monitor_live]
+source = "scoreboard"
+sql = """
+SELECT 'L' || printf('%02d', loom_no) AS loom_code, shift AS shift, shift_start AS shift_start,
+       elapsed_sec AS elapsed_sec, stopped_sec AS stopped_sec, stops AS stops, picks AS picks, rpm AS rpm,
+       ppi AS picks_per_inch, quality AS quality, updated_at AS updated_at
+FROM olms_live
+"""
+
 # Payroll and the gate register (demo HR tables), so the Payroll and Gate Passes tabs have data.
 [entities.employees]
 sql = """

@@ -1458,6 +1458,25 @@ def test_v015_cost_per_metre_and_yarn_shortage(env):
     assert ys.columns[0] == "Count"
 
 
+def test_v015_scoreboard_live_shift_excludes_idle(env):
+    cfg, con = env
+    from smart_layer.web import data as _wd
+    assert con.execute("SELECT COUNT(*) FROM loom_monitor_live").fetchone()[0] > 0   # live shift synced
+    s = _wd._scb_today(con, cfg)
+    assert s.get("scb_live") is True and s.get("scb_shift")                           # the CURRENT running shift
+    assert s.get("scb_idle_excluded", 0) >= 2                                         # looms 10 & 12 are idle
+    assert 50 <= s["scb_eff_today"] <= 100                                            # a sane shed efficiency
+    # excluding the idle looms raises the shed efficiency vs including them
+    incl = con.execute("""SELECT 100.0*SUM(elapsed_sec-stopped_sec)/NULLIF(SUM(elapsed_sec),0) FROM loom_monitor_live""").fetchone()[0]
+    assert s["scb_eff_today"] >= round(incl, 1)
+    # a configured exclude_looms also works and never raises
+    cfg.data.setdefault("monitor", {})["exclude_looms"] = [10, 12]
+    try:
+        assert _wd._scb_today(con, cfg)["scb_eff_today"] is not None
+    finally:
+        cfg.data["monitor"]["exclude_looms"] = []
+
+
 def test_v015_cost_headline_closed_months(env):
     cfg, con = env
     h = _repfin.cost_headline(con, cfg, END)                    # END = 2026-10-02, so Oct is the running month

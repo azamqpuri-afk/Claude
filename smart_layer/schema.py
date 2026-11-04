@@ -305,6 +305,26 @@ ENTITIES += (
         date_column="read_date",
     ),
     Entity(
+        "loom_monitor_live",
+        "The loom monitor's CURRENT (running) shift, one row per loom, as the scoreboard screen shows it right now "
+        "- a live snapshot replaced every sync (unlike loom_monitor, which a monitor writes only at shift end). "
+        "Optional: mills whose monitor exposes a live per-shift table map it; the Overview scoreboard-efficiency "
+        "tile reads it for the running shift and falls back to loom_monitor's last day when it is absent. "
+        "Current-shift efficiency = sum(elapsed - stopped) / sum(elapsed) across the running looms.",
+        (C("loom_code", "TEXT", "Loom (looms.loom_code)", True),
+         C("shift", "TEXT", "Shift number / name of the running shift"),
+         C("shift_start", "DATETIME", "When the running shift started"),
+         C("elapsed_sec", "REAL", "Seconds elapsed in the shift so far"),
+         C("stopped_sec", "REAL", "Seconds the loom was stopped so far this shift"),
+         C("stops", "REAL", "Number of stops this shift"),
+         C("picks", "REAL", "Picks inserted this shift (production; 0 = idle)"),
+         C("rpm", "REAL", "Current speed"),
+         C("picks_per_inch", "REAL", "Picks per inch being woven"),
+         C("quality", "TEXT", "Quality / article on the loom"),
+         C("updated_at", "DATETIME", "When the monitor last updated this row")),
+        key=("loom_code",),
+    ),
+    Entity(
         "loom_stops",
         "Raw per-stop log from a loom monitoring system (scoreboard / sensors): one row per loom stop, with the "
         "second it stopped and the second it restarted. Optional - only mills whose monitor exports stop timings "

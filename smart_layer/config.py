@@ -29,6 +29,9 @@ DEFAULTS = {
                "shrink_pct": 7},                  # default warp->fabric shrinkage for the sized-yarn closing count
     "cost": {"heads": {},                         # map a ledger account_group/head -> a cost bucket (store/payroll/power/sizing/other)
              "closed_requires": ["store", "payroll"]},   # a month is "closed" (month-end entries posted) when these buckets are all > 0
+    "monitor": {                                  # loom-monitor (scoreboard) efficiency
+        "exclude_looms": [],                      # loom numbers to leave out of shed/mill scoreboard eff (idle/retired looms)
+        "auto_exclude_idle": True},               # also drop looms with 0 production AND stopped the whole shift from the LIVE tile
     "sensor": {                                   # loom sensor duplicate-timings (sensor-swap) check - needs loom_stops
         "tol_seconds": 2,                         # two looms "twin" if they stop AND restart within this many seconds
         "gap_minutes": 20,                        # twin stops of one pair no more than this apart are one episode

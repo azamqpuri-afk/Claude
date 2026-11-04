@@ -100,6 +100,13 @@ heads = {}
 # headline and averages use only closed months, so a part-posted current month never misleads. Default: store + payroll.
 # closed_requires = ["store", "payroll"]
 
+[monitor]
+# Loom-monitor (scoreboard) efficiency. Looms listed here are left OUT of the shed / mill scoreboard average
+# everywhere it is shown (the Overview tile, the Weaving tab, the morning summary) - use it for retired or
+# permanently-idle looms whose 0% would drag the shed figure down the way the physical scoreboard does not.
+# exclude_looms = [10, 12]
+auto_exclude_idle = true   # also drop looms with no production AND stopped the whole shift from the LIVE tile
+
 [pilferage]
 lookback_days = 90
 excess_kg = 400
