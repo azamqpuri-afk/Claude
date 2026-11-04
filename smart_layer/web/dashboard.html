@@ -172,6 +172,14 @@
   /* ---- "what changed" chips + animations (CSS/SVG only) ---- */
   .since{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:2px 2px 16px}
   .since .lead{font-size:12px;color:var(--muted);font-weight:600;margin-right:2px}
+  /* live feed */
+  .feed{display:flex;flex-direction:column;max-height:300px;overflow:auto}
+  .feed .row{display:flex;gap:12px;align-items:baseline;padding:7px 2px;border-top:1px solid var(--line);font-size:13.5px}
+  .feed .row:first-child{border-top:0}
+  .feed .tm{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;flex:0 0 auto;width:42px}
+  .feed .ic{flex:0 0 auto}
+  .feed .tx{flex:1 1 auto;min-width:0}
+  .feed .row.new{animation:chipin .4s ease both}
   .chip{display:inline-flex;align-items:center;gap:5px;font-size:12.5px;font-weight:600;padding:3px 10px;border-radius:999px;
         border:1px solid var(--line);background:var(--panel);animation:chipin .35s ease both}
   .chip.in{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,var(--line))}
@@ -267,6 +275,8 @@
     <div class="grid g5" id="ov-money" style="margin-bottom:22px"></div>
     <div class="sec">The mill today</div>
     <div class="grid g5" id="ov-mill" style="margin-bottom:22px"></div>
+    <div class="sec">Live feed · today</div>
+    <div class="card" id="ov-feed-card" style="margin-bottom:22px"><div class="pad" id="ov-feed"><p class="muted" style="margin:4px 2px">Loading…</p></div></div>
     <div class="sec">Trends</div>
     <div class="card" style="margin-bottom:14px"><div class="hd"><h3>Sales — dispatched &amp; billed</h3><span class="count">last 12 months · meters + Rs lac</span></div><div class="cwrap"><canvas id="ovSales"></canvas></div></div>
     <div class="cols">
@@ -575,20 +585,27 @@ function render(){
   var M = (s)=> SHOW_AMOUNTS ? s : "•••";              // hide money amounts on a shared office screen ([dashboard] show_amounts)
   $("#ov-money").innerHTML =
     tile("💵 Cash in hand", M("Rs "+num(k.cash)), "tap for transactions", "", "live", "cash") +
-    tile("🏦 Bank", M("Rs "+num(k.bank)), "", "", "live") +
+    tile("🏦 Bank", M("Rs "+num(k.bank)), "tap for each bank", "", "live", "banks") +
+    tile("🧾 Sales this month", M("Rs "+rs(k.sales_month)), "tap for invoices", "", "", "sales") +
     tile("📥 Receivable", M("Rs "+rs(fk.receivable_gross!=null?fk.receivable_gross:k.receivable)), recMeta, "", "", "receivable") +
     tile("📤 Payable", M("Rs "+rs(fk.owe_store_suppliers!=null?fk.owe_store_suppliers:k.payable)), payMeta, "", "", "payable") +
     tile("📈 Avg sales / month", M("Rs "+rs(k.sales_avg_12m)), avgMeta, "accent");
   // mill (fabric & yarn tiles drill into detail)
   var yf=D.yarn_fabric||{};
+  // live scoreboard efficiency tile (#8): shown only when the scoreboard is connected (kpis carry scb_*_today)
+  var scbTile = (k.scb_eff_today!=null)
+    ? tile("📟 Scoreboard eff", k.scb_eff_today+'%', "live · "+num(k.scb_meters_today)+" m"+(k.scb_rpm_today?" · "+num(k.scb_rpm_today)+" rpm":""), "accent")
+    : "";
   $("#ov-mill").innerHTML =
     tile("🧵 Meters woven", num(k.meters)+' <span class="cur">m</span>', "today · <b>"+num(k.woven_month)+" m</b> this month","accent") +
+    scbTile +
     tile("⚙️ Efficiency", (k.eff!=null?k.eff+"%":"–"), "today") +
     tile("📦 Fabric in stock", num(yf.fabric_m)+' <span class="cur">m</span>', "<b>"+num(yf.fabric_lots)+"</b> lots · tap for qualities", "", "", "fabric") +
     tile("🧶 Yarn in godown", num(yf.yarn_hand_bags)+' <span class="cur">bags</span>', "<b>"+num(yf.yarn_hand_cones)+" cones</b> loose · "+num(yf.yarn_counts)+" counts", "", "", "yarn") +
-    tile("🚚 Dispatched", num(k.dispatched_month)+' <span class="cur">m</span>', "this month");
+    tile("🚚 Dispatched", num(k.dispatched_month)+' <span class="cur">m</span>', "this month · tap for history", "", "", "dispatched");
   wireDrills();
   renderWeaving(); renderFinanceTiles(); renderYFTiles();
+  renderFeed();
   buildCharts(curTab);
   // remember this snapshot so the next auto-refresh can diff it (the change_log cursor, kpis, finding ids)
   if(!STATIC_DATA){ lastCursor = (D.change_cursor!=null? D.change_cursor : lastCursor); prevKpis = D.kpis || null; prevFindingIds = new Set((D.findings||[]).map(f=>f.id)); }
@@ -599,6 +616,19 @@ async function markRead(id, title, undo){
   try{ await fetch("api/ack",{method:"POST",headers:{"Content-Type":"application/json"},
        body:JSON.stringify({id:id, title:title||"", undo:!!undo})}); load(); }   // reload so counts + strip update
   catch(e){}
+}
+
+/* ---------- live feed panel (today's change_log) ---------- */
+var FEED_ICON={store:"📦",cash:"💵",woven:"🧵",out:"🚚",in:"↙",alert:"⚠️"};
+async function renderFeed(){
+  var el=$("#ov-feed"); if(!el) return;
+  if(STATIC_DATA){ el.innerHTML='<p class="muted" style="margin:4px 2px">Open the dashboard from the mill server to see the live feed.</p>'; return; }
+  try{
+    var j=await (await fetch("api/feed"+(($("#day")&&$("#day").value)?("?date="+$("#day").value):""))).json();
+    var rows=j.rows||[];
+    if(!rows.length){ el.innerHTML='<p class="muted" style="margin:4px 2px">Nothing yet today. New production, dispatches, store issues and cash show here as each sync brings them in.</p>'; return; }
+    el.innerHTML='<div class="feed">'+rows.map(r=>`<div class="row"><span class="tm">${esc(r.time||"")}</span><span class="ic">${FEED_ICON[r.kind]||"•"}</span><span class="tx">${esc(r.line||"")}</span></div>`).join("")+'</div>';
+  }catch(e){ el.innerHTML='<p class="muted" style="margin:4px 2px">Could not load the live feed.</p>'; }
 }
 
 /* ---------- sync freshness + Sync now ---------- */
@@ -677,10 +707,45 @@ function wireDrills(){
 }
 function drill(which){
   if(which==='cash') return drawCash();
+  if(which==='banks') return drawBanks();
+  if(which==='sales') return drawSales();
   if(which==='receivable') return drawParties('customer','📥 Receivable — who owes us');
   if(which==='payable') return drawParties('supplier','📤 Payable — whom we owe');
   if(which==='fabric') return drawFabric();
+  if(which==='dispatched') return drawFabricHistory();
   if(which==='yarn') return drawYarn();
+}
+async function drawBanks(){
+  openDrawer("🏦 Bank — balance by account",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see bank balances.</p>'; return; }
+  try{
+    var j=await (await fetch("api/finance/banks")).json();
+    var rows=(j.accounts||[]).map(a=>[esc(a.name||a.code), esc(a.side||""), rs(a.balance)]);
+    var head=`<div class="lkpi" style="grid-template-columns:repeat(2,1fr);margin-bottom:10px"><div><div class="t">All banks</div><div class="v">Rs ${num(j.total)}</div></div><div><div class="t">Accounts</div><div class="v">${num(j.count)}</div></div></div>`;
+    $("#drawer-body").innerHTML=head+(rows.length?table(["Bank account","","Rs"],rows,[2]):'<p class="muted">No bank accounts.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load bank balances.</p>'; }
+}
+async function drawSales(){
+  openDrawer("🧾 Sales this month",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see sales invoices.</p>'; return; }
+  try{
+    var j=await (await fetch("api/finance/sales")).json();
+    var rows=(j.rows||[]).map(r=>[dshort(r.date), esc(r.voucher_no||""), esc(r.party||""), num(r.amount)]);
+    var head=`<div class="lkpi" style="grid-template-columns:repeat(2,1fr);margin-bottom:10px"><div><div class="t">Sales — ${esc(j.label||"this month")}</div><div class="v">Rs ${num(j.total)}</div></div><div><div class="t">Invoices</div><div class="v">${num(j.count)}</div></div></div>`;
+    $("#drawer-body").innerHTML=head+(rows.length?table(["Date","Invoice","Party","Rs"],rows,[3]):'<p class="muted">No sales invoices this month.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load sales invoices.</p>'; }
+}
+async function drawFabricHistory(){
+  openDrawer("🚚 Fabric — produced, dispatched &amp; in stock",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see fabric history.</p>'; return; }
+  try{
+    var j=await (await fetch("api/fabric/history")).json(), t=j.totals||{};
+    var head=`<div class="lkpi" style="margin-bottom:10px"><div><div class="t">Produced</div><div class="v">${num(t.produced)}</div></div><div><div class="t">Dispatched</div><div class="v">${num(t.dispatched)}</div></div><div><div class="t">Returned</div><div class="v">${num(t.returned)}</div></div><div><div class="t">In stock</div><div class="v">${num(t.stock)}</div></div></div>`;
+    var rows=(j.rows||[]).map(r=>[esc(r.party||r.contract||""), esc(r.quality||""), num(r.produced), num(r.dispatched), num(r.returned), num(r.rejection), num(r.stock)]);
+    $("#drawer-body").innerHTML=head
+      +`<p class="muted" style="margin:0 0 6px;font-size:12px">Last 12 months · metres. “In stock” is the live fabric-stock balance.</p>`
+      +(rows.length?table(["Party / contract","Quality","Produced","Dispatched","Returned","Rejection","In stock"],rows,[2,3,4,5,6]):'<p class="muted">No fabric movement.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load fabric history.</p>'; }
 }
 async function drawCash(){
   openDrawer("💵 Cash in hand",'<p class="muted">Loading…</p>');
@@ -1334,6 +1399,7 @@ function NOTE_SVG(front){ return front
     + `<text x="60" y="25" font-size="4.6" font-weight="700" text-anchor="end" fill="#b05c48">FIVE THOUSAND</text></svg>`; }
 function MILL_TILE(which){  // the specific Overview tile for an animation
   if(which==="woven") return document.querySelector('#ov-mill .tile');           // 🧵 Meters woven (first mill tile)
+  if(which==="dispatch") return tileEl("dispatched") || document.querySelector('#ov-mill .tile');
   return tileEl(which) || document.querySelector('#ov-mill .tile');
 }
 function animate(e, pk, nk, done){
@@ -1348,8 +1414,10 @@ function animate(e, pk, nk, done){
     })(i); }
     setTimeout(done, 700);
   } else if(e.kind==="out" || e.kind==="in"){
-    // a truck (carrying fabric rolls) drives out of / into a GATE along a road line
-    var inb=(e.kind==="in"), tl2=MILL_TILE(e.what==="fabric"||!inb?"fabric":"yarn"), p2=layerPos(tl2); flash(tl2,false);
+    // a truck (carrying fabric rolls) drives out of / into a GATE along a road line.
+    // Fabric going OUT (a dispatch) drives from the Dispatched tile (#3); yarn/fabric coming IN from the stock tile.
+    var inb=(e.kind==="in");
+    var tl2=MILL_TILE(e.what==="fabric" ? (inb?"fabric":"dispatch") : (inb?"yarn":"fabric")), p2=layerPos(tl2); flash(tl2,false);
     var t=document.createElement("div"); t.className="fx truck"+(inb?" inb":"");
     t.style.left=(p2.x-30)+"px"; t.style.top=p2.y+"px";
     var qty = e.meters!=null? (num(e.meters)+" m") : (e.thaan!=null? (num(e.thaan)+" thaan") : (e.qty!=null? num(e.qty): (e.bags!=null? num(e.bags)+" bags":"")));
