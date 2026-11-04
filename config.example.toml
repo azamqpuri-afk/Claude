@@ -51,6 +51,9 @@ colour_scheme = "teal"  # default palette: teal | indigo | copper | madder | oli
 tracked_issue_days = 60
 reorder_cover_months = 2
 unused_stock_months = 6            # the Unused-stock tab flags items in stock but not issued for this many months
+# combine_counts: nominal yarn counts that are really the same yarn, grouped so the yarn-shortage report does not
+# treat them as separate (e.g. 52/1 and 54/1). The smallest count names the group.
+# combine_counts = [[52, 54]]
 # Where saved reports (PDF/CSV) are written. Leave blank for the per-machine default
 # (Windows: C:\ProgramData\Smart Layer\output - Program Files is read-only). Point it at a synced
 # OneDrive / Google-Drive-for-desktop folder to get the files in the cloud; Smart Layer uses no cloud API.
