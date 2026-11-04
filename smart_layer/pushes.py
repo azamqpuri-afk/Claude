@@ -27,37 +27,55 @@ def _quiet(cfg, now=None):
 
 
 def notify_changes(cfg, con):
-    """Push new production (once/day) and each new OGP fabric gate pass, from the change_log. Quiet-hours aware."""
+    """Push new production (each production DATE, once, with that date's own scoreboard figures) and each new OGP
+    fabric gate pass, from the change_log. Quiet-hours aware.
+
+    On the FIRST run after an upgrade (no push_cursor yet) the cursor is seeded to the current MAX(id) and nothing
+    is pushed, so the backlog of change_log rows that already existed is not sent in one burst."""
     if _quiet(cfg):
         return 0
+    first_run = store.get_state(con, "push_cursor", None) is None
     cursor = store.get_state(con, "push_cursor", 0) or 0
     rows = con.execute("SELECT id, kind, payload FROM change_log WHERE id > ? ORDER BY id", (cursor,)).fetchall()
     if not rows:
+        if first_run:                                     # nothing yet, but record that we've started
+            store.set_state(con, "push_cursor", 0)
         return 0
     maxid = rows[-1][0]
+    if first_run:                                         # seed the cursor past the pre-upgrade backlog, push nothing
+        store.set_state(con, "push_cursor", maxid)
+        return 0
     ogp_done = set(store.get_state(con, "ogp_pushed", []) or [])
     prod_done = set(store.get_state(con, "prod_pushed", []) or [])
     sent = 0
-    saw_woven = False
+    prod_dates = set()                                    # production DATEs that gained meters this batch
     for _id, kind, payload in rows:
         try:
             e = json.loads(payload)
         except (ValueError, TypeError):
             continue
         if kind == "woven":
-            saw_woven = True
+            # a woven event carries the dates that gained meters (0.15.1); fall back to today for old rows.
+            prod_dates.update((e.get("dates") or {}).keys() or {date.today().isoformat()})
         elif kind == "out" and e.get("what") == "fabric":
-            doc = str(e.get("doc_no") or "")
-            if doc and doc not in ogp_done:
+            key = str(e.get("gatepass_id") or e.get("doc_no") or "")   # dedupe on the unique gatepass_id
+            doc = str(e.get("doc_no") or e.get("gatepass_id") or "?")
+            if key and key not in ogp_done:
                 m = e.get("meters")
                 notify.send(cfg, f"Fabric out · OGP {doc}",
                             f"OGP {doc}: {m:,} m → {e.get('party') or '?'}" if m else f"OGP {doc} → {e.get('party') or '?'}",
                             tags="truck")
-                ogp_done.add(doc); sent += 1
-    today = date.today().isoformat()
-    if saw_woven and today not in prod_done:
-        notify.send(cfg, f"Production entered {date.today():%d-%b}", _production_line(con, date.today()), tags="bar_chart")
-        prod_done.add(today); sent += 1
+                ogp_done.add(key); sent += 1
+    # one production push per NEW production date, with that date's own ERP vs scoreboard figures
+    for ds in sorted(prod_dates):
+        if ds in prod_done:
+            continue
+        try:
+            d = date.fromisoformat(ds)
+        except (ValueError, TypeError):
+            continue
+        notify.send(cfg, f"Production entered {d:%d-%b}", _production_line(con, d), tags="bar_chart")
+        prod_done.add(ds); sent += 1
     store.set_state(con, "ogp_pushed", sorted(ogp_done)[-5000:])
     store.set_state(con, "prod_pushed", sorted(prod_done)[-400:])
     store.set_state(con, "push_cursor", maxid)

@@ -1396,6 +1396,36 @@ def test_v015_sized_closing_reads_erp_and_unit_is_lb(env):
     assert lbm and all(r[12] > r[11] for r in lbm)
 
 
+def test_v015_notify_changes_per_date_and_dedupe(env, tmp_path, monkeypatch):
+    cfg, _ = env
+    con = store.open_store(tmp_path / "pushstore.db")
+    sent = []
+    monkeypatch.setattr(_pushes.notify, "send", lambda cfg, title, body, **k: sent.append((title, body)))
+
+    def add(kind, payload):
+        con.execute("INSERT INTO change_log (synced_at, entity, kind, payload) VALUES (datetime('now'), ?, ?, ?)",
+                    (kind, kind, json.dumps(payload)))
+        con.commit()
+
+    add("woven", {"meters": 500, "dates": {"2026-10-01": 500}})
+    add("out", {"what": "fabric", "doc_no": "18", "gatepass_id": "G-1001", "meters": 1200, "party": "ACME"})
+    # first run after upgrade: seed the cursor past the backlog, push NOTHING
+    assert _pushes.notify_changes(cfg, con) == 0 and not sent
+    # now new rows arrive: a new production date, a new OGP, and a DUPLICATE gatepass_id in the SAME batch
+    # (same unique id, different doc_no) which must dedupe to one push.
+    add("woven", {"meters": 300, "dates": {"2026-10-02": 300}})
+    add("out", {"what": "fabric", "doc_no": "GPOUT-7", "gatepass_id": "G-1002", "meters": 800, "party": "BETA"})
+    add("out", {"what": "fabric", "doc_no": "7B", "gatepass_id": "G-1002", "meters": 800, "party": "BETA"})
+    n = _pushes.notify_changes(cfg, con)
+    titles = " | ".join(t for t, _ in sent)
+    assert "Production entered 02-Oct" in titles                     # pushed by production DATE, not calendar day
+    assert titles.count("Fabric out") == 1                           # G-1002 deduped on gatepass_id
+    assert n == 2
+    # a repeat run pushes nothing new
+    assert _pushes.notify_changes(cfg, con) == 0
+    con.close()
+
+
 def test_v015_cost_per_metre_and_yarn_shortage(env):
     cfg, con = env
     cm = _repfin.cost_per_metre(con, cfg, END)

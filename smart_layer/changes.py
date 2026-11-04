@@ -75,7 +75,10 @@ def record(con, entity, before, now):
             if gid in new:
                 continue
             what = _goods_kind(typ)                       # from the whole type text, not its first word
-            ev = {"kind": "out" if direction == "out" else "in", "what": what, "party": party, "doc_no": gp}
+            # gatepass_id is the ERP's own unique key; gp_no (doc_no) repeats across years/series, so pushes
+            # dedupe on gatepass_id, not doc_no.
+            ev = {"kind": "out" if direction == "out" else "in", "what": what, "party": party, "doc_no": gp,
+                  "gatepass_id": str(gid)}
             if what == "fabric":
                 ev["meters"] = round(qty or 0)
                 if thaan:
@@ -91,9 +94,17 @@ def record(con, entity, before, now):
     elif entity == "loom_production":
         old = before["m"]
         after = dict(con.execute("SELECT loom_code || '|' || prod_date || '|' || COALESCE(shift,''), SUM(meters) FROM loom_production GROUP BY 1"))
-        gained = sum(max(0, (after.get(k, 0) or 0) - (old.get(k, 0) or 0)) for k in after)
-        if round(gained) > 0:
-            events.append({"kind": "woven", "meters": round(gained)})
+        by_date = {}                                      # meters gained PER production date (key = loom|date|shift)
+        for k in after:
+            g = max(0, (after.get(k, 0) or 0) - (old.get(k, 0) or 0))
+            if g > 0:
+                pd = k.split("|")[1]
+                by_date[pd] = by_date.get(pd, 0) + g
+        if by_date:
+            # carry the dates that gained meters so a push can report EACH production date with its own
+            # scoreboard figures (production is keyed for earlier days, not the calendar day of the sync).
+            events.append({"kind": "woven", "meters": round(sum(by_date.values())),
+                           "dates": {d: round(m) for d, m in sorted(by_date.items())}})
     if events:
         con.executemany("INSERT INTO change_log (synced_at, entity, kind, payload) VALUES (?, ?, ?, ?)",
                         [(now, entity, e["kind"], json.dumps(e)) for e in events])
