@@ -222,8 +222,8 @@ FROM olms_day WHERE dt >= :since
 source = "scoreboard"
 sql = """
 SELECT 'L' || printf('%02d', loom_no) AS loom_code, shift AS shift, shift_start AS shift_start,
-       elapsed_sec AS elapsed_sec, stopped_sec AS stopped_sec, stops AS stops, picks AS picks, rpm AS rpm,
-       ppi AS picks_per_inch, quality AS quality, updated_at AS updated_at
+       elapsed_sec AS elapsed_sec, stopped_sec AS stopped_sec, stops AS stops, picks AS picks, deliveries AS deliveries,
+       rpm AS rpm, ppi AS picks_per_inch, quality AS quality, updated_at AS updated_at
 FROM olms_live
 """
 

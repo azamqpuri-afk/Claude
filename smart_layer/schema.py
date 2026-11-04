@@ -318,6 +318,7 @@ ENTITIES += (
          C("stopped_sec", "REAL", "Seconds the loom was stopped so far this shift"),
          C("stops", "REAL", "Number of stops this shift"),
          C("picks", "REAL", "Picks inserted this shift (production; 0 = idle)"),
+         C("deliveries", "REAL", "Fabric widths woven side by side (the delivery factor for metres)"),
          C("rpm", "REAL", "Current speed"),
          C("picks_per_inch", "REAL", "Picks per inch being woven"),
          C("quality", "TEXT", "Quality / article on the loom"),

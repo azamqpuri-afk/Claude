@@ -539,7 +539,7 @@ def build_scoreboard(path, lday, end):
     # (0 picks, stopped the whole shift) and must be excluded from the shed efficiency; one loom runs genuinely slow
     # but is NOT idle and must stay in.
     sb.execute("""CREATE TABLE olms_live (loom_no INTEGER, shift INTEGER, shift_start TEXT, elapsed_sec REAL,
-                  stopped_sec REAL, stops INTEGER, picks REAL, rpm REAL, ppi REAL, quality TEXT, updated_at TEXT)""")
+                  stopped_sec REAL, stops INTEGER, picks REAL, deliveries REAL, rpm REAL, ppi REAL, quality TEXT, updated_at TEXT)""")
     looms = sorted({n for (n, _d) in lday})
     shift_start = datetime.combine(end, dtime(18, 0))
     elapsed = 3.6 * 3600                                  # ~3.6 h into the night shift
@@ -556,9 +556,10 @@ def build_scoreboard(path, lday, end):
             picks = (elapsed - stopped) * rpm / 60
         q = "Q-6060" if n % 3 == 0 else ("Q-4040" if n % 3 == 1 else "Q-2020")
         ppi = {"Q-6060": 88, "Q-4040": 80, "Q-2020": 56}[q]
-        sb.execute("INSERT INTO olms_live VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        deliv = 2 if n % 4 == 0 else 1                    # some looms weave two widths side by side
+        sb.execute("INSERT INTO olms_live VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                    (n, 2, shift_start.isoformat(sep=" "), round(elapsed), round(stopped), rnd.randint(2, 40),
-                    round(picks), rpm, ppi, q, now.isoformat(sep=" ")))
+                    round(picks), deliv, rpm, ppi, q, now.isoformat(sep=" ")))
     sb.commit()
     sb.close()
 

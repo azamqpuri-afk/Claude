@@ -366,10 +366,14 @@ FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
 # -- comments, so keep none in the query.
 [entities.loom_monitor_live]
 source = "scoreboard"
+# VERIFIED on the live scoreboard by DBSERVER (shift 2, 86.5%, matching the scoreboard PC). UMACH / USHIFT come
+# back as FLOAT ('10.0', '2.0') like LOOMSTAT.RMACH_NO, so CInt() makes them whole numbers that match the loom
+# master, [monitor] exclude_looms and the layout. Metres use the same width/delivery factor as loom_monitor
+# (picks x deliveries / (picks_per_inch x 39.37)), so UDELV is pulled too. Jet SQL rejects -- comments.
 sql = """
-SELECT UMACH AS loom_code, USHIFT AS shift, UDATE AS shift_start,
+SELECT CInt(UMACH) AS loom_code, CInt(USHIFT) AS shift, UDATE AS shift_start,
        USHFTDUR AS elapsed_sec, UTSTPDUR AS stopped_sec, UTSTOP AS stops,
-       UPROD AS picks, URPM AS rpm, UPINCH AS picks_per_inch, USTDESC AS quality, ULASTEUPDATED AS updated_at
+       UPROD AS picks, UDELV AS deliveries, URPM AS rpm, UPINCH AS picks_per_inch, USTDESC AS quality, ULASTEUPDATED AS updated_at
 FROM SCREEN
 """
 

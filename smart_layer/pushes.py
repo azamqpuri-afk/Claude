@@ -18,10 +18,14 @@ from . import notify, store
 
 
 def _lnum(code):
-    """The loom number inside a loom code ('L07' -> 7, '12' -> 12). None if none."""
-    import re
-    m = re.findall(r"\d+", str(code or ""))
-    return int(m[-1]) if m else None
+    """The loom number inside a loom code: '10.0' -> 10 (monitor floats), 'L07' -> 7, '12' -> 12. None if none."""
+    s = str(code or "").strip()
+    try:
+        return int(float(s))
+    except ValueError:
+        import re
+        m = re.findall(r"\d+", s)
+        return int(m[-1]) if m else None
 
 
 def _quiet(cfg, now=None):

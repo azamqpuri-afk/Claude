@@ -1469,12 +1469,23 @@ def test_v015_scoreboard_live_shift_excludes_idle(env):
     # excluding the idle looms raises the shed efficiency vs including them
     incl = con.execute("""SELECT 100.0*SUM(elapsed_sec-stopped_sec)/NULLIF(SUM(elapsed_sec),0) FROM loom_monitor_live""").fetchone()[0]
     assert s["scb_eff_today"] >= round(incl, 1)
-    # a configured exclude_looms also works and never raises
-    cfg.data.setdefault("monitor", {})["exclude_looms"] = [10, 12]
+    # loom codes come off the monitor as FLOATs ('10.0', '2.0'); the number is still parsed, and exclude_looms
+    # matches by number even for a float-coded loom
+    assert (_wd._loom_num("10.0"), _wd._loom_num("2.0"), _wd._loom_num("L07"), _wd._loom_num("LOOM-12")) == (10, 2, 7, 12)
+    con.execute("""INSERT INTO loom_monitor_live (loom_code, shift, shift_start, elapsed_sec, stopped_sec, picks,
+                   deliveries, rpm, picks_per_inch, updated_at)
+                   VALUES ('47.0', 2, '2026-10-02 18:00:00', 12960, 200, 9000, 1, 540, 88, '2026-10-02 21:36:00')""")
+    con.commit()
+    base = s["scb_looms"]                                     # running looms before the float-coded one was added
+    assert _wd._scb_today(con, cfg)["scb_looms"] == base + 1  # loom 47 (running) is now counted
+    cfg.data.setdefault("monitor", {})["exclude_looms"] = [47]
     try:
-        assert _wd._scb_today(con, cfg)["scb_eff_today"] is not None
+        after = _wd._scb_today(con, cfg)
+        assert after["scb_looms"] == base and after["scb_eff_today"] is not None   # excluded by number despite '47.0'
     finally:
         cfg.data["monitor"]["exclude_looms"] = []
+        con.execute("DELETE FROM loom_monitor_live WHERE loom_code = '47.0'")
+        con.commit()
 
 
 def test_v015_cost_headline_closed_months(env):

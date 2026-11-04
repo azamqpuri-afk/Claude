@@ -487,10 +487,15 @@ def _cost_head(con, cfg, as_of):
 
 
 def _loom_num(code):
-    """The loom number inside a loom code ('L07' -> 7, '6' -> 6, 'LOOM-12' -> 12). None if none."""
-    import re
-    m = re.findall(r"\d+", str(code or ""))
-    return int(m[-1]) if m else None
+    """The loom number inside a loom code: '10.0' -> 10 (the monitor returns floats), 'L07' -> 7, '6' -> 6,
+    'LOOM-12' -> 12. None if none."""
+    s = str(code or "").strip()
+    try:
+        return int(float(s))                             # '10.0', '10', '6' - a bare number (possibly float)
+    except ValueError:
+        import re
+        m = re.findall(r"\d+", s)                         # 'L07', 'LOOM-12' - a number inside a code
+        return int(m[-1]) if m else None
 
 
 def _excluded_looms(cfg):
@@ -509,12 +514,12 @@ def _scb_today(con, cfg):
     has_live = con.execute("SELECT 1 FROM loom_monitor_live LIMIT 1").fetchone()
     if has_live:
         rows = con.execute("""SELECT loom_code, shift, shift_start, COALESCE(elapsed_sec,0), COALESCE(stopped_sec,0),
-                                     COALESCE(picks,0), rpm, picks_per_inch, updated_at
+                                     COALESCE(picks,0), COALESCE(deliveries,1), rpm, picks_per_inch, updated_at
                               FROM loom_monitor_live""").fetchall()
         run_sec = shift_sec = meters = rpm_sum = rpm_n = 0.0
         idle = kept = 0
         shift = shift_start = updated = None
-        for code, sh, sstart, el, st, picks, rpm, ppi, upd in rows:
+        for code, sh, sstart, el, st, picks, deliv, rpm, ppi, upd in rows:
             shift, shift_start, updated = sh, sstart, (upd or updated)
             n = _loom_num(code)
             is_idle = (picks or 0) <= 0 and (st or 0) >= (el or 0) - 1    # no production and down the whole shift
@@ -526,8 +531,8 @@ def _scb_today(con, cfg):
             kept += 1
             shift_sec += el
             run_sec += max(0.0, el - (st or 0))
-            if ppi and ppi > 0:
-                meters += (picks or 0) / (ppi * 39.37)
+            if ppi and ppi > 0:                           # same width/delivery factor as loom_monitor
+                meters += (picks or 0) * (deliv or 1) / (ppi * 39.37)
             if rpm:
                 rpm_sum += rpm; rpm_n += 1
         if shift_sec > 0:
