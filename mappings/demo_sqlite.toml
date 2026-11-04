@@ -187,6 +187,15 @@ SELECT b.beam_no AS beam_no,
 FROM bm_beam b LEFT JOIN bp_partner p ON p.bp_id = b.sizer_id
 """
 
+[entities.sized_sets]
+sql = """
+SELECT s.set_no AS set_no, s.set_dt AS set_date, p.bp_name AS sizer_name, s.order_ref AS contract_no,
+       s.ends AS ends, s.set_mtr AS set_length_m, s.bags AS bags, s.cone_pbag AS cones_per_bag, s.cones AS loose_cones,
+       s.gullay_kg AS gullay_kg, s.waste_kg AS waste_kg, s.yarn_sent_kg AS yarn_sent_kg, s.sized_kg AS sized_kg
+FROM szn_set s LEFT JOIN bp_partner p ON p.bp_id = s.sizer_id
+WHERE s.set_dt >= :since
+"""
+
 [entities.beam_movements]
 sql = """
 SELECT m.mv_dt AS move_date, m.gp_no AS doc_no, m.beam_no AS beam_no,

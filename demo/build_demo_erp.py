@@ -419,6 +419,7 @@ def build_yarn(db, cprod, cfresh, start, end):
 SHRINK = {"CON-40": 0.07, "CON-41": 0.08, "CON-42": 0.09}
 ENDS = {c[0]: c[3] * c[5] for c in CONTRACTS}                          # ends per inch x width
 SIZER = {c[0]: c[9] for c in CONTRACTS}
+ORDER_COUNT = {c[0]: float(c[6][1:]) for c in CONTRACTS}               # warp yarn count, e.g. Y60 -> 60
 PLANTED += """
   beams    - LOOM-05: beam finishes in ~3 days, no sized beam waiting for its contract
            - LOOM-12: beam finishes in ~4 days, a sized beam is waiting (no alert)
@@ -433,8 +434,22 @@ def build_beams(db, lsegs, lday, end, warn=6):
                               set_mtr REAL, woven_mtr REAL, mount_dt TEXT, recv_dt TEXT);
         CREATE TABLE bm_move (mv_dt TEXT, gp_no TEXT, beam_no TEXT, mv_type TEXT, bp_id TEXT, set_no TEXT, order_ref TEXT,
                               loom_id TEXT, set_mtr REAL, woven_mtr REAL);
+        CREATE TABLE szn_set (set_no TEXT, set_dt TEXT, sizer_id TEXT, order_ref TEXT, ends REAL, set_mtr REAL,
+                              bags REAL, cone_pbag REAL, cones REAL, gullay_kg REAL, waste_kg REAL, yarn_sent_kg REAL, sized_kg REAL);
     """)
     gp = [9000]
+
+    # one sized-set receipt row per set, consistent with its ends/length and the warp count (so the sized-yarn
+    # closing count comes back near the warp count). gullay is small and in kg; sized_kg is gross (net yarn + gullay).
+    def sized_set(set_no, set_dt, order, ends, length):
+        c = ORDER_COUNT.get(order, 30.0)
+        lbm = ends * 1.0936 / (840.0 * c)                  # warp lb per metre (widths = 1)
+        warp_kg = (lbm * length) / 2.2046
+        gullay_kg = 20.0
+        db.execute("INSERT INTO szn_set VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (set_no, set_dt.isoformat(), SIZER[order], order, ends, round(length),
+                    max(1, round(ends / 3500)), 24, round(ends / 100) % 24, gullay_kg, round(warp_kg * 0.01, 1),
+                    round(warp_kg * 1.03, 1), round(warp_kg + gullay_kg, 1)))
 
     def move(d, beam, kind, sizer=None, set_no=None, order=None, loom=None, length=None, woven=None):
         gp[0] += 1
@@ -476,6 +491,7 @@ def build_beams(db, lsegs, lday, end, warn=6):
             db.execute("INSERT INTO bm_beam VALUES (?,?,?,?,?,?,?,?,?,?,?)",
                        (ref, "L", set_no, order, loom, SIZER[order], ENDS[order], round(length), round(meters, 1),
                         first.isoformat(), (first - timedelta(days=3)).isoformat()))
+            sized_set(set_no, first - timedelta(days=3), order, ENDS[order], length)
             needs_backup = n == 12 or (n != 5 and order != "CON-41" and rate and
                                         (length * (1 - s) - meters) / rate <= warn)
             if needs_backup:
@@ -484,6 +500,7 @@ def build_beams(db, lsegs, lday, end, warn=6):
                            (f"BM-W{n:02d}", "W", f"S{set_seq[0]}", order, None, SIZER[order], ENDS[order], round(length), None,
                             None, (end - timedelta(days=2)).isoformat()))
                 move(end - timedelta(days=2), f"BM-W{n:02d}", "SRC", SIZER[order], f"S{set_seq[0]}", order, None, round(length))
+                sized_set(f"S{set_seq[0]}", end - timedelta(days=2), order, ENDS[order], length)
     for b in ("BM-E1", "BM-E2", "BM-E3"):
         db.execute("INSERT INTO bm_beam VALUES (?,?,?,?,?,?,?,?,?,?,?)", (b, "E", None, None, None, None, None, None, None, None, None))
     move(end - timedelta(days=60), "BM-X9", "ESO", "S02")

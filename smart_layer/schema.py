@@ -272,6 +272,27 @@ ENTITIES += (
         date_column="move_date",
     ),
     Entity(
+        "sized_sets",
+        "One row per sized warp set received from a sizer (the sizing IGP), with everything the sized-yarn closing "
+        "count needs: ends, set length, yarn sent, sized weight, gullay (returned baby cones) and waste. Optional - "
+        "mills that record sized-beam receipts in detail map it (e.g. Dost's WYTD sized-beam IGP). Smart Layer "
+        "manual inputs override any field per set when the ERP value is missing or corrected.",
+        (C("set_no", "TEXT", "Sizing set number", True),
+         C("set_date", "DATE", "Date the sized set was received", True),
+         C("sizer_name", "TEXT", "Sizer the set came from"),
+         C("contract_no", "TEXT", "Contract the set is for"),
+         C("ends", "REAL", "Total ends in the set"),
+         C("set_length_m", "REAL", "Set length (metres)"),
+         C("bags", "REAL", "Bags of yarn used for the set"),
+         C("cones_per_bag", "REAL", "Cones per bag"),
+         C("loose_cones", "REAL", "Loose cones (not in a full bag)"),
+         C("gullay_kg", "REAL", "Gullay: weight of yarn left on returned baby cones (kg)"),
+         C("waste_kg", "REAL", "Sizing waste (kg)"),
+         C("yarn_sent_kg", "REAL", "Yarn sent to the sizer for the set (kg)"),
+         C("sized_kg", "REAL", "Sized-beam weight received (kg, including size paste)")),
+        date_column="set_date",
+    ),
+    Entity(
         "loom_monitor",
         "Readings from a loom monitoring system (scoreboard / sensors) per loom per day, independent of the ERP.",
         (C("read_date", "DATE", "Date", True),

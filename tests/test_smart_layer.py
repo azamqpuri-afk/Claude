@@ -1381,6 +1381,21 @@ def test_v015_pushes_run(env):
     assert wc is None or isinstance(wc, str)                 # None only if the ERP day is not keyed
 
 
+def test_v015_sized_closing_reads_erp_and_unit_is_lb(env):
+    cfg, con = env
+    assert con.execute("SELECT COUNT(*) FROM sized_sets").fetchone()[0] > 0   # ERP sized-set receipts synced
+    rep = _sizing.sized_yarn_closing(con, cfg, END)
+    assert rep.rows, "sized-closing has sets"
+    counts = [r[13] for r in rep.rows if r[13]]
+    assert counts, "a closing count was computed from ERP sized-set data (not all zero)"
+    # kg -> lb MULTIPLIES by 2.2046, so the count lands near the warp count (10-80s), never the ~150+ the
+    # divide-bug produced. The demo's CON-40 is 60s warp -> count in the 40s-60s band.
+    assert all(8 <= c <= 90 for c in counts), f"counts out of sane band (unit bug?): {sorted(counts)[:3]}..."
+    # lb/m column (12) must be larger than kg/m column (11) - lb is the bigger unit
+    lbm = [r for r in rep.rows if r[12] and r[11]]
+    assert lbm and all(r[12] > r[11] for r in lbm)
+
+
 def test_v015_cost_per_metre_and_yarn_shortage(env):
     cfg, con = env
     cm = _repfin.cost_per_metre(con, cfg, END)

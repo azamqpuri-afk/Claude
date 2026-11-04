@@ -109,6 +109,7 @@ def create(con):
                  ("loom_production", "loom_code"), ("loom_production", "contract_no"),
                  ("yarn_movements", "contract_no"), ("fabric_dispatches", "contract_no"),
                  ("beam_movements", "beam_no"), ("loom_monitor", "loom_code"),
+                 ("sized_sets", "set_no"), ("sized_sets", "contract_no"),
                  ("loom_stops", "loom_code"), ("loom_stops", "stop_time")):
         con.execute(f"CREATE INDEX IF NOT EXISTS ix_{t}_{c} ON {t} ({c})")
     con.execute("CREATE TABLE IF NOT EXISTS sync_log (entity TEXT, synced_at TEXT, since TEXT, rows INTEGER)")
@@ -137,6 +138,7 @@ FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # c
                 "store_receipts",                                            # the reorder list shows each item's LAST purchase party/rate - slow-moving spares were often last bought > a year ago
                 "store_issues",                                              # the store room's "last issue" + the item issue-history drill-down need each item's whole issue trail, not just the window
                 "store_returns",                                             # store expense is netted over history; returns are few but span the whole period
+                "sized_sets",                                                # the sized-yarn closing count is per set over the contract's life, not a short window
 
                 "ledger_entries",                                            # party ledgers show the opening (old-ERP) balance and full running balance
                 "employee_loans")                                            # a loan given years ago can still be open; its balance = amount - all-time salary deductions

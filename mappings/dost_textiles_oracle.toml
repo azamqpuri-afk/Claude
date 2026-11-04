@@ -46,16 +46,17 @@ FROM dostex.store_issue_v v JOIN dostex.dmn m ON m.trans_no = v.trans_no
 WHERE v.dd >= :since
 """
 
-# Store RETURNS (items given back into the store) - DMN type 'RET' (owner: 23 docs in 400 days). Used to net
-# store expense (issues - returns). NOT YET RUN against the live DB: DBSERVER to confirm the DMN type column
-# (m.dtype) and the DDT amount column (d.amount vs d.total_amt); run `python -m smart_layer check`, which names
-# a failing entity, before trusting it. DDT is the line detail, DMN the document master (as stock_balances uses).
+# Store RETURNS (items given back into the store) - DMN type 'RET'. Used to net store expense (issues - returns).
+# VERIFIED on the live DB by DBSERVER (125 lines since Sep-25; Oct returns Rs 8,475 = ERP). The type column is
+# DT (not DTYPE), the same column STORE_ISSUE_V uses with M.DT='ISS'; DDT has no TOTAL_AMT, so the line value is
+# qty x avg_rate; the party/department is CC.CN joined on DDT.CC (DMN has no CN on returns).
 [entities.store_returns]
 sql = """
 SELECT m.dno AS doc_no, TRUNC(m.dd) AS doc_date, m.feedd AS entered_at, d.ic AS item_code, d.qty AS qty,
-       d.total_amt AS amount, m.cn AS returned_from
+       ROUND(NVL(d.qty, 0) * NVL(d.avg_rate, 0), 2) AS amount, cc.cn AS returned_from
 FROM dostex.dmn m JOIN dostex.ddt d ON d.trans_no = m.trans_no AND d.uc = m.uc
-WHERE m.dtype = 'RET' AND m.dd >= :since
+     LEFT JOIN dostex.cc cc ON cc.cc = d.cc
+WHERE m.dt = 'RET' AND m.dd >= :since
 """
 
 [entities.parties]
@@ -187,6 +188,25 @@ FROM dostex.wytm m JOIN dostex.wytd d ON d.trans_no = m.trans_no
 LEFT JOIN dostex.yarn y ON y.ycode = d.ycode LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id
 LEFT JOIN dostex.ach a ON a.ac = NVL(m.ac1, m.ac2)
 WHERE m.td >= :since
+"""
+
+# Sized warp sets received from sizers (the sizing IGP), for the sized-yarn closing count (#12). Same WYTM/WYTD
+# tables as yarn_movements, filtered to the sized-beam receipt (tt='IGP_SIZED_BEAMS'); the set number comes from
+# WYBEAMS and the sizer from WYTM.AC1 -> ACH.AN. NOT YET RUN against the live DB: DBSERVER to confirm the WYTD
+# column names (GULLY / WASTE / SET_LENGTH / YARN_WT / CONE_PBAG), the WYBEAMS join (REF_SR = WYTD.SR_NO and
+# TRANS_NO), and the date column; see legacy 13_daily_production_email.py SETS_SIZED_DETAIL_SQL. Run
+# `python -m smart_layer check`, which names a failing entity, before trusting it. Smart Layer manual inputs
+# override any field per set.
+[entities.sized_sets]
+sql = """
+SELECT TO_CHAR(wb.setno) AS set_no, TRUNC(m.td) AS set_date, a.an AS sizer_name, TO_CHAR(c.cont_no) AS contract_no,
+       d.ends AS ends, d.set_length AS set_length_m, d.bags AS bags, d.cone_pbag AS cones_per_bag, d.cones AS loose_cones,
+       d.gully AS gullay_kg, d.waste AS waste_kg, d.yarn_wt AS yarn_sent_kg, d.sized_kg AS sized_kg
+FROM dostex.wytm m JOIN dostex.wytd d ON d.trans_no = m.trans_no
+     LEFT JOIN dostex.wybeams wb ON wb.ref_sr = d.sr_no AND wb.trans_no = m.trans_no
+     LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id
+     LEFT JOIN dostex.ach a ON a.ac = m.ac1
+WHERE m.tt = 'IGP_SIZED_BEAMS' AND m.td >= :since
 """
 
 # Fabric gate passes (FAB_GP_V): GPOUT = to the party, GPIN = returned. Fresh = A + A2, rejected = B + C + CP.

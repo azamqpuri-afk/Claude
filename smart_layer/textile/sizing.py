@@ -188,26 +188,54 @@ def weft_consumption(con, cfg, d0=None, d1=None):
 
 # ---- #12 sized-yarn closing count ----------------------------------------------------------------------------
 def _sets(con):
-    """One row per sized set from the beam snapshot: set_no, contract, quality, sizer, total ends, widths,
-    set length (m). Sets with no ends or length are skipped (nothing to compute)."""
+    """One row per sized set, read from the ERP's own sized-set receipts (sized_sets) when mapped, else from the
+    beam snapshot. The ERP carries ends, set length, bags/cones, gullay, waste, yarn sent and sized weight per set;
+    Smart Layer manual inputs override any of them. set_no with no ends or length is skipped (nothing to compute).
+    widths comes from the beam snapshot (a set spread over N beams); default 1."""
     qual = {c: q for c, q in con.execute("SELECT contract_no, quality FROM contracts")}
-    seen, out = set(), []
-    for setno, cno, sizer, ends, length, bwidth in con.execute(
-            """SELECT set_no, contract_no, sizer_name, MAX(ends), MAX(set_length_m), MAX(COALESCE(bwidth,1))
-               FROM beams WHERE set_no IS NOT NULL GROUP BY set_no, contract_no, sizer_name"""):
-        if not setno or setno in seen or not ends or not length:
+    widths = {}
+    for setno, bw in con.execute("""SELECT set_no, MAX(COALESCE(bwidth,1)) FROM beams
+                                    WHERE set_no IS NOT NULL GROUP BY set_no"""):
+        widths[str(setno)] = bw or 1
+    out, seen = [], set()
+    has_sized = con.execute("SELECT 1 FROM sized_sets LIMIT 1").fetchone()
+    if has_sized:
+        for setno, cno, sizer, ends, length, bags, cpb, cones, gkg, waste, ysent, skg in con.execute(
+                """SELECT set_no, MAX(contract_no), MAX(sizer_name), MAX(ends), MAX(set_length_m),
+                          SUM(COALESCE(bags,0)), MAX(COALESCE(cones_per_bag,0)), SUM(COALESCE(loose_cones,0)),
+                          SUM(COALESCE(gullay_kg,0)), SUM(COALESCE(waste_kg,0)), SUM(COALESCE(yarn_sent_kg,0)),
+                          SUM(COALESCE(sized_kg,0))
+                   FROM sized_sets WHERE set_no IS NOT NULL GROUP BY set_no"""):
+            if not setno or str(setno) in seen or not ends or not length:
+                continue
+            seen.add(str(setno))
+            out.append(dict(set_no=setno, contract=cno, quality=qual.get(cno), sizer=sizer, ends=ends,
+                            widths=widths.get(str(setno), 1), length=length,
+                            erp_bags=bags or 0, erp_cone_pbag=cpb or 0, erp_cones=cones or 0, erp_gullay_kg=gkg or 0,
+                            erp_waste_kg=waste or 0, erp_yarn_sent=ysent or 0, erp_sized_kg=skg or 0))
+        return out
+    # fallback: beam snapshot only (no ERP sized-set detail mapped) - inputs come entirely from manual entry
+    for setno, cno, sizer, ends, length in con.execute(
+            """SELECT set_no, MAX(contract_no), MAX(sizer_name), MAX(ends), MAX(set_length_m)
+               FROM beams WHERE set_no IS NOT NULL GROUP BY set_no"""):
+        if not setno or str(setno) in seen or not ends or not length:
             continue
-        seen.add(setno)
-        out.append(dict(set_no=setno, contract=cno, quality=qual.get(cno), sizer=sizer,
-                        ends=ends, widths=(bwidth or 1), length=length))
+        seen.add(str(setno))
+        out.append(dict(set_no=setno, contract=cno, quality=qual.get(cno), sizer=sizer, ends=ends,
+                        widths=widths.get(str(setno), 1), length=length,
+                        erp_bags=0, erp_cone_pbag=0, erp_cones=0, erp_gullay_kg=0, erp_waste_kg=0,
+                        erp_yarn_sent=0, erp_sized_kg=0))
     return out
 
 
 def sized_yarn_closing(con, cfg, as_of=None):
-    """The owner's sized-yarn closing count per set (6 steps), with a live-formula workbook. Manual inputs
-    (sized kg, gullay kg, gullay cones, rewind kg) are shaded; every result is a formula. Constants: the
-    gullay allowance (g/cone), the pick factor (1.0936) and the divisor are from config and inlined into the
-    formulas so the sheet is self-contained."""
+    """The owner's sized-yarn closing count per set, with a live-formula workbook. Inputs (sized kg, gullay kg,
+    gullay cones, rewind kg) are PREFILLED from the ERP's sized-set receipt and are editable (shaded); a Smart
+    Layer manual input overrides the ERP value per set. Gullay cones default to bags x cone/bag + loose cones.
+    Every result is a formula. Constants (gullay allowance g/cone, pick factor, divisor) come from config.
+
+    Closing count = (ends / widths) x pick_factor / divisor / (lb per metre), where lb/m = sized-yarn kg/m x 2.2046
+    (kg -> lb). Net sized = sized kg - net gullay; net gullay = gullay kg - (g x gullay cones / 1000)."""
     as_of = as_of or date.today()
     s = cfg["sizing"]
     g = float(s.get("gullay_g", 55))
@@ -219,15 +247,18 @@ def sized_yarn_closing(con, cfg, as_of=None):
     rows, xrows = [], []
     for st in sets:
         man = mset.get(str(st["set_no"]), {})
-        sized = man.get("sized_kg") or 0
-        gk = man.get("gullay_kg") or 0
-        gc = man.get("gullay_cones") or 0
+        # ERP value is the default; a manual input overrides it. Gullay cones default = bags x cone/bag + loose cones.
+        sized = man.get("sized_kg") if man.get("sized_kg") is not None else st["erp_sized_kg"]
+        gk = man.get("gullay_kg") if man.get("gullay_kg") is not None else st["erp_gullay_kg"]
+        gc = man.get("gullay_cones") if man.get("gullay_cones") is not None \
+            else (st["erp_bags"] * st["erp_cone_pbag"] + st["erp_cones"])
         rw = man.get("rewind_kg") or 0
+        sized, gk, gc = sized or 0, gk or 0, gc or 0
         metres = st["length"] * st["widths"] * (1 - shrink / 100)
         net_gullay = gk - (g * gc / 1000)
         net_sized = sized - net_gullay
         kgm = net_sized / metres if metres else 0
-        lbm = kgm / 2.2046 if kgm else 0
+        lbm = kgm * 2.2046 if kgm else 0                 # kg/m -> lb/m (1 kg = 2.2046 lb)
         cc = (st["ends"] / st["widths"]) * pf / divisor / lbm if lbm else 0
         rows.append([st["set_no"], st["contract"], st["quality"], st["sizer"], round(st["ends"]), st["widths"],
                      round(st["length"]), round(metres), round(sized), round(net_gullay), round(net_sized),
@@ -238,7 +269,7 @@ def sized_yarn_closing(con, cfg, as_of=None):
         xrows.append([st["set_no"], st["contract"], st["quality"], st["sizer"], round(st["ends"]), st["widths"],
                       round(st["length"]), Inp(shrink),
                       Fx("=G{r}*F{r}*(1-H{r}/100)"), Inp(round(sized)), Inp(round(gk)), Inp(round(gc)), Inp(round(rw)),
-                      Fx(f"=K{{r}}-({g}*L{{r}}/1000)"), Fx("=J{r}-N{r}"), Fx("=O{r}/I{r}"), Fx("=P{r}/2.2046"),
+                      Fx(f"=K{{r}}-({g}*L{{r}}/1000)"), Fx("=J{r}-N{r}"), Fx("=O{r}/I{r}"), Fx("=P{r}*2.2046"),
                       Fx(f"=(E{{r}}/F{{r}})*{pf}/{divisor}/Q{{r}}"), Fx("=M{r}-N{r}")])
     headers = ["Set", "Contract", "Quality", "Sizer", "Ends", "Widths", "Set m", "Shrink %", "Metres after shrink",
                "Sized kg", "Gullay kg", "Gullay cones", "Rewind kg", "Net gullay kg", "Net sized kg", "kg/m",
