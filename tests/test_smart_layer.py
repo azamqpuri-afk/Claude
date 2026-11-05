@@ -1480,6 +1480,30 @@ def test_v015_closing_selection_and_quality(env):
         assert len(rep.rows) <= len(full.rows)
         assert _cl.closing_counts(con, cfg, END, party, q)["quality"] == q
 
+    # FIX 1: cross-party deliveries are filtered by the selected quality. Find a party with >=2 qualities, inject a
+    # cross-party dispatch for a contract of one quality, and confirm the OTHER quality excludes it.
+    pq = {}
+    for r in rws:
+        pq.setdefault(r["party"], {}).setdefault(r["quality"], set()).add(str(r["contract"]))
+    cand = next(((p, qs) for p, qs in pq.items() if len([k for k in qs if k]) >= 2), None)
+    if cand:
+        p2, qs = cand
+        quals = [k for k in qs if k]
+        q_a, q_b = quals[0], quals[1]
+        cno = sorted(qs[q_a])[0]
+        other = con.execute("SELECT party_code FROM contracts WHERE party_code IS NOT NULL AND contract_no <> ? LIMIT 1", (cno,)).fetchone()[0]
+        con.execute("""INSERT INTO fabric_dispatches (doc_no, dispatch_date, contract_no, quality, party_code, direction, meters)
+                       VALUES ('TPTEST', ?, ?, ?, ?, 'out', 500)""", (END.isoformat(), cno, q_a, other))
+        con.commit()
+        try:
+            tp_all = {str(e["contract"]) for e in _cl.closing_counts(con, cfg, END, p2)["third_party"]}
+            tp_a = {str(e["contract"]) for e in _cl.closing_counts(con, cfg, END, p2, q_a)["third_party"]}
+            tp_b = {str(e["contract"]) for e in _cl.closing_counts(con, cfg, END, p2, q_b)["third_party"]}
+            assert cno in tp_all and cno in tp_a and cno not in tp_b       # quality filters the cross-party table
+        finally:
+            con.execute("DELETE FROM fabric_dispatches WHERE doc_no = 'TPTEST'")
+            con.commit()
+
 
 def test_v015_cost_per_metre_and_yarn_shortage(env):
     cfg, con = env

@@ -354,9 +354,12 @@ def closing_counts(con, cfg, as_of=None, party=None, quality=None):
                    "warp_default": default.get("warp_closing_count", default.get("closing_count")),
                    "weft_default": default.get("weft_closing_count", default.get("closing_count")),
                    "source": source, "party_override": has_party, "party_clearable": g in saved_party}
-    # fabric of these contracts billed to ANOTHER party (shown as a separate table, not lumped into the balance)
+    # fabric of these contracts billed to ANOTHER party (shown as a separate table, not lumped into the balance).
+    # When a quality is selected, restrict it to that quality's contracts (not every contract of the party).
+    sel_contracts = {str(r["contract"]) for r in rows}
     tp = [e for e in third_party_deliveries(con, method, as_of)
-          if (not party) or party.lower() in str(e.get("own_party") or "").lower()]
+          if ((not party) or party.lower() in str(e.get("own_party") or "").lower())
+          and ((not quality) or str(e["contract"]) in sel_contracts)]
     third_party = [{"contract": e["contract"], "own_party": e["own_party"], "party": e["party"],
                     "deliver_to": e["deliver_to"], "out_m": round(e["out_m"]), "back_m": round(e["back_m"]),
                     "net_m": round(e["net_m"]), "bags": (round(e["bags"], 1) if e["bags"] is not None else None)}
@@ -402,6 +405,9 @@ def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None, qua
     exc = third_party_deliveries(con, method, as_of)
     if party:
         exc = [e for e in exc if party.lower() in (str(e.get("own_party") or "")).lower()]
+    if quality:                                           # only this quality's contracts, matching the filtered rows
+        sel = {str(r["contract"]) for r in rows}
+        exc = [e for e in exc if str(e["contract"]) in sel]
     if exc:
         summary.append("Fabric of a contract delivered/billed to ANOTHER party (not counted above - settle separately):")
         for e in exc:

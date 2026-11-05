@@ -350,7 +350,8 @@ def build(con, cfg, as_of=None):
             "looms": today[4] if today else 0,
             "cash": round(group_balance("cash")), "bank": round(group_balance("bank")),
             "receivable": round(group_balance("customer")), "payable": round(-group_balance("supplier")),
-            "sales_month": finance[-1]["sales"], "expenses_month": finance[-1]["expenses"],
+            "sales_month": fin_mod.month_sales(con, as_of=as_of)["total"],   # invoice value, month-to-date = the sales drill
+            "expenses_month": finance[-1]["expenses"],
             "sales_avg_12m": avg_sales, "dispatched_avg_12m": avg_meters, "sales_avg_months": sales_avg_months,
             "out_of_stock": sum(1 for r in items if r["status"] == "OUT OF STOCK"),
             "low_stock": sum(1 for r in items if r["status"] == "LOW STOCK"),

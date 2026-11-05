@@ -218,21 +218,27 @@ def group_ledger(con, group="cash", limit=300):
 
 
 def _month_bounds(as_of=None, month=None, d0=None, d1=None):
-    """Resolve a sales window to (lo, hi, label). Priority: explicit d0/d1 range; then a 'YYYY-MM' month; then the
-    month of as_of (the Overview date); else the current month."""
+    """Resolve a sales window to (lo, hi, label). Priority:
+      explicit d0/d1 range;
+      a 'YYYY-MM' month  -> the WHOLE month (history click);
+      an as_of date      -> MONTH-TO-DATE, 1st..as_of (so the drill matches the Overview tile, which is also to-date);
+      nothing            -> the current month to today."""
     import calendar as _cal
     if d0 and d1:
         lo = d0.isoformat() if hasattr(d0, "isoformat") else str(d0)
         hi = d1.isoformat() if hasattr(d1, "isoformat") else str(d1)
         return lo, hi, f"{lo} to {hi}"
-    if month:
+    if month:                                             # a whole month (from the history list)
         y, m = int(str(month)[:4]), int(str(month)[5:7])
-    else:
-        as_of = as_of or date.today()
-        y, m = as_of.year, as_of.month
-    lo = date(y, m, 1)
-    hi = date(y, m, _cal.monthrange(y, m)[1])
-    return lo.isoformat(), hi.isoformat(), lo.strftime("%b %Y")
+        lo = date(y, m, 1)
+        hi = date(y, m, _cal.monthrange(y, m)[1])
+        return lo.isoformat(), hi.isoformat(), lo.strftime("%b %Y")
+    # the Overview date (or today): month-to-date, so the total equals the tile's sales-this-month
+    as_of = as_of or date.today()
+    lo = date(as_of.year, as_of.month, 1)
+    label = (f"{as_of.strftime('%b %Y')}" if as_of.day >= _cal.monthrange(as_of.year, as_of.month)[1]
+             else f"1–{as_of.day} {as_of.strftime('%b %Y')}")   # "1-15 Oct 2026"
+    return lo.isoformat(), as_of.isoformat(), label
 
 
 def sales_history(con, months=12, as_of=None):
