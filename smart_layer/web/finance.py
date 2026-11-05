@@ -217,18 +217,46 @@ def group_ledger(con, group="cash", limit=300):
     return {"group": group, "balance": round(total), "count": len(rows), "rows": rows[:int(limit)]}
 
 
-def month_sales(con, as_of=None, d0=None, d1=None):
-    """Sales billed this month (or a date range) for the Overview sales tile drill (#1): one line per sale
-    voucher, its invoice value = the debit posted to the customer/party account. Total + voucher list, newest
-    first. ERP-agnostic: reads voucher_kind='sale' postings to customer-group accounts."""
+def _month_bounds(as_of=None, month=None, d0=None, d1=None):
+    """Resolve a sales window to (lo, hi, label). Priority: explicit d0/d1 range; then a 'YYYY-MM' month; then the
+    month of as_of (the Overview date); else the current month."""
+    import calendar as _cal
     if d0 and d1:
         lo = d0.isoformat() if hasattr(d0, "isoformat") else str(d0)
         hi = d1.isoformat() if hasattr(d1, "isoformat") else str(d1)
-        label = f"{lo} to {hi}"
+        return lo, hi, f"{lo} to {hi}"
+    if month:
+        y, m = int(str(month)[:4]), int(str(month)[5:7])
     else:
         as_of = as_of or date.today()
-        lo, hi = as_of.replace(day=1).isoformat(), as_of.isoformat()
-        label = as_of.strftime("%b %Y")
+        y, m = as_of.year, as_of.month
+    lo = date(y, m, 1)
+    hi = date(y, m, _cal.monthrange(y, m)[1])
+    return lo.isoformat(), hi.isoformat(), lo.strftime("%b %Y")
+
+
+def sales_history(con, months=12, as_of=None):
+    """Billed sales per month (invoice value = the customer-account debit on each sale voucher), newest first,
+    for the sales drill's month list. Bounded to the last `months` months ending at as_of's month."""
+    as_of = as_of or date.today()
+    start = date(as_of.year, as_of.month, 1)
+    for _ in range(months - 1):                           # step back `months-1` whole months
+        start = (start - timedelta(days=1)).replace(day=1)
+    rows = con.execute("""
+        SELECT strftime('%Y-%m', l.voucher_date) AS mo, SUM(v) AS total, COUNT(*) AS n FROM (
+            SELECT l.voucher_date AS voucher_date, SUM(l.amount) AS v
+            FROM ledger_entries l JOIN accounts a USING (account_code)
+            WHERE l.voucher_kind = 'sale' AND a.account_group = 'customer' AND l.voucher_date >= ?
+            GROUP BY l.voucher_id HAVING SUM(l.amount) > 0) l
+        GROUP BY 1 ORDER BY 1 DESC""", (start.isoformat(),)).fetchall()
+    return [{"month": mo, "total": round(t or 0), "count": n} for mo, t, n in rows]
+
+
+def month_sales(con, as_of=None, d0=None, d1=None, month=None, with_history=False):
+    """Sales billed in a month for the Overview sales tile drill (#1/#28): one line per sale voucher, its invoice
+    value = the debit posted to the customer/party account. The month follows the Overview date (as_of) or an
+    explicit `month` (YYYY-MM), so the drill matches the tile. Total + voucher list, newest first. ERP-agnostic."""
+    lo, hi, label = _month_bounds(as_of, month, d0, d1)
     rows = con.execute("""
         SELECT l.voucher_date, l.voucher_no, a.account_name, SUM(l.amount) AS val
         FROM ledger_entries l JOIN accounts a USING (account_code)
@@ -239,8 +267,11 @@ def month_sales(con, as_of=None, d0=None, d1=None):
         ORDER BY l.voucher_date DESC, l.voucher_no DESC
         LIMIT 500""", (lo, hi)).fetchall()
     out = [{"date": vd, "voucher_no": vno, "party": an, "amount": round(val or 0)} for vd, vno, an, val in rows]
-    return {"label": label, "from": lo, "to": hi, "total": round(sum(r["amount"] for r in out)),
-            "count": len(out), "rows": out}
+    res = {"label": label, "month": lo[:7], "from": lo, "to": hi, "total": round(sum(r["amount"] for r in out)),
+           "count": len(out), "rows": out}
+    if with_history:
+        res["history"] = sales_history(con, 12, as_of)
+    return res
 
 
 def bank_accounts(con):

@@ -870,14 +870,27 @@ async function drawCost(){
     $("#drawer-body").innerHTML=head+(rows.length?table(j.columns,rows,nums):'<p class="muted">No cost data.</p>');
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load the cost history.</p>'; }
 }
-async function drawSales(){
-  openDrawer("🧾 Sales this month",'<p class="muted">Loading…</p>');
+async function drawSales(month){
+  openDrawer("🧾 Sales — by month",'<p class="muted">Loading…</p>');
   if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see sales invoices.</p>'; return; }
   try{
-    var j=await (await fetch("api/finance/sales")).json();
+    // month wins; otherwise follow the Overview date so the drill matches the tile (#28). Always fetch the history.
+    var q = month ? ("month="+encodeURIComponent(month)) : (($("#day")&&$("#day").value)?("date="+$("#day").value):"");
+    var j=await (await fetch("api/finance/sales?history=1"+(q?("&"+q):""))).json();
+    var hist=j.history||[];
+    var opts=hist.map(h=>`<option value="${esc(h.month)}" ${h.month===j.month?"selected":""}>${esc(mlabel(h.month))} · Rs ${num(h.total)}</option>`).join("");
+    var sel=`<label class="fld" style="margin-bottom:10px">Month <select id="sales-month">${opts||`<option value="${esc(j.month)}">${esc(j.label)}</option>`}</select></label>`;
+    var head=`<div class="lkpi" style="grid-template-columns:repeat(2,1fr);margin:0 0 10px"><div><div class="t">Sales — ${esc(j.label||"")}</div><div class="v">Rs ${num(j.total)}</div></div><div><div class="t">Invoices</div><div class="v">${num(j.count)}</div></div></div>`;
     var rows=(j.rows||[]).map(r=>[dshort(r.date), esc(r.voucher_no||""), esc(r.party||""), num(r.amount)]);
-    var head=`<div class="lkpi" style="grid-template-columns:repeat(2,1fr);margin-bottom:10px"><div><div class="t">Sales — ${esc(j.label||"this month")}</div><div class="v">Rs ${num(j.total)}</div></div><div><div class="t">Invoices</div><div class="v">${num(j.count)}</div></div></div>`;
-    $("#drawer-body").innerHTML=head+(rows.length?table(["Date","Invoice","Party","Rs"],rows,[3]):'<p class="muted">No sales invoices this month.</p>');
+    var invTbl=rows.length?table(["Date","Invoice","Party","Rs"],rows,[3]):'<p class="muted">No sales invoices in this month.</p>';
+    // a month-by-month history list below (click a month to open it), like the cash ledger
+    var histTbl = hist.length? `<div class="sec" style="margin:14px 0 6px">Month by month</div>`+
+      `<div class="tscroll"><table><thead><tr><th>Month</th><th class="num">Invoices</th><th class="num">Sales Rs</th></tr></thead><tbody>`+
+      hist.map(h=>`<tr class="clickrow" data-month="${esc(h.month)}" style="cursor:pointer"><td><b>${esc(mlabel(h.month))}</b></td><td class="num">${num(h.count)}</td><td class="num">${num(h.total)}</td></tr>`).join("")+
+      `</tbody></table></div>` : "";
+    $("#drawer-body").innerHTML=sel+head+invTbl+histTbl;
+    var ms=$("#sales-month"); if(ms) ms.onchange=()=>drawSales(ms.value);
+    $("#drawer-body").querySelectorAll(".clickrow").forEach(tr=>tr.onclick=()=>drawSales(tr.dataset.month));
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load sales invoices.</p>'; }
 }
 async function drawFabricHistory(){
@@ -1408,10 +1421,10 @@ async function browseInto(entity, q, outSel, msgSel, offset, append){
 }
 
 /* ---------- reports + browse ---------- */
-var CLOSING=false, closingParty="";
+var CLOSING=false, closingParty="", closingQuality="", closingQualities=[], closingThirdParty=[];
 function repUrl(fmt){
   var d=$("#day").value, dq=d?`&date=${d}`:"";
-  if(CLOSING) return `api/closing?fmt=${fmt}&party=${encodeURIComponent(closingParty)}&counts=${encodeURIComponent(JSON.stringify(editedCounts()))}`+dq;
+  if(CLOSING) return `api/closing?fmt=${fmt}&party=${encodeURIComponent(closingParty)}&quality=${encodeURIComponent(closingQuality)}&counts=${encodeURIComponent(JSON.stringify(editedCounts()))}`+dq;
   var t=($("#rep-to")||{}).value;                                 // To is the as-of for any report
   var f=repRange[$("#rep-name").value] ? ($("#rep-from")||{}).value : "";   // From only for range reports
   var rq=(f?`&from=${f}`:"")+(t?`&to=${t}`:"");
@@ -1433,7 +1446,7 @@ $("#rep-view").onclick=()=>{ var n=$("#rep-name").value; loadReportNamed(n); };
 $("#rep-name").onchange=()=>{ syncFromBox(); if($("#rep-name").value!=="closing"){ CLOSING=false; $("#rep-edit").innerHTML=""; } };
 ["#rep-from","#rep-to"].forEach(s=>{ var el=$(s); if(el) el.onchange=()=>{ var n=$("#rep-name").value; if(n) loadReportNamed(n); }; });
 async function loadReportNamed(name){
-  if(name==="closing"){ CLOSING=true; return openClosing(); }
+  if(name==="closing"){ CLOSING=true; return openClosingPicker(); }
   CLOSING=false; $("#rep-edit").innerHTML="";
   $("#rep-msg").textContent="Loading…"; $("#rep-out").innerHTML="";
   try{ var r=await fetch(repUrl("json")); if(!r.ok){$("#rep-msg").textContent="Could not build this report.";return;} var j=await r.json();
@@ -1463,13 +1476,33 @@ function editedCounts(){
   return o;
 }
 var closingMatched=[];
+// #27: show NOTHING until a party is picked and View is pressed - no run-on dump of every party up front.
+function closingBar(withQuality){
+  var qopts='<option value="">All qualities</option>'+closingQualities.map(q=>`<option value="${esc(q)}" ${q===closingQuality?"selected":""}>${esc(q)}</option>`).join("");
+  return `<label class="fld">Party <input id="cc-party" placeholder="type a party name" value="${esc(closingParty)}" style="min-width:160px"></label>`+
+    (withQuality?`<label class="fld">Quality <select id="cc-quality" style="min-width:140px">${qopts}</select></label>`:"")+
+    `<button class="btn" id="cc-view">View</button>`;
+}
+function openClosingPicker(){
+  closingQualities=[]; closingThirdParty=[];
+  $("#rep-edit").innerHTML=`<div class="card" style="margin:8px 0;padding:12px 16px"><div class="tools" style="margin:0;align-items:center;gap:10px;flex-wrap:wrap"><b>Contract closing</b>${closingBar(false)}<span class="muted" style="font-size:12px">Pick a party (optional quality after) and press View.</span></div></div>`;
+  $("#rep-out").innerHTML='<div class="cnote">Pick a party above and press View to see that party\'s yarn balance.</div>';
+  $("#rep-msg").textContent="";
+  var go=()=>{ closingParty=$("#cc-party").value.trim(); if(!closingParty){ $("#rep-msg").textContent="Enter a party name first."; return; } openClosing(); };
+  $("#cc-view").onclick=go;
+  $("#cc-party").addEventListener("keydown",ev=>{ if(ev.key==="Enter") go(); });
+  $("#cc-party").focus();
+}
 async function openClosing(){
+  if(!closingParty){ return openClosingPicker(); }
   $("#rep-msg").textContent="Loading…"; $("#rep-out").innerHTML="";
   var d=$("#day").value;
   var cj={yarns:[]};
-  try{ var cr=await fetch(`api/closing/counts?party=${encodeURIComponent(closingParty)}`+(d?`&date=${d}`:"")); if(cr.ok) cj=await cr.json(); }catch(e){}
+  try{ var cr=await fetch(`api/closing/counts?party=${encodeURIComponent(closingParty)}&quality=${encodeURIComponent(closingQuality)}`+(d?`&date=${d}`:"")); if(cr.ok) cj=await cr.json(); }catch(e){}
   closingYarns=cj.yarns||[];
   closingMatched=cj.matched_parties||[];
+  closingQualities=cj.qualities||[];
+  closingThirdParty=cj.third_party||[];
   renderClosingEditor();
   await runClosing();
 }
@@ -1492,19 +1525,21 @@ function renderClosingEditor(){
     : `<button class="btn ghost" disabled title="pick one exact party (narrow the filter) to save a party count">Save for this party</button>`;
   $("#rep-edit").innerHTML=`<div class="card" style="margin:8px 0;padding:12px 16px">
     <div class="tools" style="margin:0 0 8px;align-items:center;gap:10px;flex-wrap:wrap">
-      <b>Closing counts</b>
-      <label class="fld">Party <input id="cc-party" placeholder="all parties" value="${esc(closingParty)}" style="min-width:150px"></label>
-      <button class="btn" id="cc-recompute">Recompute</button>
+      <b>Contract closing</b>
+      ${closingBar(true)}
+      <span style="width:1px;height:20px;background:var(--line)"></span>
       <label class="fld">Changed by <input id="cc-who" placeholder="your name" style="min-width:120px"></label>
       <button class="btn ghost" id="cc-save-yarn">Save as yarn default</button>
       ${partySave}
       <span class="muted" id="cc-msg" style="font-size:12px"></span>
     </div>
     <div class="tscroll" id="cc-table">${closingYarns.length?`<table><thead><tr><th>Yarn</th><th>Count from</th><th>Warp count</th><th>Weft count</th><th>Rate</th><th></th></tr></thead><tbody>${rows}</tbody></table>`:`<p class="muted" style="margin:4px 0">No yarns to show${closingParty?" for “"+esc(closingParty)+"”":""}. Blank counts are derived from the yarn's own count.</p>`}</div>
-    <p class="muted" style="font-size:12px;margin:8px 0 0">Edit a count, then Recompute to preview, or Save. <b>Save as yarn default</b> sets the count for every party; <b>Save for this party</b> sets it for the one party chosen above only (it wins over the default for that exact party). Only the rows you change are saved, with today's date and your name.</p>
+    <p class="muted" style="font-size:12px;margin:8px 0 0">Only ${esc(closingParty)}'s yarns are shown. Edit a count, then View to preview, or Save. <b>Save as yarn default</b> sets the count for every party; <b>Save for this party</b> sets it for the one party chosen above only. Only the rows you change are saved, with today's date and your name.</p>
   </div>`;
-  $("#cc-recompute").onclick=()=>{ closingParty=$("#cc-party").value.trim(); openClosing(); };
-  $("#cc-party").addEventListener("keydown",ev=>{ if(ev.key==="Enter"){ closingParty=$("#cc-party").value.trim(); openClosing(); } });
+  var go=()=>{ closingParty=$("#cc-party").value.trim(); closingQuality=($("#cc-quality")||{}).value||""; if(!closingParty){ openClosingPicker(); return; } openClosing(); };
+  $("#cc-view").onclick=go;
+  $("#cc-party").addEventListener("keydown",ev=>{ if(ev.key==="Enter") go(); });
+  if($("#cc-quality")) $("#cc-quality").onchange=go;
   $("#cc-save-yarn").onclick=()=>saveClosingCounts("yarn");
   if($("#cc-save-party")) $("#cc-save-party").onclick=()=>saveClosingCounts("party");
 }
@@ -1513,8 +1548,17 @@ async function runClosing(){
   $("#rep-msg").textContent="Loading…"; $("#rep-out").innerHTML="";
   try{ var r=await fetch(repUrl("json")); if(!r.ok){$("#rep-msg").textContent="Could not build the closing.";return;} var j=await r.json();
     var nums=j.columns.map((_,i)=>i).filter(i=>j.rows.length && j.rows.every(row=>row[i]===""||/^[-+\d.,%\s]+$/.test(String(row[i]))));
-    $("#rep-msg").textContent=j.title+(j.summary&&j.summary.length?" — "+j.summary.join("  ·  "):"");
-    $("#rep-out").innerHTML=table(j.columns, j.rows.map(row=>row.map(c=>statusCell(c))), nums);
+    // trimmed summary: drop the per-party/yarn balance dump (now in the table) and the cross-party block (now a
+    // separate table); keep the header, the incomplete-contracts note and the method line.
+    var sm=(j.summary||[]).filter(l=>!/^\s/.test(l) && !/^Fabric of a contract/.test(l));
+    $("#rep-msg").textContent=j.title+(sm.length?" — "+sm.join("  ·  "):"");
+    var main = j.rows.length? table(j.columns, j.rows.map(row=>row.map(c=>statusCell(c))), nums)
+      : '<div class="cnote">No yarn balance for this selection.</div>';
+    // cross-party deliveries (fabric of this party's contracts billed to ANOTHER party) as a separate table
+    var tp = (closingThirdParty||[]).map(e=>[esc(e.contract), esc(e.party||""), esc(e.deliver_to||""), num(e.out_m), num(e.back_m), num(e.net_m), (e.bags==null?"—":num(e.bags))]);
+    var tpCard = tp.length? `<div class="sec" style="margin:16px 0 6px">Fabric billed to another party — settle separately</div><div class="tscroll">`+
+      table(["Contract","Billed to","Deliver to","Out m","Back m","Net m","~Bags"],tp,[3,4,5,6])+`</div>` : "";
+    $("#rep-out").innerHTML=main+tpCard;
   }catch(e){ $("#rep-msg").textContent="Could not reach the server."; }
 }
 async function postClosingSave(body,m){

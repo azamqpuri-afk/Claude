@@ -305,7 +305,7 @@ def _yarn_label(method, code, names):
     return names.get(str(code), names.get(code, code))
 
 
-def closing_counts(con, cfg, as_of=None, party=None):
+def closing_counts(con, cfg, as_of=None, party=None, quality=None):
     """The warp/weft closing count (and rate) in effect for each yarn in a party's closing, prefilled so the owner
     can edit and recompute. One row per yarn group. For each row:
       warp/weft_closing_count  the effective count (party count if one applies, else the yarn default)
@@ -320,6 +320,9 @@ def closing_counts(con, cfg, as_of=None, party=None):
     rows = contract_rows(con, method, as_of)
     if party:
         rows = [r for r in rows if party.lower() in (r["party"] or "").lower()]
+    qualities = sorted({r["quality"] for r in rows if r.get("quality")})   # the qualities this party runs
+    if quality:
+        rows = [r for r in rows if str(r.get("quality") or "") == str(quality)]
     # party counts are per EXACT party name; resolve the filter to the real party name(s) in view. A party-level
     # count / clear is only meaningful (and only offered) when the filter picks out exactly one real party.
     matched = sorted({r["party"] for r in rows if r.get("party")})
@@ -351,11 +354,20 @@ def closing_counts(con, cfg, as_of=None, party=None):
                    "warp_default": default.get("warp_closing_count", default.get("closing_count")),
                    "weft_default": default.get("weft_closing_count", default.get("closing_count")),
                    "source": source, "party_override": has_party, "party_clearable": g in saved_party}
-    return {"party": party or "", "date": as_of.isoformat(), "matched_parties": matched, "exact_party": exact or "",
+    # fabric of these contracts billed to ANOTHER party (shown as a separate table, not lumped into the balance)
+    tp = [e for e in third_party_deliveries(con, method, as_of)
+          if (not party) or party.lower() in str(e.get("own_party") or "").lower()]
+    third_party = [{"contract": e["contract"], "own_party": e["own_party"], "party": e["party"],
+                    "deliver_to": e["deliver_to"], "out_m": round(e["out_m"]), "back_m": round(e["back_m"]),
+                    "net_m": round(e["net_m"]), "bags": (round(e["bags"], 1) if e["bags"] is not None else None)}
+                   for e in tp]
+    return {"party": party or "", "quality": quality or "", "date": as_of.isoformat(),
+            "matched_parties": matched, "exact_party": exact or "", "qualities": qualities,
+            "third_party": third_party,
             "yarns": sorted(seen.values(), key=lambda x: (x["yarn_name"] or x["yarn"]))}
 
 
-def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None):
+def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None, quality=None):
     as_of = as_of or date.today()
     method = Method(cfg["closing"])
     if count_overrides:                                        # dashboard what-if: these counts win over config
@@ -363,6 +375,8 @@ def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None):
     rows = contract_rows(con, method, as_of)
     if party:
         rows = [r for r in rows if party.lower() in (r["party"] or "").lower()]
+    if quality:                                               # close one quality across the party's contracts
+        rows = [r for r in rows if str(r.get("quality") or "") == str(quality)]
     cur = cfg["company"]["currency"]
     incomplete = [r for r in rows if r.get("pre_go_live")]
     # one balance line per PARTY and YARN - never add different yarns into one bag total (bags of 30/1 and 12/1 are

@@ -1450,6 +1450,37 @@ def test_v015_combine_counts_formats_no_crash(env):
         cfg3.data.get("yarn", {}).pop("combine_counts", None)
 
 
+def test_v015_sales_drill_month_and_history(env):
+    cfg, con = env
+    # the drill follows the given month (#28), not always the current one
+    aug = _webfin.month_sales(con, as_of=date(2026, 8, 15), with_history=True)
+    assert aug["month"] == "2026-08" and aug["count"] == len(aug["rows"])
+    assert _webfin.month_sales(con, month="2026-09")["month"] == "2026-09"
+    hist = aug["history"]
+    assert hist and all(set(h) >= {"month", "total", "count"} for h in hist)
+    assert hist == sorted(hist, key=lambda h: h["month"], reverse=True)   # newest month first
+
+
+def test_v015_closing_selection_and_quality(env):
+    cfg, con = env
+    from smart_layer.textile import closing as _cl
+    from smart_layer.textile.method import Method
+    rws = _cl.contract_rows(con, Method(cfg["closing"]), END)
+    party = rws[0]["party"]
+    cc = _cl.closing_counts(con, cfg, END, party)
+    assert cc["yarns"] and isinstance(cc["qualities"], list) and "third_party" in cc
+    # count panel shows only this party's yarns
+    all_rows = [r for r in rws if r.get("party") == party]
+    assert {y["yarn"] for y in cc["yarns"]} <= {str(r["yarn"]) for r in all_rows}
+    # closing for one quality keeps only that quality's contracts
+    if cc["qualities"]:
+        q = cc["qualities"][0]
+        rep = _cl.contract_closing(con, cfg, END, party, None, q)
+        full = _cl.contract_closing(con, cfg, END, party)
+        assert len(rep.rows) <= len(full.rows)
+        assert _cl.closing_counts(con, cfg, END, party, q)["quality"] == q
+
+
 def test_v015_cost_per_metre_and_yarn_shortage(env):
     cfg, con = env
     cm = _repfin.cost_per_metre(con, cfg, END)

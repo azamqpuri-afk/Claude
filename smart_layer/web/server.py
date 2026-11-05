@@ -143,12 +143,13 @@ class App:
         finally:
             con.close()
 
-    def month_sales(self, d0=None, d1=None):
-        """Sales tile drill (#1): this month's sale vouchers (or a date range)."""
+    def month_sales(self, d0=None, d1=None, day=None, month=None, history=False):
+        """Sales tile drill (#1/#28): a month's sale vouchers (the Overview month `day`, or an explicit `month`),
+        optionally with the 12-month sales history for the drill's month list."""
         from . import finance as _fin
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
-            return _fin.month_sales(con, d0=d0, d1=d1)
+            return _fin.month_sales(con, as_of=day, d0=d0, d1=d1, month=month, with_history=history)
         finally:
             con.close()
 
@@ -312,12 +313,13 @@ class App:
         finally:
             con.close()
 
-    def closing(self, day, party, overrides):
-        """The contract-closing report, optionally recomputed with per-yarn what-if closing counts (not saved)."""
+    def closing(self, day, party, overrides, quality=None):
+        """The contract-closing report, optionally for one quality across the party's contracts, and optionally
+        recomputed with per-yarn what-if closing counts (not saved)."""
         from ..textile import closing as cl
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
-            return cl.contract_closing(con, self.cfg, day, party or None, overrides or None)
+            return cl.contract_closing(con, self.cfg, day, party or None, overrides or None, quality or None)
         finally:
             con.close()
 
@@ -346,12 +348,13 @@ class App:
         finally:
             con.close()
 
-    def closing_counts(self, day, party):
-        """The warp/weft closing counts in effect for a party's closing, prefilled for the editable dashboard panel."""
+    def closing_counts(self, day, party, quality=None):
+        """The warp/weft closing counts in effect for a party's closing, prefilled for the editable dashboard panel,
+        plus the party's qualities and any cross-party fabric deliveries."""
         from ..textile import closing as cl
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
-            return cl.closing_counts(con, self.cfg, day, party or None)
+            return cl.closing_counts(con, self.cfg, day, party or None, quality or None)
         finally:
             con.close()
 
@@ -610,7 +613,13 @@ def get_response(app, path, query, check_licence=True):
                 return 400, {"error": "from/to must be YYYY-MM-DD"}, "application/json", {}
             if path == "/api/fabric/history":
                 return 200, app.fabric_history(a0, a1), "application/json", {}
-            return 200, app.month_sales(a0, a1), "application/json", {}
+            # sales drill (#28): a month (?month=YYYY-MM) or the Overview date (?date=), + the 12-month history
+            try:
+                sday = date.fromisoformat(params["date"]) if params.get("date") else None
+            except ValueError:
+                sday = None
+            return 200, app.month_sales(a0, a1, day=sday, month=params.get("month") or None,
+                                        history=(params.get("history") == "1")), "application/json", {}
         if path == "/api/feed":                          # the Overview live-feed panel (optional ?date=)
             try:
                 fday = date.fromisoformat(params["date"]) if params.get("date") else None
@@ -626,10 +635,10 @@ def get_response(app, path, query, check_licence=True):
         if path == "/api/data":
             return 200, app.data(day), "application/json", {}
         if path == "/api/closing/counts":
-            return 200, app.closing_counts(day, params.get("party", "")), "application/json", {}
+            return 200, app.closing_counts(day, params.get("party", ""), params.get("quality", "")), "application/json", {}
         if path == "/api/closing":                      # the closing report, recomputed with edited counts
             overrides = _parse_counts(params.get("counts", ""))
-            rep = app.closing(day, params.get("party", ""), overrides)
+            rep = app.closing(day, params.get("party", ""), overrides, params.get("quality", ""))
             name = "closing-whatif" if overrides else "closing"   # a recomputed PDF/CSV is never named like the real one
             return _report_body(app, rep, name, (day or date.today()).isoformat(), params.get("fmt", "json"), cell)
         name, fmt = params.get("name", ""), params.get("fmt", "json")   # a report
