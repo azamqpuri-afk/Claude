@@ -360,10 +360,7 @@ FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
 # The CURRENT (running) shift, one row per loom, from the OLMS SCREEN table - a live snapshot (no date window),
 # replaced wholesale each sync. The Overview scoreboard-efficiency tile reads this for the RUNNING shift (eff =
 # sum(USHFTDUR - UTSTPDUR) / sum(USHFTDUR)); loom_monitor (RTLSUM) is only written at shift END, so at mid-shift it
-# would show the previous, finished shift. NOT YET RUN against the live scoreboard: DBSERVER to confirm the SCREEN
-# column names (UMACH / USHIFT / UDATE / USHFTDUR / UTSTPDUR / UTSTOP / UPROD / URPM / UPINCH / USTDESC /
-# ULASTEUPDATED) and run `python -m smart_layer check`. Same [sources.scoreboard] MS Access DB; Jet SQL rejects
-# -- comments, so keep none in the query.
+# would show the previous, finished shift. Same [sources.scoreboard] MS Access DB; Jet SQL rejects -- comments.
 [entities.loom_monitor_live]
 source = "scoreboard"
 # VERIFIED on the live scoreboard by DBSERVER (shift 2, 86.5%, matching the scoreboard PC). UMACH / USHIFT come
