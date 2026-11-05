@@ -276,7 +276,9 @@ def month_sales(con, as_of=None, d0=None, d1=None, month=None, with_history=Fals
     res = {"label": label, "month": lo[:7], "from": lo, "to": hi, "total": round(sum(r["amount"] for r in out)),
            "count": len(out), "rows": out}
     if with_history:
-        res["history"] = sales_history(con, 12, as_of)
+        # 13 months: the 12 complete months the "avg sales / month" tile averages, plus the running month, so the
+        # owner can see every month behind the average.
+        res["history"] = sales_history(con, 13, as_of)
     return res
 
 
