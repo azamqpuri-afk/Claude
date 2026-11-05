@@ -321,11 +321,15 @@ def build(con, cfg, as_of=None):
     first_month = _one(con, "SELECT MIN(voucher_date) FROM ledger_entries WHERE voucher_kind <> 'opening'") or ""
     data_start = str(first_month)[:7] or avg_keys[0]
     keys = [k for k in avg_keys if k >= data_start]            # don't dilute the average with months before go-live
-    arev = dict(con.execute("""SELECT strftime('%Y-%m', l.voucher_date),
-                   -SUM(CASE WHEN a.account_group = 'revenue' THEN l.amount ELSE 0 END)
-                   FROM ledger_entries l JOIN accounts a USING (account_code)
-                   WHERE l.voucher_kind <> 'opening' AND l.voucher_date >= ? AND l.voucher_date < ? GROUP BY 1""",
-                   (avg_keys[0] + "-01", m_start)))
+    # invoice value per month (the SAME basis as sales_month and the sales drill/history: the customer-account debit
+    # on each sale voucher), so the "avg sales / month" tile compares like with like against this month's sales.
+    arev = dict(con.execute("""SELECT strftime('%Y-%m', s.vd), SUM(s.v) FROM (
+                       SELECT MIN(l.voucher_date) AS vd, SUM(l.amount) AS v
+                       FROM ledger_entries l JOIN accounts a USING (account_code)
+                       WHERE l.voucher_kind = 'sale' AND a.account_group = 'customer'
+                             AND l.voucher_date >= ? AND l.voucher_date < ?
+                       GROUP BY l.voucher_id HAVING SUM(l.amount) > 0) s
+                   GROUP BY 1""", (avg_keys[0] + "-01", m_start)))
     adisp = dict(con.execute("""SELECT strftime('%Y-%m', dispatch_date),
                    SUM(CASE direction WHEN 'out' THEN 1 ELSE -1 END * meters)
                    FROM fabric_dispatches WHERE dispatch_date >= ? AND dispatch_date < ? GROUP BY 1""",
