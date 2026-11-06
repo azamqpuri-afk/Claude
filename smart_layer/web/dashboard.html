@@ -1656,18 +1656,18 @@ async function loadScbDate(){
     if(j.scoreboard_available) tiles+=tile("Scoreboard efficiency", t.scb_all!=null?t.scb_all+"%":"–", j.scb_has_shifts?"day + night":"whole day");
     (j.scb_shifts||[]).forEach(sh=>{ if(j.scb_has_shifts) tiles+=tile("Scb "+sh, (t.scb&&t.scb[sh]!=null)?t.scb[sh]+"%":"–", "shift"); });
     $("#scb-date-tiles").innerHTML=tiles;
-    // per-loom matrix: ERP per shift + total, scoreboard per shift + total (efficiency %)
-    var eh=j.erp_shifts||[], sh=j.scb_shifts||[];
-    var cols=["Loom"].concat(eh.map(s=>"ERP "+s)).concat(["ERP all"]).concat(j.scoreboard_available?sh.map(s=>"Scb "+s).concat(["Scb all"]):[]);
+    // per-loom matrix: the SCOREBOARD splits day/night; the ERP figure is shown as a single "as entered" column —
+    // one ERP entry usually covers several shifts, so ERP A/B is NOT comparable to scoreboard day/night.
+    var sh=j.scb_shifts||[];
+    var cols=["Loom","ERP (as entered)"].concat(j.scoreboard_available?sh.map(s=>"Scb "+s).concat(["Scb all"]):[]);
     var rows=(j.looms||[]).map(r=>{
-      var cells=[esc(r.loom)];
-      eh.forEach(s=>cells.push(r.erp[s]?pct(r.erp[s].eff):"–"));
-      cells.push(pct(avgEff(r.erp)));
+      var cells=[esc(r.loom), pct(avgEff(r.erp))];
       if(j.scoreboard_available){ sh.forEach(s=>cells.push(r.scb[s]?pct(r.scb[s].eff):"–")); cells.push(pct(avgEff(r.scb))); }
       return cells;
     });
     var nums=cols.map((_,i)=>i).filter(i=>i>0);
-    $("#scb-date-out").innerHTML=`<div class="card" style="margin:0"><div class="tscroll">`+table(cols,rows,nums)+`</div></div>`;
+    var note = j.scb_has_shifts ? `<div class="rep-sum" style="margin:6px 2px">Scoreboard is split day vs night. ERP efficiency is shown as entered — one ERP entry often covers several shifts, so it is not split by shift.</div>` : "";
+    $("#scb-date-out").innerHTML=note+`<div class="card" style="margin:0"><div class="tscroll">`+table(cols,rows,nums)+`</div></div>`;
     scbRenderSensor(j.sensor, "#scb-sensor", "#scb-sensor-card", null, false);
   }catch(e){ $("#scb-date-note").textContent="could not load"; }
 }

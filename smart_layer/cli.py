@@ -52,7 +52,8 @@ def cmd_check(cfg, args):
             probe = 0 if ent.name in store.CURSOR_ENTITIES else since
             n = sum(1 for _ in e.fetch(ent.name, probe))
             src = e.mapping.source.get(ent.name, "erp")
-            print(f"  {ent.name:<17} ok ({n:,} rows{' in the last 30 days' if ent.date_column else ''})"
+            windowed = ent.date_column and ":since" in e.mapping.entities[ent.name]   # only claim a window the SQL applies
+            print(f"  {ent.name:<17} ok ({n:,} rows{' in the last 30 days' if windowed else ''})"
                   + (f"  [source: {src}]" if src != "erp" else ""))
         except Exception as ex:                      # report every entity, not just the first failure
             # an optional edit-history entity whose source tables do not exist yet is "not installed", not a failure

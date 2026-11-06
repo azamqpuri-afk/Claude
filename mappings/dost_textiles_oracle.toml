@@ -603,7 +603,8 @@ WHERE m.indent_date >= :since
 sql = """
 SELECT TO_CHAR(m.po_no) AS po_no, TRUNC(m.po_date) AS po_date, TO_CHAR(d.trans_no) AS trans_no,
        TO_CHAR(d.sr_no) AS sr_no, d.uc AS uc, m.ac AS supplier_code, a.an AS supplier_name, d.ic AS item_code,
-       d.rate AS rate, d.qty AS qty, m.purchaser AS purchaser, m.payment_term AS payment_term,
+       d.rate AS rate, d.qty AS qty, m.purchaser AS purchaser,
+       COALESCE(m.payment_term, m.p_term) AS payment_term,   -- PAYMENT_TERM is blank in almost every PO, so fall back to P_TERM (CREDIT / CASH)
        m.fpay_unpay AS paid, TRUNC(m.payment_date) AS payment_date, NULL AS ref_indent_no,
        TO_CHAR(d.ref_indent_tno) AS ref_indent_trans, TO_CHAR(d.ref_indent_sr) AS ref_indent_sr,
        g.recv_qty AS received_qty, g.recv_rate AS received_rate, g.recv_date AS received_date, g.grn_no AS grn_no

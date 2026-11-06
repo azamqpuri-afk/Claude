@@ -281,8 +281,9 @@ def list_edits(con, cfg, d0=None, d1=None, user=None, area=None, action=None, do
     total = len(out)
     out = out[:int(limit)]
     _mark_pairs(out, s["pair_minutes"])
-    users = [r[0] for r in con.execute(
-        "SELECT DISTINCT erp_user FROM erp_change_events WHERE erp_user IS NOT NULL AND TRIM(erp_user) <> '' ORDER BY 1")]
+    # the user dropdown uses the RESOLVED display users (so it shows the PC/host for generic DB-owner logins, which
+    # is what the filter matches), not the raw erp_user column (DBSERVER: it was showing only "DOSTEX").
+    users = sorted({r["user"] for r in by_user(con, d0, d1, cfg) if r["user"] and r["user"] != "—"})
     areas = [{"table": t, "area": area_label(s, t)} for (t,) in con.execute(
         "SELECT DISTINCT table_name FROM erp_change_events WHERE table_name IS NOT NULL ORDER BY 1")]
     return {"installed": True, "rows": out, "users": users, "areas": areas, "total": total}

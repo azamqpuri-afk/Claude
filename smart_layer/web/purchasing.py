@@ -29,17 +29,28 @@ def _diff(a, b, tol=1e-6):
     return a is not None and b is not None and abs((a or 0) - (b or 0)) > tol
 
 
+_PAID_SET = "('PAID','Y','YES')"                           # values that count as paid (case-insensitive)
+
+
 def overview(con, cfg, q="", only="all", limit=500):
     """PO lines with their goods-receipt comparison, newest first. `only`: all | diff (rate or qty differs) |
-    pending (not received) | unpaid. `q` searches PO no / supplier / item. Plus headline counts and the pending
-    indents (indent lines with no PO line referencing them)."""
+    pending (not received) | unpaid. `q` searches PO no / supplier / item. Tiles are counted over ALL PO lines in
+    SQL (not just the listed page), then the list is limited. Plus the pending indents."""
     if not installed(con):
         return {"installed": False, "rows": [], "pending_indents": [], "tiles": {}}
     names = _item_names(con)
+    # headline tiles over EVERY PO line (DBSERVER: the old per-page count under-reported on 5,216 live lines)
+    tiles = dict(zip(("po_lines", "received", "pending", "rate_diffs", "qty_diffs", "unpaid"),
+                     con.execute(f"""SELECT COUNT(*), SUM(received_qty IS NOT NULL), SUM(received_qty IS NULL),
+                            SUM(received_rate IS NOT NULL AND ABS(COALESCE(rate,0) - received_rate) > 1e-6),
+                            SUM(received_qty IS NOT NULL AND ABS(COALESCE(qty,0) - received_qty) > 1e-6),
+                            SUM(paid IS NOT NULL AND UPPER(paid) NOT IN {_PAID_SET})
+                        FROM purchase_orders""").fetchone()))
+    tiles = {k: (v or 0) for k, v in tiles.items()}
     rows = []
     for r in con.execute("""SELECT po_no, po_date, supplier_code, supplier_name, item_code, rate, qty, purchaser,
                                    payment_term, paid, payment_date, received_qty, received_rate, received_date, grn_no
-                            FROM purchase_orders ORDER BY po_date DESC, po_no DESC LIMIT 4000"""):
+                            FROM purchase_orders ORDER BY po_date DESC, po_no DESC"""):
         (po_no, po_date, sup_c, sup_n, ic, rate, qty, buyer, term, paid, pay_dt,
          rq, rr, rdt, grn) = r
         rate_diff = _diff(rate, rr)
@@ -53,11 +64,6 @@ def overview(con, cfg, q="", only="all", limit=500):
                      "grn_no": grn, "received": received,
                      "rate_diff": rate_diff, "qty_diff": qty_diff,
                      "diff": bool(rate_diff or qty_diff)})
-    tiles = {"po_lines": len(rows), "received": sum(1 for r in rows if r["received"]),
-             "pending": sum(1 for r in rows if not r["received"]),
-             "rate_diffs": sum(1 for r in rows if r["rate_diff"]),
-             "qty_diffs": sum(1 for r in rows if r["qty_diff"]),
-             "unpaid": sum(1 for r in rows if r["paid"] and str(r["paid"]).upper() not in ("PAID", "Y", "YES"))}
     ql = q.strip().lower()
     if ql:
         rows = [r for r in rows if ql in " ".join(str(x) for x in (r["po_no"], r["supplier"], r["item"], r["item_code"]) if x).lower()]
