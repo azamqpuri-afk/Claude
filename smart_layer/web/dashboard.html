@@ -294,7 +294,9 @@
   <nav class="tabs" id="tabs">
     <button data-tab="overview" aria-selected="true">Overview</button>
     <button data-tab="weaving">Weaving</button>
+    <button data-tab="scoreboard">Scoreboard</button>
     <button data-tab="store">Store Room</button>
+    <button data-tab="purchasing" id="tab-purchasing" style="display:none">Purchasing</button>
     <button data-tab="yf">Yarn &amp; Fabric</button>
     <button data-tab="finance">Finance</button>
     <button data-tab="payroll">Payroll</button>
@@ -355,6 +357,64 @@
     <div class="card"><div class="hd"><h3>Beams on looms</h3><span class="count">fabric still to come · days left · backup ready?</span>
         <div class="tools" style="margin:0"><a class="btn ghost" href="api/report?name=beams&fmt=pdf">⤓ On looms</a> <a class="btn ghost" href="api/report?name=sizers&fmt=pdf">⤓ At sizers</a></div></div>
       <div class="tscroll"><table id="wv-beams"></table></div></div>
+  </section>
+
+  <!-- SCOREBOARD (items 29 + 30a) -->
+  <section class="pane" data-pane="scoreboard" hidden>
+    <div class="subtabs" id="scb-sub">
+      <button data-v="live" aria-selected="true">Live &amp; by date</button>
+      <button data-v="range">By date range</button>
+      <button data-v="compare">Compare dates</button>
+    </div>
+
+    <div id="scb-live">
+      <div class="grid g4" id="scb-live-tiles" style="margin-bottom:14px"></div>
+      <div class="card" id="scb-sensor-live-card" style="margin-bottom:16px" hidden><div class="hd"><h3>Sensor timings — running shift</h3><span class="count" id="scb-sensor-live-note"></span></div><div class="pad" id="scb-sensor-live"></div></div>
+      <div class="tools"><label class="fld">Date <input type="date" id="scb-date"></label><span class="count" id="scb-date-note"></span></div>
+      <div class="grid g4" id="scb-date-tiles" style="margin-bottom:12px"></div>
+      <div id="scb-date-out"></div>
+      <div class="card" id="scb-sensor-card" style="margin-top:14px" hidden><div class="hd"><h3>Sensor duplicate-timings (day &amp; night)</h3></div><div class="pad" id="scb-sensor"></div></div>
+    </div>
+
+    <div id="scb-range" hidden>
+      <div class="tools">
+        <label class="fld">From <input type="date" id="scb-from"></label>
+        <label class="fld">To <input type="date" id="scb-to"></label>
+        <button class="btn" id="scb-range-go">Show</button>
+        <a class="btn ghost" id="scb-range-pdf">⤓ PDF</a>
+        <a class="btn ghost" id="scb-range-csv">⤓ CSV</a>
+      </div>
+      <div class="grid g4" id="scb-range-tiles" style="margin-bottom:12px"></div>
+      <div id="scb-range-out"></div>
+      <div class="rep-sum" id="scb-range-msg"></div>
+    </div>
+
+    <div id="scb-compare" hidden>
+      <div class="rep-sum">Tick dates to line up their shed ERP vs scoreboard efficiency.</div>
+      <div class="card"><div class="hd"><h3>Last 30 days</h3><span class="count" id="scb-cmp-note"></span></div>
+        <div class="pad"><div id="scb-cmp-dates" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px"></div>
+          <div class="tscroll" id="scb-cmp-out"></div></div></div>
+    </div>
+  </section>
+
+  <!-- PURCHASING (indents → PO → receipt, item 30b; yarn contracts 30d) -->
+  <section class="pane" data-pane="purchasing" hidden>
+    <div class="grid g4" id="pur-tiles" style="margin-bottom:14px"></div>
+    <div class="subtabs" id="pur-sub">
+      <button data-v="po" aria-selected="true">Purchase orders</button>
+      <button data-v="pending">Pending indents</button>
+      <button data-v="yarn">Yarn contracts</button>
+    </div>
+    <div id="pur-po">
+      <div class="tools">
+        <label class="fld">🔎 <input id="pur-q" placeholder="PO no, supplier, item"></label>
+        <label class="fld">Show <select id="pur-only"><option value="all">All PO lines</option><option value="diff">PO≠GRN (rate/qty differs)</option><option value="pending">Not received</option><option value="unpaid">Unpaid</option></select></label>
+      </div>
+      <div id="pur-out"></div>
+      <div class="rep-sum" id="pur-msg"></div>
+    </div>
+    <div id="pur-pending" hidden><div id="pur-pending-out"></div><div class="rep-sum" id="pur-pending-msg"></div></div>
+    <div id="pur-yarn" hidden><div id="pur-yarn-out"></div><div class="rep-sum" id="pur-yarn-msg"></div></div>
   </section>
 
   <!-- STORE ROOM -->
@@ -662,6 +722,7 @@ function render(){
   $("#millName").textContent = D.company || "Mill";
   $("#subtitle").textContent = "by Azam Puri";
   var te=$("#tab-edits"); if(te) te.style.display = (D.edits_installed && !STATIC_DATA) ? "" : "none";   // Edits tab only when the ERP change-history layer is present
+  var tp=$("#tab-purchasing"); if(tp) tp.style.display = (D.purchasing_installed && !STATIC_DATA) ? "" : "none";  // Purchasing tab only when indents/POs are mapped
   var _s=D.sync||{};
   $("#asof").textContent = "as of " + dshort(D.as_of) + (_s.live_at? " · live sync "+String(_s.live_at).slice(11,16) : (D.synced_at? " · synced "+String(D.synced_at).slice(11,16) : ""));
   $("#asof").style.color = (_s.stale) ? "var(--red)" : "";
@@ -1545,6 +1606,219 @@ async function browseInto(entity, q, outSel, msgSel, offset, append){
   }catch(e){ $(msgSel).textContent="Could not reach the server."; return 0; }
 }
 
+/* ---------- scoreboard (items 29 + 30a) ---------- */
+var scbInit=false, scbView="live", scbEff=null, scbEffSort={k:"loom",asc:true};
+function initScb(){
+  if(!scbInit){
+    scbInit=true;
+    $("#scb-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>scbSetView(b.dataset.v));
+    $("#scb-date").onchange=loadScbDate;
+    $("#scb-range-go").onclick=loadScbRange;
+    var upd=()=>{ var u=scbRangeUrl; $("#scb-range-pdf").href=u("pdf"); $("#scb-range-csv").href=u("csv"); };
+    $("#scb-from").onchange=upd; $("#scb-to").onchange=upd;
+  }
+  if(STATIC_DATA){ $("#scb-live-tiles").innerHTML='<p class="muted" style="padding:6px">Open from the server for the live scoreboard.</p>'; return; }
+  loadScbLive();
+}
+function scbSetView(v){
+  scbView=v;
+  $("#scb-sub").querySelectorAll("button").forEach(b=>b.setAttribute("aria-selected", b.dataset.v===v));
+  ["live","range","compare"].forEach(x=>$("#scb-"+x).hidden = x!==v);
+  if(v==="range" && !scbEff) loadScbRange();
+  if(v==="compare") loadScbCompare();
+}
+async function loadScbLive(){
+  try{
+    var j=await (await fetch("api/scoreboard/live")).json();
+    var L=j.live||{};
+    if(L.scb_eff_today==null && !L.scb_live){
+      $("#scb-live-tiles").innerHTML='<p class="muted" style="padding:6px">No loom monitor connected on this server.</p>';
+    } else {
+      $("#scb-live-tiles").innerHTML =
+        tile("⚡ Live efficiency", (L.scb_eff_today!=null?L.scb_eff_today+"%":"–"), (L.scb_live?("shift "+(L.scb_shift||"")+(L.scb_shift_from?" · from "+L.scb_shift_from:"")):"last day "+dshort(L.scb_today_date)), "accent")+
+        tile("🧵 Metres so far", num(L.scb_meters_today), L.scb_live?"running shift":"")+
+        tile("🌀 RPM", L.scb_rpm_today!=null?num(L.scb_rpm_today):"–", "")+
+        tile("🖥 Looms counted", num(L.scb_looms!=null?L.scb_looms:0), (L.scb_idle_excluded?L.scb_idle_excluded+" idle left out":"")+(L.scb_updated?" · upd "+L.scb_updated:""));
+    }
+    scbRenderSensor(j.sensor, "#scb-sensor-live", "#scb-sensor-live-card", "#scb-sensor-live-note", true);
+    if(!$("#scb-date").value) $("#scb-date").value = L.scb_today_date || (D&&D.as_of) || "";
+    loadScbDate();
+  }catch(e){ $("#scb-live-tiles").innerHTML='<p class="muted" style="padding:6px">Could not load the scoreboard.</p>'; }
+}
+async function loadScbDate(){
+  var d=$("#scb-date").value; if(!d) return;
+  $("#scb-date-note").textContent="loading…";
+  try{
+    var j=await (await fetch("api/scoreboard?date="+d)).json();
+    $("#scb-date-note").textContent="";
+    var t=j.totals||{};
+    var tiles=tile("ERP efficiency", t.erp_all!=null?t.erp_all+"%":"–", "whole day");
+    if(j.scoreboard_available) tiles+=tile("Scoreboard efficiency", t.scb_all!=null?t.scb_all+"%":"–", j.scb_has_shifts?"day + night":"whole day");
+    (j.scb_shifts||[]).forEach(sh=>{ if(j.scb_has_shifts) tiles+=tile("Scb "+sh, (t.scb&&t.scb[sh]!=null)?t.scb[sh]+"%":"–", "shift"); });
+    $("#scb-date-tiles").innerHTML=tiles;
+    // per-loom matrix: ERP per shift + total, scoreboard per shift + total (efficiency %)
+    var eh=j.erp_shifts||[], sh=j.scb_shifts||[];
+    var cols=["Loom"].concat(eh.map(s=>"ERP "+s)).concat(["ERP all"]).concat(j.scoreboard_available?sh.map(s=>"Scb "+s).concat(["Scb all"]):[]);
+    var rows=(j.looms||[]).map(r=>{
+      var cells=[esc(r.loom)];
+      eh.forEach(s=>cells.push(r.erp[s]?pct(r.erp[s].eff):"–"));
+      cells.push(pct(avgEff(r.erp)));
+      if(j.scoreboard_available){ sh.forEach(s=>cells.push(r.scb[s]?pct(r.scb[s].eff):"–")); cells.push(pct(avgEff(r.scb))); }
+      return cells;
+    });
+    var nums=cols.map((_,i)=>i).filter(i=>i>0);
+    $("#scb-date-out").innerHTML=`<div class="card" style="margin:0"><div class="tscroll">`+table(cols,rows,nums)+`</div></div>`;
+    scbRenderSensor(j.sensor, "#scb-sensor", "#scb-sensor-card", null, false);
+  }catch(e){ $("#scb-date-note").textContent="could not load"; }
+}
+function avgEff(group){ var n=0,d=0; for(var k in group){ if(group[k].eff!=null&&group[k].m){ n+=group[k].eff*group[k].m; d+=group[k].m; } } return d?n/d:null; }
+function pct(v){ return v==null?"–":(Math.round(v*10)/10)+"%"; }
+function scbRenderSensor(sensor, outSel, cardSel, noteSel, live){
+  if(!sensor){ $(cardSel).hidden=true; return; }
+  $(cardSel).hidden=false;
+  var verdictBadge=v=> v==="confirmed"?'<span class="edb del">likely swap</span>':(v==="possible"?'<span class="edb old">possible</span>':'<span class="edb amt">all clear</span>');
+  function block(label, s){
+    if(!s) return "";
+    var pairs=(s.pairs||[]).map(p=>`<div class="muted" style="margin:2px 0">• ${esc(p.a)} &amp; ${esc(p.b)}: ${p.twins} same-second stops (${Math.round(p.share*100)}%)</div>`).join("");
+    return `<div style="margin-bottom:10px"><b>${esc(label)}</b> ${verdictBadge(s.verdict)}${pairs}</div>`;
+  }
+  $(outSel).innerHTML = block(live?"Running shift":"Day shift", live?(sensor.day||sensor.night):sensor.day)+(live?"":block("Night shift", sensor.night));
+  if(noteSel) $(noteSel).textContent="";
+}
+function scbRangeUrl(fmt){ var f=$("#scb-from").value, t=$("#scb-to").value; return "api/looms/efficiency?fmt="+fmt+(f?"&from="+f:"")+(t?"&to="+t:""); }
+async function loadScbRange(){
+  $("#scb-range-msg").textContent="loading…";
+  try{
+    var f=$("#scb-from").value, t=$("#scb-to").value;
+    var j=await (await fetch("api/looms/efficiency"+(f||t?("?"+(f?"from="+f+"&":"")+(t?"to="+t:"")):""))).json();
+    scbEff=j; renderScbRange();
+  }catch(e){ $("#scb-range-msg").textContent="Could not load loom efficiency."; }
+}
+function renderScbRange(){
+  if(!scbEff) return; var j=scbEff, t=j.totals||{};
+  $("#scb-range-tiles").innerHTML=
+    tile("Shed ERP eff", t.erp_eff!=null?t.erp_eff+"%":"–", j.from+" → "+j.to, "accent")+
+    tile("Shed scoreboard eff", t.scb_eff!=null?t.scb_eff+"%":"–", j.scoreboard_available?"":"no monitor")+
+    tile("Metres (ERP)", num(t.meters), "")+
+    tile("Metres (scb)", num(t.scb_meters), "");
+  var cols=["Loom","ERP eff %","Scb eff %","Metres","Scb m","RPM","Std RPM","Stops","Days"];
+  var key=scbEffSort.k, asc=scbEffSort.asc;
+  var rows=j.rows.slice().sort((a,b)=>{ var x=a[key],y=b[key]; if(x==null)x=-1; if(y==null)y=-1; if(typeof x==="string")return asc?(""+x).localeCompare(y):(""+y).localeCompare(x); return asc?x-y:y-x; });
+  var body=rows.map(r=>`<tr class="scbrow" data-code="${esc(r.code)}" tabindex="0"><td>${esc(r.loom)}${r.monitor_only?' <span class="edb amt">monitor only</span>':""}</td>`+
+    `<td class="num">${pct(r.erp_eff)}</td><td class="num">${pct(r.scb_eff)}</td><td class="num">${num(r.meters)}</td>`+
+    `<td class="num">${num(r.scb_meters)}</td><td class="num">${r.rpm!=null?num(r.rpm):"–"}</td><td class="num">${r.std_rpm!=null?num(r.std_rpm):"–"}</td><td class="num">${num(r.stops)}</td><td class="num">${r.days}</td></tr>`).join("");
+  var keys=["loom","erp_eff","scb_eff","meters","scb_meters","rpm","std_rpm","stops","days"];
+  var head="<thead><tr>"+cols.map((c,i)=>`<th class="${i>0?"num":""}" data-k="${keys[i]}" style="cursor:pointer">${esc(c)}${scbEffSort.k===keys[i]?(asc?" ▲":" ▼"):""}</th>`).join("")+"</tr></thead>";
+  $("#scb-range-out").innerHTML=`<div class="card" style="margin:0"><div class="tscroll"><table>${head}<tbody>${body}</tbody></table></div></div>`;
+  $("#scb-range-out").querySelectorAll("th[data-k]").forEach(th=>th.onclick=()=>{ var k=th.dataset.k; scbEffSort = {k:k, asc: scbEffSort.k===k?!scbEffSort.asc:(k==="loom")}; renderScbRange(); });
+  $("#scb-range-out").querySelectorAll(".scbrow").forEach(tr=>tr.onclick=()=>openLoomDays(tr.dataset.code));
+  $("#scb-range-msg").textContent=j.rows.length+" looms · "+j.from+" to "+j.to;
+}
+function openLoomDays(code){
+  openDrawer("Loom — day by day", `<p class="muted">Loading…</p>`);
+  var f=$("#scb-from").value, t=$("#scb-to").value;
+  fetch("api/looms/days?loom="+encodeURIComponent(code)+(f?"&from="+f:"")+(t?"&to="+t:"")).then(r=>r.json()).then(j=>{
+    $("#drawer-title").textContent=(j.loom||code)+" — day by day";
+    var rows=(j.rows||[]).map(r=>[dshort(r.date), pct(r.erp_eff), num(r.erp_m), pct(r.scb_eff), num(r.scb_m), r.scb_rpm!=null?num(r.scb_rpm):"–", num(r.scb_stops)]);
+    $("#drawer-body").innerHTML=rows.length?table(["Date","ERP eff","ERP m","Scb eff","Scb m","RPM","Stops"],rows,[1,2,3,4,5,6]):`<p class="muted">No data in this range.</p>`;
+  }).catch(()=>{ $("#drawer-body").innerHTML=`<p class="muted">Could not load.</p>`; });
+}
+var scbCmpData=null, scbCmpPick={};
+async function loadScbCompare(){
+  if(scbCmpData){ renderScbCompare(); return; }
+  try{ scbCmpData=await (await fetch("api/scoreboard/trend")).json();
+    (scbCmpData.rows||[]).slice(-10).forEach(r=>scbCmpPick[r.date]=true);  // default: last 10 dates ticked
+    renderScbCompare();
+  }catch(e){ $("#scb-cmp-out").textContent="Could not load."; }
+}
+function renderScbCompare(){
+  if(!scbCmpData) return;
+  $("#scb-cmp-dates").innerHTML=(scbCmpData.rows||[]).map(r=>`<label class="fld" style="gap:5px"><input type="checkbox" data-d="${r.date}" ${scbCmpPick[r.date]?"checked":""}> ${dshort(r.date)}</label>`).join("");
+  $("#scb-cmp-dates").querySelectorAll("input").forEach(c=>c.onchange=()=>{ scbCmpPick[c.dataset.d]=c.checked; renderScbCompare(); });
+  var picked=(scbCmpData.rows||[]).filter(r=>scbCmpPick[r.date]);
+  var rows=picked.map(r=>[dshort(r.date), pct(r.erp), pct(r.scb), (r.erp!=null&&r.scb!=null)?pct(r.scb-r.erp):"–"]);
+  $("#scb-cmp-out").innerHTML=table(["Date","ERP eff","Scoreboard eff","Scb − ERP"],rows,[1,2,3]);
+  $("#scb-cmp-note").textContent=picked.length+" of "+(scbCmpData.rows||[]).length+" dates";
+}
+
+/* ---------- purchasing (indents → PO → receipt, item 30b; yarn contracts 30d) ---------- */
+var purInit=false, purData=null, purView="po";
+function initPur(){
+  if(STATIC_DATA){ $("#pur-msg").textContent="Open from the server for purchasing data."; return; }
+  if(!purInit){
+    purInit=true;
+    $("#pur-sub").querySelectorAll("button").forEach(b=>b.onclick=()=>purSetView(b.dataset.v));
+    var deb; $("#pur-q").addEventListener("input",()=>{clearTimeout(deb);deb=setTimeout(loadPur,300);});
+    $("#pur-only").onchange=loadPur;
+  }
+  loadPur();
+}
+function purSetView(v){
+  purView=v;
+  $("#pur-sub").querySelectorAll("button").forEach(b=>b.setAttribute("aria-selected", b.dataset.v===v));
+  ["po","pending","yarn"].forEach(x=>$("#pur-"+x).hidden = x!==v);
+  if(v==="pending") renderPurPending();
+  if(v==="yarn") loadPurYarn();
+}
+async function loadPur(){
+  $("#pur-msg").textContent="loading…";
+  try{
+    var q=$("#pur-q").value.trim(), only=$("#pur-only").value;
+    var j=await (await fetch("api/purchasing?only="+only+(q?"&q="+encodeURIComponent(q):""))).json();
+    purData=j; renderPur();
+  }catch(e){ $("#pur-msg").textContent="Could not load purchasing."; }
+}
+function renderPur(){
+  if(!purData) return; var j=purData, t=j.tiles||{};
+  $("#pur-tiles").innerHTML=
+    tile("📄 PO lines", num(t.po_lines), "", "accent")+
+    tile("≠ PO vs GRN", num((t.rate_diffs||0)+(t.qty_diffs||0)), (t.rate_diffs||0)+" rate · "+(t.qty_diffs||0)+" qty", (t.rate_diffs||t.qty_diffs)?"warn":"")+
+    tile("⏳ Not received", num(t.pending), "", t.pending?"warn":"")+
+    tile("💳 Unpaid", num(t.unpaid), "");
+  var cols=["PO","Date","Supplier","Item","PO rate","GRN rate","PO qty","GRN qty","Terms","Paid"];
+  var rows=j.rows.map(r=>{
+    var rc=r.rate_diff?' class="edm"':"", qc=r.qty_diff?' class="edm"':"";
+    return `<tr class="purrow" data-item="${esc(r.item_code)}" tabindex="0"><td>${esc(r.po_no)}</td><td>${dshort(r.po_date)}</td>`+
+      `<td>${esc(r.supplier||"–")}</td><td>${esc(r.item||r.item_code)}</td>`+
+      `<td class="num"${rc}>${r.rate!=null?num(r.rate):"–"}</td><td class="num"${rc}>${r.received_rate!=null?num(r.received_rate):(r.received?"–":"<span class=muted>pending</span>")}</td>`+
+      `<td class="num"${qc}>${r.qty!=null?num(r.qty):"–"}</td><td class="num"${qc}>${r.received_qty!=null?num(r.received_qty):(r.received?"–":"<span class=muted>pending</span>")}</td>`+
+      `<td>${esc(r.term||"–")}</td><td>${esc(r.paid||"–")}</td></tr>`;
+  }).join("");
+  $("#pur-out").innerHTML=`<div class="card" style="margin:0"><div class="tscroll">`+
+    `<table><thead><tr>`+cols.map((c,i)=>`<th class="${i>=4&&i<=7?"num":""}">${esc(c)}</th>`).join("")+`</tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  $("#pur-out").querySelectorAll(".purrow").forEach(tr=>tr.onclick=()=>openPurItem(tr.dataset.item));
+  $("#pur-msg").textContent=j.rows.length+" of "+(j.total||j.rows.length)+" PO lines";
+}
+function renderPurPending(){
+  if(!purData) return;
+  var p=purData.pending_indents||[];
+  if(!p.length){ $("#pur-pending-out").innerHTML=""; $("#pur-pending-msg").textContent="No pending indents — every indent line has a PO."; return; }
+  var rows=p.map(r=>[esc(r.indent_no), dshort(r.indent_date), esc(r.dept||"–"), esc(r.item), num(r.qty), dshort(r.required_date), esc(r.purpose||"")]);
+  $("#pur-pending-out").innerHTML=`<div class="card" style="margin:0"><div class="tscroll">`+table(["Indent","Date","Dept","Item","Qty","Required","Purpose"],rows,[4])+`</div></div>`;
+  $("#pur-pending-msg").textContent=p.length+" pending indent line(s)";
+}
+function openPurItem(item){
+  openDrawer("Item — recent POs", `<p class="muted">Loading…</p>`);
+  fetch("api/purchasing/item?item="+encodeURIComponent(item)).then(r=>r.json()).then(j=>{
+    $("#drawer-title").textContent=(j.item||item)+" — recent POs";
+    var rows=(j.rows||[]).map(r=>[esc(r.po_no), dshort(r.po_date), esc(r.supplier||"–"), num(r.rate), num(r.qty), r.received_rate!=null?num(r.received_rate):"–", r.received_qty!=null?num(r.received_qty):"–", esc(r.paid||"–")]);
+    $("#drawer-body").innerHTML=rows.length?table(["PO","Date","Supplier","Rate","Qty","GRN rate","GRN qty","Paid"],rows,[3,4,5,6]):`<p class="muted">No POs for this item.</p>`;
+  }).catch(()=>{ $("#drawer-body").innerHTML=`<p class="muted">Could not load.</p>`; });
+}
+var purYarn=null;
+async function loadPurYarn(){
+  if(purYarn){ return; }
+  $("#pur-yarn-msg").textContent="loading…";
+  try{
+    var j=await (await fetch("api/browse?entity=yarn_contracts&limit=500")).json();
+    purYarn=j;
+    if(!j.rows||!j.rows.length){ $("#pur-yarn-msg").textContent="No yarn contracts mapped."; return; }
+    $("#pur-yarn-out").innerHTML=`<div class="card" style="margin:0"><div class="tscroll">`+
+      table(j.columns, j.rows.map(r=>r.map(c=>esc(c))), j.columns.map((c,i)=>i).filter(i=>/bags|rate|qty/i.test(j.columns[i])))+`</div></div>`;
+    $("#pur-yarn-msg").textContent=j.rows.length+" yarn contract(s)";
+  }catch(e){ $("#pur-yarn-msg").textContent="Could not load yarn contracts."; }
+}
+
 /* ---------- reports + browse ---------- */
 var CLOSING=false, closingParty="", closingQuality="", closingQualities=[], closingThirdParty=[];
 function repUrl(fmt){
@@ -1742,6 +2016,8 @@ function setTab(name){
     if(name==="yf") loadYF();
     if(name==="payroll"){ initPay(); loadPay(); }
     if(name==="gate") initGate();
+    if(name==="scoreboard") initScb();
+    if(name==="purchasing") initPur();
     if(name==="edits") initEdits();
     if(name==="reports"){ initReports().then(()=>{ if($("#rep-name").value) loadReportNamed($("#rep-name").value); loadSavedFiles(); }); }
   }

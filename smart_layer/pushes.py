@@ -122,7 +122,8 @@ def edit_pushes(cfg, con):
         return 0                                           # the edit-history layer is not installed here
     first_run = store.get_state(con, "edit_push_cursor", None) is None
     cursor = store.get_state(con, "edit_push_cursor", 0) or 0
-    rows = con.execute("""SELECT event_id, changed_at, table_name, action, row_key, doc_ref, doc_date, erp_user
+    rows = con.execute("""SELECT event_id, changed_at, table_name, action, row_key, doc_ref, doc_date, erp_user,
+                                 pc_name, client_host, os_user
                           FROM erp_change_events WHERE event_id > ? ORDER BY event_id""", (cursor,)).fetchall()
     if not rows:
         if first_run:
@@ -137,19 +138,22 @@ def edit_pushes(cfg, con):
     older = int(cfg["edits"].get("push_older_than_days", 2) or 0)
     headers = {}                                           # parent table -> TRANS_NO -> (doc_ref, doc_date, user)
     seen, flagged = set(), []                              # collapse a voucher's header + its line edits into one item
-    for eid, at, table, act, rk, dref, ddt, usr in rows:
+    for eid, at, table, act, rk, dref, ddt, usr, pc, chost, osuser in rows:
         is_del = act == "D"
-        old_edit = act == "U" and erp_edits._is_old_edit(act, at, ddt, older)
-        if not (is_del or old_edit):
-            continue
-        area, doc, who = erp_edits.area_label(s, table), dref or rk or "?", usr
+        area, doc, who, pcn, ddoc = erp_edits.area_label(s, table), dref or rk or "?", usr, pc, ddt
         parent = s["parent"].get(table) or s["parent"].get(str(table).upper())
-        if parent:                                         # a detail line: name it by its header document and user
+        if parent:                                         # a detail line: name it by its header document/date/user
             headers.setdefault(table, erp_edits._header_index(con, s, table))
             tn = erp_edits._rowkey_field(rk, "TRANS_NO")
             hd = headers[table].get(tn) if tn else None
             if hd:
-                area, doc, who = erp_edits.area_label(s, parent), hd[0] or doc, who or hd[2]
+                area, doc = erp_edits.area_label(s, parent), hd["doc"] or doc
+                ddoc = ddoc or hd["date"]; who = who or hd["user"]; pcn = pcn or hd["pc"]
+        old_edit = act == "U" and erp_edits._is_old_edit(act, at, ddoc, older)
+        if not (is_del or old_edit):
+            continue
+        who = erp_edits._display_user(who, pcn, chost, osuser, s["generic"])
+        ddt = ddoc
         key = (is_del, doc, who or "")
         if key in seen:                                    # same document already listed (header + its lines)
             continue

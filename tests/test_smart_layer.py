@@ -1259,7 +1259,7 @@ def test_change_feed_records_at_sync_time(env, tmp_path):
         def __init__(s, issues): s.mapping = FM(); s.issues = issues
         def fetch(s, n, since, as_of=None):
             if n == "items":
-                return iter([("I1", "Reed", "pcs", None), ("I2", "Bearing", "pcs", None)])
+                return iter([("I1", "Reed", "pcs", None, None, None), ("I2", "Bearing", "pcs", None, None, None)])
             if n == "store_issues":
                 return iter(s.issues)
             return iter([])
@@ -1684,3 +1684,113 @@ def test_v0156_edits_web_route(env):
     assert code2 == 200 and body2["event_id"] == eid
     # the dashboard payload flags the tab on
     assert web_data.build(con, cfg, END)["edits_installed"] is True
+
+
+def test_v0160_edits_header_fallback_and_user(env):
+    cfg, con = env
+    L = _edits.list_edits(con, cfg)
+    by = {}
+    for r in L["rows"]:
+        by.setdefault(r["doc"].split(" · ")[0], []).append(r)
+    # a LINE-ONLY edit on an old voucher with NO header event resolves its doc/date/user from erp_doc_headers,
+    # and because the resolved date is old, is_old_edit fires (fix #1)
+    pv = by.get("PV-00470")
+    assert pv and pv[0]["doc_date"] and pv[0]["is_old_edit"] and pv[0]["user"] == "acc3"
+    # the store delete was keyed by the DB owner (DOSTEX) -> display user falls back to the PC/host, stripped (fix #3)
+    iss = next(r for r in L["rows"] if r["doc"].startswith("ISS-5233"))
+    assert iss["user"] == "DESKTOP-KUMU41H"
+    # an IC (item swap) change is treated as a material/account change (fix #4)
+    icrow = next((r for r in L["rows"] if r["doc"].startswith("ISS-5240") or "SP-003" in (r["doc"] or "")), None)
+    # the DDT delete carries an IC change -> touches_account
+    dd = [r for r in L["rows"] if r["is_delete"] and r["touches_account"]]
+    assert dd
+    # doc filter matches the RESOLVED document (lines included), not just header rows (fix #2)
+    pv_hits = _edits.list_edits(con, cfg, doc="PV-00470")
+    assert pv_hits["total"] >= 1 and all("PV-00470" in r["doc"] for r in pv_hits["rows"])
+    # user filter matches the resolved display user
+    assert _edits.list_edits(con, cfg, user="acc3")["total"] >= 1
+
+
+# ---- 0.16.0 feature coverage (items 29, 30, 32) ----------------------------------------------------------------
+from smart_layer.web import looms as _looms, purchasing as _purch   # noqa: E402
+
+
+def test_v0160_loom_efficiency_and_scoreboard(env):
+    cfg, con = env
+    lo, hi = _d(2026, 9, 3), END
+    eff = _looms.efficiency(con, cfg, lo, hi)
+    assert eff["rows"] and eff["totals"]["erp_eff"] is not None
+    r0 = eff["rows"][0]
+    assert r0["std_rpm"] is not None                      # loom standards (30c) feed the standard-RPM column
+    assert eff["scoreboard_available"]
+    # day-by-day drill for one loom
+    ld = _looms.loom_days(con, cfg, r0["code"], lo, hi)
+    assert ld["rows"] and ("A" in ld["rows"][0]["erp_shifts"] or ld["rows"][0]["erp_eff"] is not None)
+    # scoreboard for a date: day/night split on BOTH sides (demo maps the monitor's shift)
+    sd = _looms.scoreboard_date(con, cfg, END)
+    assert sd["scb_has_shifts"] and set(sd["scb_shifts"]) >= {"day", "night"}
+    assert sd["totals"]["scb"]["day"] is not None and sd["totals"]["erp_all"] is not None
+    # the compare trend has per-date ERP + scoreboard efficiency
+    tr = _looms.trend(con, cfg, lo, hi)
+    assert tr["rows"] and any(x["erp"] is not None for x in tr["rows"])
+    # the CSV/PDF report builds
+    rep = _looms.efficiency_report(con, cfg, lo, hi)
+    assert rep.columns[0] == "Loom" and rep.rows
+
+
+def test_v0160_purchasing(env):
+    cfg, con = env
+    p = _purch.overview(con, cfg)
+    assert p["installed"] and p["rows"]
+    t = p["tiles"]
+    assert t["po_lines"] >= 1 and (t["rate_diffs"] + t["qty_diffs"]) >= 1    # a planted PO≠GRN difference exists
+    assert any(r["diff"] for r in p["rows"])
+    assert any(not r["received"] for r in p["rows"])                         # a pending (unreceived) PO line
+    # filters
+    assert all(r["diff"] for r in _purch.overview(con, cfg, only="diff")["rows"])
+    assert all(not r["received"] for r in _purch.overview(con, cfg, only="pending")["rows"])
+    assert p["pending_indents"]                                             # an indent with no PO
+    # item drill
+    item = p["rows"][0]["item_code"]
+    d = _purch.item_pos(con, item)
+    assert d["installed"] and d["rows"]
+
+
+def test_v0160_item_heads_in_store_reports(env):
+    cfg, con = env
+    from smart_layer.reports import store_extra
+    # head column + a "By head" summary line appear once items carry heads (item 30e)
+    rep = store_extra.store_expense(con, cfg, _d(2026, 9, 1), END)
+    assert "Head" in rep.columns
+    assert any(str(s).startswith("By head:") for s in rep.summary)
+    un = store_extra.unused_stock(con, cfg, END)
+    assert "Head" in un.columns
+
+
+def test_v0160_set_password_and_grants_missing(tmp_path):
+    # set-password re-seals into .env (plain off-Windows), preserving other keys
+    import getpass
+    from types import SimpleNamespace
+    from smart_layer import cli, config as _cfg
+    (tmp_path / "config.toml").write_text(
+        "[company]\nname='M'\n[erp]\ndriver='sqlite'\npath='demo.db'\nmapping='m.toml'\n[store]\npath='s.db'\n")
+    (tmp_path / "m.toml").write_text('[mapping]\nname="m"\n[entities.items]\nsql="SELECT 1 AS item_code, 1 AS item_name FROM (SELECT 1)"\n')
+    (tmp_path / ".env").write_text("# c\nERP_PASSWORD=old\nKEEP=1\n")
+    cfg = _cfg.load(tmp_path / "config.toml")
+    seq = iter(["newpw", "newpw"])
+    getpass.getpass = lambda *a, **k: next(seq)
+    assert cli.cmd_set_password(cfg, SimpleNamespace(var="ERP_PASSWORD")) == 0
+    txt = (tmp_path / ".env").read_text()
+    assert "ERP_PASSWORD=newpw" in txt and "KEEP=1" in txt and "# c" in txt
+
+
+def test_v0160_scoreboard_web_routes(env):
+    cfg, con = env
+    app = web_server.App(cfg)
+    for p, q in [("/api/scoreboard/live", ""), ("/api/scoreboard", "date=2026-10-02"),
+                 ("/api/scoreboard/trend", ""), ("/api/looms/efficiency", "from=2026-09-03&to=2026-10-02"),
+                 ("/api/purchasing", ""), ("/api/looms/days", "loom=L01&from=2026-09-25&to=2026-10-02")]:
+        code, body, _c, _h = web_server.get_response(app, p, q)
+        assert code == 200 and isinstance(body, dict)
+    # the dashboard payload flags the Purchasing tab on
+    assert web_data.build(con, cfg, END)["purchasing_installed"] is True

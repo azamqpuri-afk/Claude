@@ -64,6 +64,7 @@ DEFAULTS = {
         "pair_minutes": 5,                # "deleted then re-entered" hint: a delete + insert of the same line within this
         "amount_keywords": [],            # EXTRA column-name fragments to treat as money/qty/rate/account (per-ERP names)
         "table_names": {},                # friendly area names per ERP table, e.g. TM = "Voucher" (else a generic label)
+        "generic_users": ["DOSTEX"],      # ERP logins that are really the DB owner, not a person - fall back to PC/host
     },
     "closing": {},                        # the mill's closing method - see smart_layer/textile/method.py
     "pilferage": {},                      # thresholds - see smart_layer/textile/pilferage.py

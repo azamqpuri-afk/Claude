@@ -14,9 +14,15 @@ name = "Dost Textiles ERP (Oracle, DOSTEX)"
 
 # DOSTEX.I is keyed on (ic, uc); like the existing stock scripts, items are taken per item code (ic)
 [entities.items]
+# head / sub-head (item 30e) from the item head tables: I.SC -> ISUBS.SC, ISUBS.HC -> IH.HC (DBSERVER: the SC/HC
+# links are 100%). category is left unmapped (the ERP groups by head/sub-head, not a separate category).
 sql = """
-SELECT ic AS item_code, MAX(idesc) AS item_name, MAX(uom) AS unit
-FROM dostex.i GROUP BY ic
+SELECT i.ic AS item_code, MAX(i.idesc) AS item_name, MAX(i.uom) AS unit,
+       MAX(s.sn) AS sub_head, MAX(h.hn) AS head
+FROM dostex.i i
+LEFT JOIN dostex.isubs s ON s.sc = i.sc
+LEFT JOIN dostex.ih h ON h.hc = s.hc
+GROUP BY i.ic
 """
 
 # Stock from the ERP's own function (verified against SUM(qty) in 32_get_item_stock_verify.sql),
@@ -550,4 +556,82 @@ sql = """
 SELECT event_id AS event_id, column_name AS column_name, old_value AS old_value, new_value AS new_value
 FROM audit_hist.erp_change_values
 WHERE event_id > :since
+"""
+
+# ----- ERP document headers for the Edits tab (item 31 fix) ---------------------------------------------------
+# A changed DETAIL line (TD/DDT) can show its document number, date and who/where even when the header itself was
+# not edited - by looking the header up by TRANS_NO. Scoped to ONLY the TRANS_NOs that appear in the edit history
+# (a join on the row_key's number), so this stays tiny: one row per edited document.
+# NOTE for live verify: SMARTLAYER_RO has SELECT on DMN but NOT on TM/TD. The voucher header is therefore read
+# from ACL (which carries vt, vno, vd, usern, pcn by TRANS_NO) rather than TM. Confirm ACL has TRANS_NO on live.
+[entities.erp_doc_headers]
+sql = """
+SELECT 'TM' AS table_name, TO_CHAR(l.trans_no) AS trans_no,
+       l.vt || '-' || TO_CHAR(l.vno) AS doc_ref, TRUNC(l.vd) AS doc_date, l.usern AS erp_user, l.pcn AS pc_name
+FROM dostex.acl l
+WHERE l.trans_no IN (
+   SELECT TO_NUMBER(REGEXP_SUBSTR(e.row_key, 'TRANS_NO=([0-9]+)', 1, 1, NULL, 1))
+   FROM audit_hist.erp_change_events e WHERE e.table_name IN ('TD','TM') AND e.row_key LIKE 'TRANS_NO=%')
+GROUP BY l.trans_no, l.vt, l.vno, TRUNC(l.vd), l.usern, l.pcn
+UNION ALL
+SELECT 'DMN' AS table_name, TO_CHAR(m.trans_no) AS trans_no,
+       m.dt || '-' || TO_CHAR(m.dno) AS doc_ref, TRUNC(m.dd) AS doc_date, m.usern AS erp_user, m.pcn AS pc_name
+FROM dostex.dmn m
+WHERE m.trans_no IN (
+   SELECT TO_NUMBER(REGEXP_SUBSTR(e.row_key, 'TRANS_NO=([0-9]+)', 1, 1, NULL, 1))
+   FROM audit_hist.erp_change_events e WHERE e.table_name IN ('DDT','DMN') AND e.row_key LIKE 'TRANS_NO=%')
+"""
+
+# ----- Purchasing: indents -> POs -> receipt (item 30b) ------------------------------------------------------
+# NOTE for live verify: INDENTS_MAIN/DETAIL, PO_MAIN/DET need GRANT SELECT to SMARTLAYER_RO (run `grants --missing`).
+# The GRN comparison joins DDT back to the PO line via DDT.REF_PO_TNO/SR/UC = PO_DET.TRANS_NO/SR_NO/UC (DBSERVER:
+# 100% linked). DDT's received qty/rate column names and the SRN filter are best-effort - confirm on live.
+[entities.purchase_indents]
+sql = """
+SELECT TO_CHAR(m.indent_num) AS indent_no, TRUNC(m.indent_date) AS indent_date, TO_CHAR(d.trans_no) AS trans_no,
+       TO_CHAR(d.sr_no) AS sr_no, d.uc AS uc, TO_CHAR(m.dept_code) AS dept, d.item_code AS item_code,
+       d.quantity AS qty, TRUNC(d.required_date) AS required_date, d.purpose AS purpose, m.demand_by AS demand_by,
+       d.approved AS approved
+FROM dostex.indents_detail d
+JOIN dostex.indents_main m ON m.trans_no = d.trans_no AND m.uc = d.uc
+WHERE m.indent_date >= :since
+"""
+
+[entities.purchase_orders]
+sql = """
+SELECT TO_CHAR(m.po_no) AS po_no, TRUNC(m.po_date) AS po_date, TO_CHAR(d.trans_no) AS trans_no,
+       TO_CHAR(d.sr_no) AS sr_no, d.uc AS uc, m.ac AS supplier_code, a.an AS supplier_name, d.ic AS item_code,
+       d.rate AS rate, d.qty AS qty, m.purchaser AS purchaser, m.payment_term AS payment_term,
+       m.fpay_unpay AS paid, TRUNC(m.payment_date) AS payment_date, NULL AS ref_indent_no,
+       TO_CHAR(d.ref_indent_tno) AS ref_indent_trans, TO_CHAR(d.ref_indent_sr) AS ref_indent_sr,
+       g.recv_qty AS received_qty, g.recv_rate AS received_rate, g.recv_date AS received_date, g.grn_no AS grn_no
+FROM dostex.po_det d
+JOIN dostex.po_main m ON m.trans_no = d.trans_no AND m.uc = d.uc AND m.yc = d.yc
+LEFT JOIN dostex.ach a ON a.ac = m.ac
+LEFT JOIN (
+   SELECT dd.ref_po_tno, dd.ref_po_sr, dd.ref_po_uc, SUM(dd.qty) AS recv_qty, MAX(dd.rate) AS recv_rate,
+          MAX(TRUNC(dm.dd)) AS recv_date, MAX(dm.dt || '-' || TO_CHAR(dm.dno)) AS grn_no
+   FROM dostex.ddt dd JOIN dostex.dmn dm ON dm.trans_no = dd.trans_no
+   WHERE dd.ref_po_tno IS NOT NULL
+   GROUP BY dd.ref_po_tno, dd.ref_po_sr, dd.ref_po_uc
+) g ON g.ref_po_tno = d.trans_no AND g.ref_po_sr = d.sr_no AND g.ref_po_uc = d.uc
+WHERE m.po_date >= :since
+"""
+
+# ----- Loom standards (item 30c): standard RPM per loom/period (LOOMS_D has only RPM filled on live) ----------
+[entities.loom_standards]
+sql = """
+SELECT 'L' || LPAD(TO_CHAR(lcode), 2, '0') AS loom_code, TRUNC(fdate) AS from_date, TRUNC(tdate) AS to_date,
+       rpm AS standard_rpm, prd AS production, trg_prd AS target
+FROM dostex.looms_d
+"""
+
+# ----- Yarn purchase contracts (item 30d): YARN_CONT (Dost's are from 2022, so likely stale) -----------------
+[entities.yarn_contracts]
+sql = """
+SELECT TO_CHAR(cont_no) AS contract_no, TRUNC(cont_date) AS contract_date, cont_type AS contract_type,
+       buyer AS buyer, seller AS seller, TO_CHAR(yarn_code) AS yarn_code, TO_CHAR(yarn_code) AS yarn_name,
+       TO_CHAR(brand_code) AS brand, qty AS bags, rate AS rate, TRUNC(last_delivery_date) AS delivery_date,
+       payment_term AS payment_term, status AS status
+FROM dostex.yarn_cont
 """

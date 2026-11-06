@@ -115,6 +115,7 @@ auto_exclude_idle = true   # also drop looms with no production AND stopped the 
 push_older_than_days = 2     # phone-push every DELETE, and any EDIT of an entry older than this many days
 old_edit_days = 2            # highlight edits of entries older than this many days in the Edits tab
 pair_minutes = 5             # "deleted then re-entered" hint: a delete + insert of the same line within this
+# generic_users = ["DOSTEX"] # ERP logins that are really the DB owner (not a person) - show the PC/host instead
 # amount_keywords = []       # EXTRA column-name fragments to treat as money/qty/rate on top of the built-in set
 # [edits.table_names]        # friendly area name per ERP table code (defaults cover TM/TD/DMN/DDT)
 # TM = "Voucher"

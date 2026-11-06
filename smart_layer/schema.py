@@ -48,7 +48,9 @@ ENTITIES = (
         (C("item_code", "TEXT", "Item code as used in the ERP", True),
          C("item_name", "TEXT", "Item description", True),
          C("unit", "TEXT", "Unit of measure (pcs, kg, ltr, m ...)"),
-         C("category", "TEXT", "Item group / category, if the ERP has one")),
+         C("category", "TEXT", "Item group / category, if the ERP has one"),
+         C("head", "TEXT", "Item head (top group, e.g. Loom Parts, Electrical), if the ERP has one (item 30e)"),
+         C("sub_head", "TEXT", "Item sub-head (second-level group), if the ERP has one")),
         key=("item_code",),
     ),
     Entity(
@@ -297,6 +299,8 @@ ENTITIES += (
         "Readings from a loom monitoring system (scoreboard / sensors) per loom per day, independent of the ERP.",
         (C("read_date", "DATE", "Date", True),
          C("loom_code", "TEXT", "Loom (looms.loom_code)", True),
+         C("shift", "TEXT", "Shift (day / night, or the monitor's code) when the monitor reports per shift; "
+                            "blank when it only gives a whole-day figure (then day/night cannot be split)"),
          C("meters", "REAL", "Meters counted by the monitor", True),
          C("efficiency_pct", "REAL", "Efficiency by the monitor"),
          C("rpm", "REAL", "Average speed"),
@@ -508,6 +512,102 @@ ENTITIES += (
          C("column_name", "TEXT", "The ERP column that changed", True),
          C("old_value", "TEXT", "Value before the change (blank for an insert)"),
          C("new_value", "TEXT", "Value after the change (blank for a delete)")),
+    ),
+    Entity(
+        "erp_doc_headers",
+        "Document headers (from the LIVE ERP) for the transactions that appear in the edit history - so a changed "
+        "DETAIL line can show its document number, date and who/where it was keyed even when the header row itself "
+        "was not edited. Optional, pairs with the edit-history entities. The mapping scopes it to only the TRANS_NOs "
+        "present in erp_change_events (a join on the row_key), so it stays small: one row per edited document.",
+        (C("table_name", "TEXT", "The header ERP table (e.g. TM for vouchers, DMN for store documents)", True),
+         C("trans_no", "TEXT", "The header's TRANS_NO (matches the TRANS_NO inside a line's row_key)", True),
+         C("doc_ref", "TEXT", "Human document reference (voucher type-number, store doc type-number)"),
+         C("doc_date", "DATE", "Date on the document"),
+         C("erp_user", "TEXT", "ERP login that keyed the document"),
+         C("pc_name", "TEXT", "PC the document was keyed from")),
+        key=("table_name", "trans_no"),
+    ),
+)
+
+# Purchasing (item 30b), loom standards (30c), yarn purchase contracts (30d). All OPTIONAL add-ons: a mill that
+# does not map them simply has no Purchasing tab / no loom-standard column / no yarn-contracts list. Generic core.
+ENTITIES += (
+    Entity(
+        "purchase_indents",
+        "Store purchase indents (demand raised by a department), one row per indent line. Optional.",
+        (C("indent_no", "TEXT", "Indent number", True),
+         C("indent_date", "DATE", "Indent date", True),
+         C("trans_no", "TEXT", "The ERP transaction id (links a PO line back to its indent)"),
+         C("sr_no", "TEXT", "Line number within the indent"),
+         C("uc", "TEXT", "Unit/company code (part of the ERP key)"),
+         C("dept", "TEXT", "Department that raised it"),
+         C("item_code", "TEXT", "Item code (items.item_code)", True),
+         C("qty", "REAL", "Quantity indented"),
+         C("required_date", "DATE", "Date the item is needed"),
+         C("purpose", "TEXT", "Purpose / comments"),
+         C("demand_by", "TEXT", "Who demanded it"),
+         C("approved", "TEXT", "Approval status")),
+        date_column="indent_date",
+    ),
+    Entity(
+        "purchase_orders",
+        "Purchase orders, one row per PO line, with the matching goods-receipt (GRN) figures where the line has been "
+        "received - so PO rate/qty can be compared against what was actually received, with the supplier's terms. "
+        "received_qty blank = still pending. Optional.",
+        (C("po_no", "TEXT", "PO number", True),
+         C("po_date", "DATE", "PO date", True),
+         C("trans_no", "TEXT", "The ERP transaction id of the PO"),
+         C("sr_no", "TEXT", "Line number within the PO"),
+         C("uc", "TEXT", "Unit/company code (part of the ERP key)"),
+         C("supplier_code", "TEXT", "Supplier account code"),
+         C("supplier_name", "TEXT", "Supplier name"),
+         C("item_code", "TEXT", "Item code (items.item_code)", True),
+         C("rate", "REAL", "PO rate per unit"),
+         C("qty", "REAL", "PO quantity"),
+         C("purchaser", "TEXT", "Purchaser / buyer"),
+         C("payment_term", "TEXT", "Payment term text"),
+         C("paid", "TEXT", "Paid / unpaid status"),
+         C("payment_date", "DATE", "Payment date, if paid"),
+         C("ref_indent_no", "TEXT", "Indent number this PO line fulfils (links to purchase_indents)"),
+         C("ref_indent_trans", "TEXT", "Indent transaction id this PO line references"),
+         C("ref_indent_sr", "TEXT", "Indent line number this PO line references"),
+         C("received_qty", "REAL", "Quantity actually received against this PO line (blank = not received yet)"),
+         C("received_rate", "REAL", "Rate on the goods receipt (to compare with the PO rate)"),
+         C("received_date", "DATE", "Date the goods were received"),
+         C("grn_no", "TEXT", "Goods-receipt (GRN) number, when received")),
+        date_column="po_date",
+    ),
+    Entity(
+        "loom_standards",
+        "Per-loom standard settings by period (from the ERP's loom-detail table): the standard RPM, and the ERP's "
+        "production / target figures where it keeps them (often empty). Optional - used to show efficiency against a "
+        "standard. A 'target' is only shown when the ERP or config provides one; a bare RPM is labelled as RPM.",
+        (C("loom_code", "TEXT", "Loom code (looms.loom_code)", True),
+         C("from_date", "DATE", "Period start"),
+         C("to_date", "DATE", "Period end"),
+         C("standard_rpm", "REAL", "Standard / booked RPM for the loom in this period"),
+         C("production", "REAL", "ERP-kept production figure, if any"),
+         C("target", "REAL", "ERP-kept target figure, if any")),
+        key=("loom_code", "from_date"),
+    ),
+    Entity(
+        "yarn_contracts",
+        "Yarn purchase/sale contracts (count, brand, quantity, rate, delivery) - the buying-side contracts, distinct "
+        "from weaving contracts. Optional; a mill that does not map it has no yarn-contracts list.",
+        (C("contract_no", "TEXT", "Contract number", True),
+         C("contract_date", "DATE", "Contract date"),
+         C("contract_type", "TEXT", "Type (e.g. P = purchase)"),
+         C("buyer", "TEXT", "Buyer account/name"),
+         C("seller", "TEXT", "Seller account/name"),
+         C("yarn_code", "TEXT", "Yarn code"),
+         C("yarn_name", "TEXT", "Yarn / count description"),
+         C("brand", "TEXT", "Brand"),
+         C("bags", "REAL", "Quantity (bags)"),
+         C("rate", "REAL", "Rate"),
+         C("delivery_date", "DATE", "Delivery / last delivery date"),
+         C("payment_term", "TEXT", "Payment term"),
+         C("status", "TEXT", "Status (e.g. RUNNING)")),
+        date_column="contract_date",
     ),
 )
 

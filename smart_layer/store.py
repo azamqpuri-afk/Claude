@@ -113,7 +113,9 @@ def create(con):
                  ("loom_stops", "loom_code"), ("loom_stops", "stop_time"),
                  ("erp_change_events", "event_id"), ("erp_change_events", "changed_at"),
                  ("erp_change_events", "table_name"), ("erp_change_events", "erp_user"),
-                 ("erp_change_values", "event_id")):
+                 ("erp_change_values", "event_id"),
+                 ("purchase_indents", "item_code"), ("purchase_orders", "item_code"),
+                 ("purchase_orders", "po_no"), ("loom_standards", "loom_code")):
         con.execute(f"CREATE INDEX IF NOT EXISTS ix_{t}_{c} ON {t} ({c})")
     con.execute("CREATE TABLE IF NOT EXISTS sync_log (entity TEXT, synced_at TEXT, since TEXT, rows INTEGER)")
     con.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
@@ -144,7 +146,9 @@ FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # c
                 "sized_sets",                                                # the sized-yarn closing count is per set over the contract's life, not a short window
 
                 "ledger_entries",                                            # party ledgers show the opening (old-ERP) balance and full running balance
-                "employee_loans")                                            # a loan given years ago can still be open; its balance = amount - all-time salary deductions
+                "employee_loans",                                            # a loan given years ago can still be open; its balance = amount - all-time salary deductions
+                "purchase_indents", "purchase_orders",                       # "pending" lists need each indent/PO's whole life, not a recent window
+                "yarn_contracts")                                            # a running yarn contract can be old (the Dost ones are from 2022)
 
 # The 5-minute live refresh touches ONLY these fast-changing, window-safe entities. Everything else (ledgers and
 # other entities that carry an all-time "opening" row, attendance, the month-end fabric history) is left to the
@@ -157,7 +161,8 @@ CURSOR_ENTITIES = ("erp_change_events", "erp_change_values")
 
 LIVE_ENTITIES = ("loom_production", "loom_monitor", "loom_monitor_live", "loom_stops", "gate_passes", "stock_balances",
                  "store_issues", "store_receipts", "store_returns", "yarn_stock", "fabric_stock",
-                 "erp_change_events", "erp_change_values",   # edits appear within 5 minutes and drive the edit pushes
+                 "erp_change_events", "erp_change_values", "erp_doc_headers",   # edits appear within 5 min and drive the edit pushes
+                 "purchase_indents", "purchase_orders",        # indents/POs refresh through the day
                  # account_balances is a whole-ledger snapshot (replaced entirely each sync, no date window and no
                  # 'opening' rows), so it is safe to refresh live - this keeps the Overview cash / bank / receivable
                  # / payable balances current every 5 minutes instead of only after the daily sync.

@@ -3,7 +3,8 @@ Command line for Project Smart Layer by Azam Puri.
 
   python -m smart_layer setup                    first-time setup: asks questions, writes config.toml and .env
   python -m smart_layer status                   health of this installation (last sync, dashboard, tasks)
-  python -m smart_layer grants [--user NAME]     SQL to create the read-only database user the mapping needs
+  python -m smart_layer grants [--user NAME] [--missing]  SQL for the read-only DB user (--missing: only tables not yet granted)
+  python -m smart_layer set-password [--var ERP_PASSWORD]  re-enter the ERP password (hidden) and seal it into .env (DPAPI)
   python -m smart_layer machine-id               this server's ID (send it to get a licence)
   python -m smart_layer licence show|install|check [file or code] [--push]
   python -m smart_layer check                    test the ERP connection and mapping
@@ -20,6 +21,7 @@ Use -c to point at a config file (default config.toml).
 
 import argparse
 import calendar
+import os
 import sys
 from datetime import date, timedelta
 
@@ -288,6 +290,31 @@ def cmd_dashboard(cfg, args):
     return 0
 
 
+def _unreadable_tables(cfg, tables):
+    """Of the schema-qualified tables the mapping reads, the ones the configured ERP user CANNOT currently SELECT
+    (missing grant, or the table not created yet). Probes each with a 0-row SELECT through the ERP connection."""
+    unreadable = []
+    try:
+        con, _style = erp.connect(cfg["erp"], cfg.base_dir)
+    except Exception as ex:
+        print(f"-- Could not connect to the ERP to check grants ({ex}); listing all mapped tables instead.")
+        return list(tables)
+    try:
+        cur = con.cursor()
+        for t in tables:
+            try:
+                cur.execute(f"SELECT * FROM {t} WHERE 1=0")   # validates access without reading any rows
+                cur.fetchall()
+            except Exception:
+                unreadable.append(t)
+    finally:
+        try:
+            con.close()
+        except Exception:
+            pass
+    return unreadable
+
+
 def cmd_grants(cfg, args):
     """SQL for the mill's IT person: a read-only database user that can see only what the mapping reads."""
     import re
@@ -299,6 +326,14 @@ def cmd_grants(cfg, args):
              if m.lower() != "dual"}
     tables = sorted(t for t in found if "." in t)          # schema-qualified objects only (grantable with certainty)
     unqualified = sorted(t for t in found if "." not in t)  # CTE/derived aliases or same-schema objects - note, don't grant
+    if getattr(args, "missing", False):                    # keep only the tables the ERP user currently CANNOT read
+        missing = _unreadable_tables(cfg, tables)
+        if not missing:
+            print(f"-- All {len(tables)} mapped table(s) are already readable by the ERP user - no grants needed.")
+            return 0
+        print(f"-- {len(missing)} of {len(tables)} mapped table(s) are NOT yet readable - grant only these:")
+        tables = missing
+        funcs = []                                         # a missing grant is about tables; functions are rarely the blocker
     funcs = sorted({m.lower() for m in re.findall(r"\b([A-Za-z_]\w*\.[A-Za-z_]\w*)\s*\(", erp_sql)
                     if m.split(".")[0].lower() not in {t.split(".")[-1] for t in tables} and "." in m})
     user, driver = args.user, cfg["erp"].get("driver", "oracle")
@@ -333,6 +368,45 @@ def cmd_grants(cfg, args):
             print(f"GRANT SELECT ON {t} TO {user};")
     else:
         print("-- SQLite files have no users: give the service read access to the file only.")
+    return 0
+
+
+def cmd_set_password(cfg, args):
+    """Ask for the ERP password with hidden typing and seal it into .env with DPAPI (machine-bound on Windows), so
+    the owner can re-seal it himself after it was entered in plain text. Off Windows it is written as-is (demo/dev).
+    Only the one variable line is touched; the rest of .env (comments, other keys) is preserved."""
+    import getpass
+    from . import secret
+    var = (getattr(args, "var", None) or "ERP_PASSWORD").strip()
+    base = (cfg.source_path.parent if cfg.source_path else cfg.base_dir)
+    env_path = base / ".env"
+    pw = getpass.getpass(f"Enter the ERP password for {var} (typing is hidden): ")
+    if not pw:
+        print("No password entered - nothing changed.")
+        return 1
+    if getpass.getpass("Re-enter to confirm: ") != pw:
+        print("The two entries did not match - nothing changed.")
+        return 1
+    sealed = secret.seal_secret(pw)
+    lines = []
+    if env_path.exists():
+        from .config import read_text_any
+        lines = read_text_any(env_path).splitlines()
+    out, replaced = [], False
+    for ln in lines:
+        s = ln.strip()
+        if s and not s.startswith("#") and "=" in s and s.split("=", 1)[0].strip() == var:
+            out.append(f"{var}={sealed}")
+            replaced = True
+        else:
+            out.append(ln)
+    if not replaced:
+        out.append(f"{var}={sealed}")
+    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+    where = "sealed with DPAPI (machine-bound)" if (os.name == "nt" and sealed.startswith("DPAPI:")) else "written (plain - not on Windows)"
+    print(f"{var} {where} in {env_path}.")
+    if os.name == "nt":
+        print("The scheduled tasks and the dashboard will use it on their next run.")
     return 0
 
 
@@ -461,6 +535,9 @@ def main(argv=None):
     sub.add_parser("status")
     g = sub.add_parser("grants")
     g.add_argument("--user", default="smartlayer_ro")
+    g.add_argument("--missing", action="store_true", help="print only GRANT lines for tables the ERP user cannot yet read")
+    spw = sub.add_parser("set-password")
+    spw.add_argument("--var", default="ERP_PASSWORD", help="the .env variable to set (default ERP_PASSWORD)")
     args = p.parse_args(argv)
     if args.cmd == "schema":
         print(schema.describe())
@@ -514,7 +591,8 @@ def main(argv=None):
     return {"check": cmd_check, "sync": cmd_sync, "report": cmd_report, "audit": cmd_audit, "ask": cmd_ask, "serve": cmd_serve,
             "dashboard": cmd_dashboard, "autoprofile": cmd_autoprofile, "notify-changes": cmd_notify_changes,
             "morning": cmd_morning, "night-sensor": cmd_night_sensor, "weft-check": cmd_weft_check,
-            "status": cmd_status, "grants": cmd_grants, "licence": cmd_licence}[args.cmd](cfg, args)
+            "status": cmd_status, "grants": cmd_grants, "licence": cmd_licence,
+            "set-password": cmd_set_password}[args.cmd](cfg, args)
 
 
 if __name__ == "__main__":

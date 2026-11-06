@@ -56,7 +56,14 @@ the mapping/config, never the core).
 | 22 | Weft-only consumption by owner-given counts | `report weft-consumption` |
 | 23 | Logo + 6 colour schemes + weave-forming opening animation + thread-to-signal header + colour picker | Overview 🎨 · `[dashboard] colour_scheme` |
 | 24 | Fabric-in-stock history drill (produced / dispatched / returned / rejection / stock per contract) | Overview Dispatched tile · `api/fabric/history` |
-| 31 | ERP edit history → Edits tab: list of every insert/edit/delete, filters (date/user/area/document), click a row for every field old→new, highlights (deletes, old entries, amount/account changes), "re-entered" pairing hint; phone push per delete and per old-entry edit; "edits by user" line in the morning summary | Edits tab · `api/edits` · `erp_change_events`/`erp_change_values` (optional) · `[edits]` |
+| 31 | ERP edit history → Edits tab: list of every insert/edit/delete, filters (date/user/area/document), click a row for every field old→new, highlights (deletes, old entries, amount/account changes), "re-entered" pairing hint; phone push per delete and per old-entry edit; "edits by user" line in the morning summary. Line edits resolve their document/date/user from the header (`erp_doc_headers`); generic DB-owner logins fall back to the PC/host | Edits tab · `api/edits` · `erp_change_events`/`erp_change_values`/`erp_doc_headers` (optional) · `[edits]` |
+| 29 | Scoreboard tab: live running-shift efficiency tile; a date picker showing day vs night efficiency per loom and mill totals; sensor duplicate-timings (swap) verdict live + per day/night; a 30-day compare with date check-boxes | Scoreboard tab · `api/scoreboard*` · `loom_monitor.shift` |
+| 30a | Loom efficiency by date range / ticked dates: per loom ERP eff, scoreboard eff, metres, RPM, standard RPM, stops (sortable); click a loom for its day-by-day; CSV/PDF | Scoreboard tab → By date range · `api/looms/efficiency`, `api/looms/days` |
+| 30b | Store purchasing: indent → PO → receipt; PO rate/qty vs the goods-receipt (differences flagged), supplier terms, paid/unpaid; pending indents / pending POs; per-item PO history | Purchasing tab · `api/purchasing` · `purchase_indents`/`purchase_orders` (optional) |
+| 30c | Loom standard RPM per period shown against efficiency (the ERP's loom-detail table; a real target comes from config/ERP when present) | Scoreboard → By date range · `loom_standards` (optional) |
+| 30d | Yarn purchase contracts (count, brand, qty, rate, delivery, status) | Purchasing → Yarn contracts · `yarn_contracts` (optional) |
+| 30e | Item head / sub-head grouping in the store expense and unused-stock reports (a "by head" breakdown) | Store Room → Store expense / Unused stock · `items.head`/`sub_head` |
+| 32 | `set-password` (hidden entry, DPAPI-sealed into .env) and `grants --missing` (prints only the GRANT lines for tables the read-only user cannot yet read); Morning scheduled task inherits the Daily principal and logs the real licence reason | CLI `set-password`, `grants --missing`; `installer/install_tasks.ps1`, `run_morning.cmd` |
 
 ## Not in the product, and why
 

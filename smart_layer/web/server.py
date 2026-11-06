@@ -428,6 +428,55 @@ class App:
         finally:
             con.close()
 
+    def _looms_call(self, fn, *a):
+        from . import looms
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return getattr(looms, fn)(con, self.cfg, *a)
+        finally:
+            con.close()
+
+    def loom_efficiency(self, d0=None, d1=None, dates=None):
+        return self._looms_call("efficiency", d0, d1, dates)
+
+    def loom_days(self, code, d0=None, d1=None, dates=None):
+        return self._looms_call("loom_days", code, d0, d1, dates)
+
+    def loom_efficiency_report(self, d0=None, d1=None, dates=None):
+        return self._looms_call("efficiency_report", d0, d1, dates)
+
+    def scoreboard_date(self, day=None):
+        return self._looms_call("scoreboard_date", day)
+
+    def scoreboard_trend(self, d0=None, d1=None):
+        return self._looms_call("trend", d0, d1)
+
+    def scoreboard_live(self):
+        """The live running-shift scoreboard efficiency (reuses the Overview tile source) + the sensor live panel."""
+        from . import data as _data, looms
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            live = _data._scb_today(con, self.cfg)
+            return {"live": live, "sensor": looms.sensor_live(con, self.cfg)}
+        finally:
+            con.close()
+
+    def purchasing(self, q="", only="all"):
+        from . import purchasing
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return purchasing.overview(con, self.cfg, q or "", only or "all")
+        finally:
+            con.close()
+
+    def purchasing_item(self, item):
+        from . import purchasing
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return purchasing.item_pos(con, item)
+        finally:
+            con.close()
+
     def edits(self, d0=None, d1=None, user="", area="", action="", doc="", limit=500):
         """The Edits tab list (item 31): ERP edit history, newest first, filtered."""
         from .. import erp_edits
@@ -572,6 +621,9 @@ def get_response(app, path, query, check_licence=True):
                 "/api/manual", "/api/manual/history", "/api/closing/contracts", "/api/closing/sheet",
                 "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
                 "/api/edits", "/api/edits/detail",
+                "/api/looms/efficiency", "/api/looms/days",
+                "/api/scoreboard", "/api/scoreboard/trend", "/api/scoreboard/live",
+                "/api/purchasing", "/api/purchasing/item",
                 "/api/reports/files", "/api/changes"):
         if check_licence:
             st = licence.status(app.cfg)
@@ -644,6 +696,40 @@ def get_response(app, path, query, check_licence=True):
                 sday = None
             return 200, app.month_sales(a0, a1, day=sday, month=params.get("month") or None,
                                         history=(params.get("history") == "1")), "application/json", {}
+        if path in ("/api/looms/efficiency", "/api/looms/days"):   # loom efficiency by date range / ticked dates (#30a)
+            try:
+                a0 = date.fromisoformat(params["from"]) if params.get("from") else None
+                a1 = date.fromisoformat(params["to"]) if params.get("to") else None
+            except ValueError:
+                return 400, {"error": "from/to must be YYYY-MM-DD"}, "application/json", {}
+            picked = [s for s in (params.get("dates", "").split(",")) if s] or None
+            if path == "/api/looms/days":
+                return 200, app.loom_days(params.get("loom", ""), a0, a1, picked), "application/json", {}
+            fmt = params.get("fmt", "json")
+            if fmt in ("pdf", "csv", "xlsx", "excel"):
+                rep = app.loom_efficiency_report(a0, a1, picked)
+                return _report_body(app, rep, "loom-efficiency", date.today().isoformat(), fmt, cell)
+            return 200, app.loom_efficiency(a0, a1, picked), "application/json", {}
+        if path == "/api/scoreboard/live":               # live running-shift scoreboard + sensor live panel (#29)
+            return 200, app.scoreboard_live(), "application/json", {}
+        if path == "/api/scoreboard/trend":              # per-date shed ERP vs scoreboard eff, for the compare panel
+            try:
+                a0 = date.fromisoformat(params["from"]) if params.get("from") else None
+                a1 = date.fromisoformat(params["to"]) if params.get("to") else None
+            except ValueError:
+                return 400, {"error": "from/to must be YYYY-MM-DD"}, "application/json", {}
+            return 200, app.scoreboard_trend(a0, a1), "application/json", {}
+        if path == "/api/scoreboard":                    # one date: per-loom day/night eff + mill totals + sensor verdict
+            try:
+                sday = date.fromisoformat(params["date"]) if params.get("date") else None
+            except ValueError:
+                return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
+            return 200, app.scoreboard_date(sday), "application/json", {}
+        if path == "/api/purchasing/item":               # one item's recent POs (item drill, #30b)
+            d = app.purchasing_item(params.get("item", ""))
+            return 200, d, "application/json", {}
+        if path == "/api/purchasing":                     # indents → PO → GRN: PO-vs-GRN diffs, pending, terms (#30b)
+            return 200, app.purchasing(params.get("q", ""), params.get("only", "all")), "application/json", {}
         if path == "/api/edits/detail":                  # one change event, every field old → new
             d = app.edit_detail(params.get("id", ""))
             return (200, d, "application/json", {}) if d else (404, {"error": "unknown change event"}, "application/json", {})

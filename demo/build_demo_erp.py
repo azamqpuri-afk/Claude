@@ -255,6 +255,7 @@ def build(out, end):
     build_beams(db, lsegs, lday, end)
     build_hr_and_gatepasses(db, start, end, rnd)
     build_edit_history(db, end)
+    build_purchasing(db, start, end, random.Random(23))
     build_scoreboard(out.with_name(out.stem.replace("_erp", "") + "_scoreboard.db"), lday, end)
     db.commit()
     db.close()
@@ -342,42 +343,126 @@ def build_edit_history(db, end):
                                 row_key TEXT, doc_ref TEXT, doc_date TEXT, erp_user TEXT, pc_name TEXT, ip_addr TEXT,
                                 db_user TEXT, os_user TEXT, client_host TEXT, client_ip TEXT, module TEXT);
         CREATE TABLE aud_value (event_id INTEGER, column_name TEXT, old_value TEXT, new_value TEXT);
+        CREATE TABLE aud_doc_header (table_name TEXT, trans_no TEXT, doc_ref TEXT, doc_date TEXT, erp_user TEXT, pc_name TEXT);
     """)
     eid = [0]
 
-    def ev(table, action, row_key, doc_ref, doc_dt, at, user, pc, values=()):
+    def ev(table, action, row_key, doc_ref, doc_dt, at, user, pc, values=(), client_host=None, db_user="DOSTEX"):
         eid[0] += 1
+        ch = client_host or (f"WORKGROUP\\{pc}" if pc else None)
         db.execute("INSERT INTO aud_event VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                    (eid[0], at.isoformat(sep=" "), table, action, row_key, doc_ref, doc_dt.isoformat() if doc_dt else None,
-                    user, pc, "192.168.1." + str(20 + eid[0] % 30), "DOSTEX", user.lower() if user else None,
-                    pc, "192.168.1." + str(20 + eid[0] % 30), "ACCOUNTS.EXE"))
+                    user, pc, "192.168.1." + str(20 + eid[0] % 30), db_user, (user or pc or "op").lower(),
+                    ch, "192.168.1." + str(20 + eid[0] % 30), "ACCOUNTS.EXE"))
         for col, ov, nv in values:
             db.execute("INSERT INTO aud_value VALUES (?,?,?,?)", (eid[0], col, ov, nv))
         return eid[0]
 
+    def hdr(table, trans_no, doc_ref, doc_dt, user, pc):   # the live document behind a line (erp_doc_headers)
+        db.execute("INSERT INTO aud_doc_header VALUES (?,?,?,?,?,?)",
+                   (table, str(trans_no), doc_ref, doc_dt.isoformat(), user, pc))
+
     old_doc = end - timedelta(days=24)               # an "old" document (older than the 2-day window)
     t = datetime.combine(end, dtime(11, 30))
-    # 1) a BP voucher ~24 days old, two line amounts edited (header + two lines). Header first so the lines join to it.
+    # 1) a BP voucher ~24 days old, two line amounts edited (header edited too, so the lines join to the header EVENT)
     ev("TM", "U", "TRANS_NO=90412", "BP-00412", old_doc, t, "acc2", "ACCOUNTS-02")
-    ev("TD", "U", "TRANS_NO=90412;SR_NO=1", "line 1", old_doc, t, None, None,
-       [("DR", "42000", "27000")])
-    ev("TD", "U", "TRANS_NO=90412;SR_NO=2", "line 2", old_doc, t, None, None,
-       [("CR", "-1372159", "-1357159")])
-    # 2) a sale voucher's customer account changed today (account change - shows the account NAME resolution)
+    ev("TD", "U", "TRANS_NO=90412;SR_NO=1", "line 1", old_doc, t, None, None, [("DR", "42000", "27000")])
+    ev("TD", "U", "TRANS_NO=90412;SR_NO=2", "line 2", old_doc, t, None, None, [("CR", "-1372159", "-1357159")])
+    # 2) a sale voucher's customer account changed (account change -> account NAME resolution)
     ev("TM", "U", "TRANS_NO=90455", "SV-00455", end - timedelta(days=1), datetime.combine(end, dtime(12, 10)), "acc1", "ACCOUNTS-01")
     ev("TD", "U", "TRANS_NO=90455;SR_NO=1", "line 1", end - timedelta(days=1), datetime.combine(end, dtime(12, 10)), None, None,
-       [("AC", "1301", "1303")])      # Gul Fabrics -> Kohinoor Home Textiles (demo customer account codes)
-    # 3) a store issue slip deleted days after it was saved (delete + old entry; a delete carries every old field)
-    ev("DMN", "D", "TRANS_NO=70233", "ISS-5233", old_doc, datetime.combine(end, dtime(14, 5)), "store2", "STORE-01",
-       [("DOC_NO", "ISS-5233", ""), ("ITEM", "SP-010", ""), ("QTY", "3", ""), ("AMOUNT", "7950", ""), ("DEPT", "LOOM-06", "")])
-    # 4) a store line deleted then re-entered within a minute (some screens save a line as delete+insert; a pairing hint)
-    ev("DDT", "D", "TRANS_NO=70240;SR_NO=2", "line 2 item SP-003", end, datetime.combine(end, dtime(15, 20, 10)), "store1", "STORE-02",
-       [("ITEM", "SP-003", ""), ("QTY", "40", ""), ("RATE", "9", "")])
-    ev("DDT", "I", "TRANS_NO=70240;SR_NO=2", "line 2 item SP-003", end, datetime.combine(end, dtime(15, 20, 55)), "store1", "STORE-02")
-    # 5) a journal edited TODAY (recent amount change - flagged amount, but NOT "old entry")
+       [("AC", "1301", "1303")])      # Gul Fabrics -> Kohinoor Home Textiles
+    # 3) a store issue slip deleted days after it was saved. erp_user is the DB owner (DOSTEX), so the display user
+    #    must fall back to the PC/host (WORKGROUP\\...-stripped).
+    ev("DMN", "D", "TRANS_NO=70233", "ISS-5233", old_doc, datetime.combine(end, dtime(14, 5)), None, "DESKTOP-KUMU41H",
+       [("DOC_NO", "ISS-5233", ""), ("ITEM", "SP-010", ""), ("QTY", "3", ""), ("AMOUNT", "7950", ""), ("DEPT", "LOOM-06", "")],
+       db_user="DOSTEX")
+    # 4) a store line deleted then re-entered within a minute (delete+insert pair). No header EVENT for 70240 - the
+    #    document/date come from the live document (aud_doc_header), which is what fix #1 added.
+    ev("DDT", "D", "TRANS_NO=70240;SR_NO=2", "line 2 item SP-003", None, datetime.combine(end, dtime(15, 20, 10)), None, "STORE-02",
+       [("IC", "SP-003", ""), ("QTY", "40", ""), ("RATE", "9", "")])
+    ev("DDT", "I", "TRANS_NO=70240;SR_NO=2", "line 2 item SP-003", None, datetime.combine(end, dtime(15, 20, 55)), None, "STORE-02")
+    hdr("DMN", 70240, "ISS-5240", end, "store1", "STORE-02")
+    # 5) a journal edited TODAY (recent amount change - flagged amount, but NOT old)
     ev("TM", "U", "TRANS_NO=90460", "JV-00460", end, datetime.combine(end, dtime(16, 40)), "acc1", "ACCOUNTS-01")
-    ev("TD", "U", "TRANS_NO=90460;SR_NO=1", "line 1", end, datetime.combine(end, dtime(16, 40)), None, None,
-       [("DR", "85000", "90000")])
+    ev("TD", "U", "TRANS_NO=90460;SR_NO=1", "line 1", end, datetime.combine(end, dtime(16, 40)), None, None, [("DR", "85000", "90000")])
+    # 6) a LINE-ONLY edit on an OLD voucher with NO header event: doc number / date / user must come from the live
+    #    document (aud_doc_header), and because that date is old, is_old_edit must fire off the resolved date (fix #1).
+    ev("TD", "U", "TRANS_NO=90470;SR_NO=3", "line 3", None, datetime.combine(end, dtime(17, 15)), None, None,
+       [("DR", "60000", "48000")])
+    hdr("TM", 90470, "PV-00470", old_doc, "acc3", "ACCOUNTS-03")
+
+
+PLANTED += """
+  purchasing (item 30b)
+           - a few PO lines received at a higher rate than the PO (PO≠GRN rate difference)
+           - a PO line received short (qty difference) and two PO lines still not received (pending)
+           - an unpaid PO; one indent line with no PO raised (pending indent)"""
+
+
+def build_purchasing(db, start, end, rnd):
+    """A small fictional purchasing chain (indents -> POs -> receipt) + loom standards + yarn contracts, so the
+    Purchasing tab, the standard-RPM column and the yarn-contracts list have demo data."""
+    db.executescript("""
+        CREATE TABLE indent_hdr (indent_no TEXT, indent_dt TEXT, dept TEXT, trans_no TEXT, usern TEXT);
+        CREATE TABLE indent_dtl (trans_no TEXT, sr_no TEXT, item_code TEXT, qty REAL, required_dt TEXT, purpose TEXT);
+        CREATE TABLE po_hdr (po_no TEXT, po_dt TEXT, trans_no TEXT, supplier TEXT, purchaser TEXT, pay_term TEXT, paid TEXT, pay_dt TEXT);
+        CREATE TABLE po_dtl (trans_no TEXT, sr_no TEXT, item_code TEXT, rate REAL, qty REAL, ref_indent_trans TEXT,
+                             ref_indent_sr TEXT, recv_qty REAL, recv_rate REAL, recv_dt TEXT, grn_no TEXT);
+        CREATE TABLE looms_d (lcode TEXT, fdate TEXT, tdate TEXT, rpm REAL, prd REAL, trg REAL);
+        CREATE TABLE yarn_cont (cont_no TEXT, cont_dt TEXT, ctype TEXT, buyer TEXT, seller TEXT, yarn TEXT,
+                                brand TEXT, bags REAL, rate REAL, delivery_dt TEXT, pay_term TEXT, status TEXT);
+    """)
+    sup = {"SPARES": ("V01", "Faisal Mill Stores"), "CHEMICAL": ("V03", "Chenab Chemicals"),
+           "LUBRICANT": ("V04", "Punjab Bearings House"), "PACKING": ("V05", "Madina Packages"),
+           "ELECTRICAL": ("V06", "Star Electric Co"), "GENERAL": ("V01", "Faisal Mill Stores")}
+    buyers = ["Imran (Purchase)", "Kashif (Purchase)"]
+    terms = ["30 days", "15 days", "Advance", "On delivery"]
+    tno = 50000
+    for i, (code, name, unit, grp, rate, monthly, per_loom) in enumerate(ITEMS):
+        if rnd.random() < 0.45:
+            continue
+        tno += 1
+        d = end - timedelta(days=rnd.randint(2, 120))
+        itno = str(900000 + tno)
+        db.execute("INSERT INTO indent_hdr VALUES (?,?,?,?,?)",
+                   (f"IND-{tno}", d.isoformat(), rnd.choice(["WEAVING", "MAINT", "STORE"]), itno, "store1"))
+        db.execute("INSERT INTO indent_dtl VALUES (?,?,?,?,?,?)",
+                   (itno, "1", code, monthly, (d + timedelta(days=7)).isoformat(), "stock replenishment"))
+        # most indents get a PO; leave ~1 in 6 without (a pending indent)
+        if rnd.random() < 0.84:
+            po_rate = round(rate * rnd.uniform(0.96, 1.05), 2)
+            po_qty = round(monthly * rnd.uniform(1.0, 1.6))
+            paid = rnd.choice(["PAID", "PAID", "PAID", "UNPAID"])
+            pod = d + timedelta(days=rnd.randint(0, 3))
+            db.execute("INSERT INTO po_hdr VALUES (?,?,?,?,?,?,?,?)",
+                       (f"PO-{tno}", pod.isoformat(), str(tno), sup[grp][0], rnd.choice(buyers), rnd.choice(terms),
+                        paid, (pod + timedelta(days=rnd.randint(5, 40))).isoformat() if paid == "PAID" else None))
+            # receipt: most received, some with a rate or qty difference, a couple still pending
+            roll = rnd.random()
+            if roll < 0.15:                               # pending (not received)
+                rq = rr = rdt = grn = None
+            else:
+                rr = round(po_rate * (rnd.uniform(1.05, 1.18) if roll < 0.35 else 1.0), 2)   # higher-rate receipts
+                rq = round(po_qty * (rnd.uniform(0.80, 0.95) if 0.35 <= roll < 0.5 else 1.0))  # short receipts
+                rdt = (pod + timedelta(days=rnd.randint(2, 20))).isoformat()
+                grn = f"GRN-{6000 + tno}"
+            db.execute("INSERT INTO po_dtl VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                       (str(tno), "1", code, po_rate, po_qty, itno, "1", rq, rr, rdt, grn))
+    # loom standards: one current period per loom, RPM only (like the real LOOMS_D - no real target)
+    fy0, fy1 = date(end.year if end.month >= 7 else end.year - 1, 7, 1), None
+    fy1 = date(fy0.year + 1, 6, 30)
+    for n in range(1, LOOMS + 1):
+        db.execute("INSERT INTO looms_d VALUES (?,?,?,?,?,?)",
+                   (f"L{n:02d}", fy0.isoformat(), fy1.isoformat(), rnd.choice([520, 560, 600, 210, 230]), None, None))
+    # a few yarn purchase contracts (like YARN_CONT - older, running)
+    for i in range(1, 7):
+        cd = start - timedelta(days=rnd.randint(0, 120))
+        db.execute("INSERT INTO yarn_cont VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (f"YC-{100 + i}", cd.isoformat(), "P", rnd.choice(["C01", "C02"]), rnd.choice(["Nishat", "Sapphire", "Gul Ahmed"]),
+                    rnd.choice(["30/1 CTN", "40/1 CTN", "20/1 CTN"]), rnd.choice(["NISHAT", "SAPPHIRE"]),
+                    rnd.choice([50, 100, 200, 300]), round(rnd.uniform(600, 950)), (cd + timedelta(days=30)).isoformat(),
+                    rnd.choice(terms), "RUNNING"))
 
 
 YARNS = [("Y60", "60/1 CTN", 60), ("Y40", "40/1 CTN", 40), ("Y20", "20/1 CTN", 20)]
@@ -582,15 +667,21 @@ def build_scoreboard(path, lday, end):
     if path.exists():
         path.unlink()
     sb = sqlite3.connect(path)
-    sb.execute("CREATE TABLE olms_day (loom_no INTEGER, dt TEXT, mtrs REAL, eff REAL, rpm REAL, stops INTEGER)")
+    # one row per loom, date AND shift (1 = day, 2 = night) - like the real scoreboard's RTLSUM.PSHIFT, so the
+    # Scoreboard tab can split day vs night. Whole-day aggregates still work (callers group by loom + date).
+    sb.execute("CREATE TABLE olms_day (loom_no INTEGER, dt TEXT, pshift INTEGER, mtrs REAL, eff REAL, rpm REAL, stops INTEGER, dur_sec REAL)")
     for (n, d), m in sorted(lday.items()):
         if m <= 0:
             continue
         counted = m * rnd.uniform(0.97, 1.03)
         if d > end - timedelta(days=14):
             counted *= 1.35 if n == 15 else (1 / 1.4 if n == 22 else 1)
-        sb.execute("INSERT INTO olms_day VALUES (?,?,?,?,?,?)", (n, d.isoformat(), round(counted, 1), round(rnd.uniform(80, 92), 1),
-                                                                 rnd.choice([520, 600]), rnd.randint(20, 90)))
+        rpm = rnd.choice([520, 600])
+        for sh, share, effc in ((1, rnd.uniform(0.48, 0.56), rnd.uniform(82, 92)), (2, None, rnd.uniform(78, 90))):
+            frac = share if share is not None else 1.0  # night gets the remainder
+            cm = counted * (frac if sh == 1 else (1 - 0.52))
+            sb.execute("INSERT INTO olms_day VALUES (?,?,?,?,?,?,?,?)",
+                       (n, d.isoformat(), sh, round(cm, 1), round(effc, 1), rpm, rnd.randint(10, 45), 12 * 3600))
     # the CURRENT (running) shift, one row per loom, as the scoreboard screen shows it now. Looms 10 & 12 are idle
     # (0 picks, stopped the whole shift) and must be excluded from the shed efficiency; one loom runs genuinely slow
     # but is NOT idle and must stay in.

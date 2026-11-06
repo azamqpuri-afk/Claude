@@ -345,6 +345,7 @@ def build(con, cfg, as_of=None):
         "now": datetime.now().isoformat(sep=" ", timespec="seconds"),   # server clock, for the "Live HH:MM" display
         "change_cursor": _change_cursor(con),           # the change_log id to pass back as `since` on the next refresh
         "edits_installed": _edits_installed(con),        # show the Edits tab only when the ERP change-history layer is present
+        "purchasing_installed": _purchasing_installed(con),  # show the Indents & POs view only when those entities are mapped
         "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound", "colour_scheme")},
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "kpis": {
@@ -388,6 +389,14 @@ def _edits_installed(con):
     from .. import erp_edits
     try:
         return erp_edits.installed(con)
+    except Exception:
+        return False
+
+
+def _purchasing_installed(con):
+    from . import purchasing
+    try:
+        return purchasing.installed(con)
     except Exception:
         return False
 

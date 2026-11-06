@@ -41,16 +41,32 @@ def store_expense(con, cfg, d0=None, d1=None):
     ret = dict(con.execute("SELECT item_code, SUM(amount) FROM store_returns WHERE doc_date BETWEEN ? AND ? GROUP BY item_code",
                            (d0.isoformat(), d1.isoformat())))
     names = {c: n for c, n in con.execute("SELECT item_code, item_name FROM items")}
+    heads = _item_heads(con)                              # item_code -> head (item 30e); {} when the ERP has no heads
     rows = []
     for code in set(iss) | set(ret):
         i, r = round(iss.get(code, 0) or 0), round(ret.get(code, 0) or 0)
-        rows.append([names.get(code, code), code, i, r, i - r])
-    rows.sort(key=lambda x: -x[4])
-    ti, tr = sum(r[2] for r in rows), sum(r[3] for r in rows)
+        rows.append([names.get(code, code), code, heads.get(code, ""), i, r, i - r])
+    rows.sort(key=lambda x: -x[5])
+    ti, tr = sum(r[3] for r in rows), sum(r[4] for r in rows)
     summary = [f"{d0:%d-%b-%Y} to {d1:%d-%b-%Y}: issued {cur} {ti:,.0f}, returned {cur} {tr:,.0f}, "
                f"NET store expense {cur} {ti - tr:,.0f} over {len(rows)} items."]
+    if heads:                                            # a "by head" breakdown line when the ERP groups items by head
+        by_head = {}
+        for rr in rows:
+            by_head[rr[2] or "—"] = by_head.get(rr[2] or "—", 0) + rr[5]
+        top = sorted(by_head.items(), key=lambda x: -x[1])[:6]
+        summary.append("By head: " + " · ".join(f"{h} {cur} {v:,.0f}" for h, v in top))
     return Report(f"Store expense - {d0:%d-%b-%Y} to {d1:%d-%b-%Y}",
-                  ["Item", "Code", f"Issued {cur}", f"Returned {cur}", f"Net {cur}"], rows, summary)
+                  ["Item", "Code", "Head", f"Issued {cur}", f"Returned {cur}", f"Net {cur}"], rows, summary)
+
+
+def _item_heads(con):
+    """item_code -> head name, when the items master carries an item head (item 30e). {} if the column is empty."""
+    try:
+        out = {c: h for c, h in con.execute("SELECT item_code, head FROM items WHERE head IS NOT NULL AND TRIM(head) <> ''")}
+        return out
+    except Exception:
+        return {}
 
 
 def issue_slips(con, cfg, d0=None, d1=None):
@@ -88,6 +104,7 @@ def unused_stock(con, cfg, as_of=None):
     stock = dict(con.execute("SELECT item_code, SUM(qty) FROM stock_balances GROUP BY item_code"))
     last_issue = dict(con.execute("SELECT item_code, MAX(doc_date) FROM store_issues GROUP BY item_code"))
     names = {c: n for c, n in con.execute("SELECT item_code, item_name FROM items")}
+    heads = _item_heads(con)                              # item 30e
     rows = []
     for code, qty in stock.items():
         if (qty or 0) <= 0:
@@ -99,13 +116,19 @@ def unused_stock(con, cfg, as_of=None):
                             ORDER BY doc_date DESC, doc_no DESC LIMIT 1""", (code,)).fetchone()
         rate = lp[1] if lp else None
         value = round((qty or 0) * rate) if rate else None
-        rows.append([names.get(code, code), code, round(qty, 2), li or "never", lp[0] if lp else None,
+        rows.append([names.get(code, code), code, heads.get(code, ""), round(qty, 2), li or "never", lp[0] if lp else None,
                      round(rate) if rate else None, value])
-    rows.sort(key=lambda x: -(x[6] or 0))
-    total = sum((r[6] or 0) for r in rows)
+    rows.sort(key=lambda x: -(x[7] or 0))
+    total = sum((r[7] or 0) for r in rows)
     summary = [f"{len(rows)} item(s) in stock with no issue for {months}+ months, tying up about {cur} {total:,.0f}."]
+    if heads:
+        by_head = {}
+        for rr in rows:
+            by_head[rr[2] or "—"] = by_head.get(rr[2] or "—", 0) + (rr[7] or 0)
+        top = sorted(by_head.items(), key=lambda x: -x[1])[:6]
+        summary.append("By head: " + " · ".join(f"{h} {cur} {v:,.0f}" for h, v in top))
     return Report(f"Unused stock ({months}+ months) - {as_of:%d-%b-%Y}",
-                  ["Item", "Code", "Stock", "Last issued", "Last bought", f"Last rate {cur}", f"Value {cur}"], rows, summary)
+                  ["Item", "Code", "Head", "Stock", "Last issued", "Last bought", f"Last rate {cur}", f"Value {cur}"], rows, summary)
 
 
 def _is_loom(to, loomset):

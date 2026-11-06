@@ -154,7 +154,7 @@ def _sha256(path):
 # SHA-256 of the exact demo database that ships with the app (demo/demo_erp.db). Baked in so the check does not
 # depend on a reference file being present (the compiled build may not carry one). Regenerating the demo DB changes
 # this; the shipped file is fixed in git.
-DEMO_SHA256 = "83485bdf5bc5626f8357c36d46f4dd22acfa33b63c0ec138d7ef43f465410ec1"
+DEMO_SHA256 = "841165a528c720d62b3528f2232adb3ebd95bd77a630427023cf8d056da687c2"
 _demo_hash_cache = {}
 
 

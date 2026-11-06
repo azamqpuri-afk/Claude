@@ -10,7 +10,11 @@ name = "MillPro ERP (demo) - Sitara Weaving"
 
 [entities.items]
 sql = """
-SELECT itm_id AS item_code, itm_desc AS item_name, uom_cd AS unit, grp_cd AS category
+SELECT itm_id AS item_code, itm_desc AS item_name, uom_cd AS unit, grp_cd AS category,
+       CASE grp_cd WHEN 'SPARES' THEN 'Loom Parts' WHEN 'ELECTRICAL' THEN 'Electrical'
+                   WHEN 'CHEMICAL' THEN 'Sizing & Chemicals' WHEN 'LUBRICANT' THEN 'Lubricants'
+                   WHEN 'PACKING' THEN 'Packing' ELSE 'General' END AS head,
+       grp_cd AS sub_head
 FROM inv_item_master
 """
 
@@ -212,8 +216,9 @@ WHERE m.mv_dt >= :since
 [entities.loom_monitor]
 source = "scoreboard"
 sql = """
-SELECT dt AS read_date, 'L' || printf('%02d', loom_no) AS loom_code, mtrs AS meters, eff AS efficiency_pct, rpm AS rpm,
-       stops AS stops
+SELECT dt AS read_date, 'L' || printf('%02d', loom_no) AS loom_code,
+       CASE pshift WHEN 1 THEN 'day' WHEN 2 THEN 'night' ELSE CAST(pshift AS TEXT) END AS shift,
+       mtrs AS meters, eff AS efficiency_pct, rpm AS rpm, stops AS stops, dur_sec AS shift_sec
 FROM olms_day WHERE dt >= :since
 """
 
@@ -278,4 +283,45 @@ FROM aud_event WHERE event_id > :since
 sql = """
 SELECT event_id AS event_id, column_name AS column_name, old_value AS old_value, new_value AS new_value
 FROM aud_value WHERE event_id > :since
+"""
+
+[entities.erp_doc_headers]
+sql = """
+SELECT table_name AS table_name, trans_no AS trans_no, doc_ref AS doc_ref, doc_date AS doc_date,
+       erp_user AS erp_user, pc_name AS pc_name
+FROM aud_doc_header
+"""
+
+# Purchasing (item 30b), loom standards (30c), yarn contracts (30d) - demo tables.
+[entities.purchase_indents]
+sql = """
+SELECT h.indent_no AS indent_no, h.indent_dt AS indent_date,
+       d.trans_no AS trans_no, d.sr_no AS sr_no, 'A' AS uc, h.dept AS dept, d.item_code AS item_code,
+       d.qty AS qty, d.required_dt AS required_date, d.purpose AS purpose, h.usern AS demand_by, 'Y' AS approved
+FROM indent_dtl d JOIN indent_hdr h ON h.trans_no = d.trans_no WHERE h.indent_dt >= :since
+"""
+
+[entities.purchase_orders]
+sql = """
+SELECT h.po_no AS po_no, h.po_dt AS po_date, d.trans_no AS trans_no, d.sr_no AS sr_no, 'A' AS uc,
+       h.supplier AS supplier_code, b.bp_name AS supplier_name, d.item_code AS item_code, d.rate AS rate, d.qty AS qty,
+       h.purchaser AS purchaser, h.pay_term AS payment_term, h.paid AS paid, h.pay_dt AS payment_date,
+       NULL AS ref_indent_no, d.ref_indent_trans AS ref_indent_trans, d.ref_indent_sr AS ref_indent_sr,
+       d.recv_qty AS received_qty, d.recv_rate AS received_rate, d.recv_dt AS received_date, d.grn_no AS grn_no
+FROM po_dtl d JOIN po_hdr h ON h.trans_no = d.trans_no LEFT JOIN bp_partner b ON b.bp_id = h.supplier
+WHERE h.po_dt >= :since
+"""
+
+[entities.loom_standards]
+sql = """
+SELECT lcode AS loom_code, fdate AS from_date, tdate AS to_date, rpm AS standard_rpm, prd AS production, trg AS target
+FROM looms_d
+"""
+
+[entities.yarn_contracts]
+sql = """
+SELECT cont_no AS contract_no, cont_dt AS contract_date, ctype AS contract_type, buyer AS buyer, seller AS seller,
+       yarn AS yarn_code, yarn AS yarn_name, brand AS brand, bags AS bags, rate AS rate, delivery_dt AS delivery_date,
+       pay_term AS payment_term, status AS status
+FROM yarn_cont WHERE cont_dt >= :since
 """

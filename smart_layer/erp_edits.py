@@ -59,8 +59,29 @@ def _settings(cfg):
     parent = dict(LINE_PARENT)
     parent.update({str(k): str(v) for k, v in (e.get("line_parent") or {}).items()})
     money = set(MONEY_WORDS) | {str(w).lower() for w in (e.get("amount_keywords") or [])}
-    return {"areas": areas, "parent": parent, "money": money,
+    generic = {str(u).strip().upper() for u in (e.get("generic_users") or ["DOSTEX"])}
+    return {"areas": areas, "parent": parent, "money": money, "generic": generic,
             "old_days": int(e.get("old_edit_days", 2) or 0), "pair_minutes": int(e.get("pair_minutes", 5) or 0)}
+
+
+def _strip_host(v):
+    """'WORKGROUP\\DESKTOP-KUMU41H' -> 'DESKTOP-KUMU41H'; a plain name passes through."""
+    s = str(v or "").strip()
+    return s.rsplit("\\", 1)[-1] if "\\" in s else s
+
+
+def _display_user(user, pc, client_host, os_user, generic):
+    """Who to show. The store module stamps the DB owner (e.g. DOSTEX) on every row, which says nothing about the
+    person, so when the user is blank or a generic owner, fall back to the PC, then the client host, then the OS
+    user - whichever first identifies the workstation."""
+    u = str(user or "").strip()
+    if u and u.upper() not in (generic or set()):
+        return u
+    for cand in (pc, _strip_host(client_host), os_user):
+        c = str(cand or "").strip()
+        if c:
+            return _strip_host(c)
+    return u or "—"
 
 
 def _col_is(col, words):
@@ -159,17 +180,20 @@ def _change_summary(settings, vals, names):
     pieces, touches_money, touches_account = [], False, False
     for col, ov, nv in vals:
         money = _col_is(col, settings["money"])
-        acct = _col_is(col, ACCOUNT_WORDS)
+        item = _col_is(col, ITEM_WORDS)
+        acct = _col_is(col, ACCOUNT_WORDS) or item     # an item swap (IC) is as material as an account change
         touches_money = touches_money or money
         touches_account = touches_account or acct
-        nm = names if (acct or _col_is(col, ITEM_WORDS)) else None
+        nm = names if acct else None
         pieces.append(f"{col} {_fmt_val(ov, nm)} → {_fmt_val(nv, nm)}")
     return "; ".join(pieces[:8]) + (" …" if len(pieces) > 8 else ""), touches_money, touches_account
 
 
 def _header_index(con, settings, table):
-    """For a detail table (TD/DDT), map TRANS_NO -> (doc_ref, doc_date, erp_user) from its header table's events,
-    so a line edit can show the voucher/document number, its date and who keyed the header."""
+    """For a detail table (TD/DDT), map TRANS_NO -> {doc, date, user, pc} so a line edit can show its document
+    number, date, who and where. Two sources, in order: the header's OWN change events (when the header was edited
+    too), then the live-document entity erp_doc_headers (the header still in the ERP even when only lines changed -
+    this is what makes the doc/date/user resolve for a line-only edit, and lets is_old_edit fire)."""
     parent = settings["parent"].get(table) or settings["parent"].get(str(table).upper())
     if not parent:
         return {}
@@ -178,8 +202,23 @@ def _header_index(con, settings, table):
             "SELECT row_key, doc_ref, doc_date, erp_user FROM erp_change_events WHERE table_name = ? OR table_name = ?",
             (parent, parent.upper())):
         tn = _rowkey_field(rk, "TRANS_NO")
-        if tn:
-            idx.setdefault(tn, (dref, ddt, usr))           # first header row wins; they share the TRANS_NO's doc
+        if tn and tn not in idx:
+            idx[tn] = {"doc": dref, "date": ddt, "user": usr, "pc": None}
+    try:
+        for tn, dref, ddt, usr, pc in con.execute(
+                "SELECT trans_no, doc_ref, doc_date, erp_user, pc_name FROM erp_doc_headers "
+                "WHERE table_name = ? OR table_name = ?", (parent, parent.upper())):
+            tn = str(tn)
+            cur = idx.get(tn)
+            if cur is None:
+                idx[tn] = {"doc": dref, "date": ddt, "user": usr, "pc": pc}
+            else:                                          # fill gaps the header event did not carry
+                cur["doc"] = cur["doc"] or dref
+                cur["date"] = cur["date"] or ddt
+                cur["user"] = cur["user"] or usr
+                cur["pc"] = cur["pc"] or pc
+    except Exception:
+        pass                                               # erp_doc_headers not mapped -> header events only
     return idx
 
 
@@ -189,50 +228,58 @@ def list_edits(con, cfg, d0=None, d1=None, user=None, area=None, action=None, do
     if not installed(con):
         return {"installed": False, "rows": [], "users": [], "areas": [], "total": 0}
     s = _settings(cfg)
+    # date / area / action narrow in SQL; doc and user are matched AFTER resolution (a line's doc/user come from its
+    # header, so filtering the raw columns would miss them - DBSERVER's live finding).
     where, params = [], []
     if d0:
         where.append("substr(changed_at,1,10) >= ?"); params.append(d0.isoformat() if hasattr(d0, "isoformat") else str(d0))
     if d1:
         where.append("substr(changed_at,1,10) <= ?"); params.append(d1.isoformat() if hasattr(d1, "isoformat") else str(d1))
-    if user:
-        where.append("erp_user = ?"); params.append(user)
     if area:
         where.append("table_name = ?"); params.append(area)
     if action:
         where.append("action = ?"); params.append(str(action)[:1].upper())
-    if doc:
-        where.append("(doc_ref LIKE ? OR row_key LIKE ?)"); params += [f"%{doc}%", f"%{doc}%"]
     wsql = (" WHERE " + " AND ".join(where)) if where else ""
-    total = con.execute(f"SELECT COUNT(*) FROM erp_change_events{wsql}", params).fetchone()[0]
+    CAP = 6000                                             # resolve at most this many recent matching events
     rows = con.execute(
-        f"SELECT event_id, changed_at, table_name, action, row_key, doc_ref, doc_date, erp_user, pc_name "
-        f"FROM erp_change_events{wsql} ORDER BY event_id DESC LIMIT ?", [*params, int(limit)]).fetchall()
+        f"SELECT event_id, changed_at, table_name, action, row_key, doc_ref, doc_date, erp_user, pc_name, "
+        f"client_host, os_user FROM erp_change_events{wsql} ORDER BY event_id DESC LIMIT ?", [*params, CAP]).fetchall()
     names = _resolve_names(con)
     vals = _values(con, [r[0] for r in rows])
     headers = {}                                           # table -> TRANS_NO header index (built lazily per table)
+    doc_q = str(doc).lower() if doc else None
+    user_q = str(user).lower() if user else None
     out = []
-    for eid, at, table, act, rk, dref, ddt, usr, pc in rows:
+    for eid, at, table, act, rk, dref, ddt, usr, pc, chost, osuser in rows:
         s_area = area_label(s, table)
-        # resolve the document and (for detail lines) the user from the header when the line has none
-        doc_txt, doc_date, who = dref, ddt, usr
+        # resolve the document, date, user and PC - for a detail line, from its header (event or live document)
+        doc_txt, doc_date, who, pcn = dref, ddt, usr, pc
         if table in s["parent"] or str(table).upper() in s["parent"]:
             headers.setdefault(table, _header_index(con, s, table))
             tn = _rowkey_field(rk, "TRANS_NO")
             hd = headers[table].get(tn) if tn else None
             if hd:
-                doc_txt = f"{hd[0]} · {dref}" if (dref and hd[0]) else (hd[0] or dref)
-                doc_date = doc_date or hd[1]
-                who = who or hd[2]
+                doc_txt = f"{hd['doc']} · {dref}" if (dref and hd["doc"]) else (hd["doc"] or dref)
+                doc_date = doc_date or hd["date"]
+                who = who or hd["user"]
+                pcn = pcn or hd["pc"]
+        who = _display_user(who, pcn, chost, osuser, s["generic"])
+        if doc_q and doc_q not in str(doc_txt or "").lower() and doc_q not in str(rk or "").lower():
+            continue
+        if user_q and user_q not in str(who or "").lower():
+            continue
         summary, touches_money, touches_account = _change_summary(s, vals.get(eid, []), names)
         old_edit = _is_old_edit(act, at, doc_date, s["old_days"])
         out.append({
             "event_id": eid, "at": str(at)[:19] if at else None, "table": table, "area": s_area,
             "action": act, "action_word": ACTION_WORD.get(act, act), "row_key": rk,
-            "doc": doc_txt, "doc_date": str(doc_date)[:10] if doc_date else None, "user": who or "—",
-            "pc": pc or None, "summary": summary, "fields": len(vals.get(eid, [])),
+            "doc": doc_txt, "doc_date": str(doc_date)[:10] if doc_date else None, "user": who,
+            "pc": _strip_host(pcn) or None, "summary": summary, "fields": len(vals.get(eid, [])),
             "is_delete": act == "D", "is_old_edit": old_edit,
             "touches_amount": touches_money or touches_account, "touches_account": touches_account,
         })
+    total = len(out)
+    out = out[:int(limit)]
     _mark_pairs(out, s["pair_minutes"])
     users = [r[0] for r in con.execute(
         "SELECT DISTINCT erp_user FROM erp_change_events WHERE erp_user IS NOT NULL AND TRIM(erp_user) <> '' ORDER BY 1")]
@@ -288,13 +335,23 @@ def detail(con, cfg, event_id):
     for col, ov, nv in vals:
         nm = names if _col_is(col, ACCOUNT_WORDS) or _col_is(col, ITEM_WORDS) else None
         fields.append({"column": col, "old": _fmt_val(ov, nm), "new": _fmt_val(nv, nm),
-                       "material": _col_is(col, s["money"]) or _col_is(col, ACCOUNT_WORDS)})
+                       "material": _col_is(col, s["money"]) or _col_is(col, ACCOUNT_WORDS) or _col_is(col, ITEM_WORDS)})
+    # resolve the document / date / user / PC from the header for a detail line (same as the list)
+    doc_txt, doc_date, who, pcn = ev["doc_ref"], ev["doc_date"], ev["erp_user"], ev["pc_name"]
+    table = ev["table_name"]
+    if table in s["parent"] or str(table).upper() in s["parent"]:
+        tn = _rowkey_field(ev["row_key"], "TRANS_NO")
+        hd = _header_index(con, s, table).get(tn) if tn else None
+        if hd:
+            doc_txt = f"{hd['doc']} · {ev['doc_ref']}" if (ev["doc_ref"] and hd["doc"]) else (hd["doc"] or ev["doc_ref"])
+            doc_date = doc_date or hd["date"]; who = who or hd["user"]; pcn = pcn or hd["pc"]
+    who = _display_user(who, pcn, ev["client_host"], ev["os_user"], s["generic"])
     return {
         "event_id": ev["event_id"], "at": str(ev["changed_at"])[:19] if ev["changed_at"] else None,
         "table": ev["table_name"], "area": area_label(s, ev["table_name"]),
         "action": ev["action"], "action_word": ACTION_WORD.get(ev["action"], ev["action"]),
-        "row_key": ev["row_key"], "doc": ev["doc_ref"], "doc_date": str(ev["doc_date"])[:10] if ev["doc_date"] else None,
-        "user": ev["erp_user"] or "—", "pc": ev["pc_name"], "ip": ev["ip_addr"],
+        "row_key": ev["row_key"], "doc": doc_txt, "doc_date": str(doc_date)[:10] if doc_date else None,
+        "user": who, "pc": _strip_host(pcn), "ip": ev["ip_addr"],
         "session": {k: ev[k] for k in ("db_user", "os_user", "client_host", "client_ip", "module") if ev[k]},
         "fields": fields,
     }
@@ -314,16 +371,18 @@ def by_user(con, d0=None, d1=None, cfg=None):
     if d1:
         where.append("substr(changed_at,1,10) <= ?"); params.append(d1.isoformat() if hasattr(d1, "isoformat") else str(d1))
     wsql = (" WHERE " + " AND ".join(where)) if where else ""
-    rows = con.execute(f"SELECT table_name, action, erp_user, row_key FROM erp_change_events{wsql}", params).fetchall()
+    rows = con.execute(f"SELECT table_name, action, erp_user, row_key, pc_name, client_host, os_user "
+                       f"FROM erp_change_events{wsql}", params).fetchall()
     headers, agg = {}, {}
-    for table, act, usr, rk in rows:
-        who = usr
-        if not who and (table in s["parent"] or str(table).upper() in s["parent"]):   # a detail line: borrow the header user
-            headers.setdefault(table, _header_index(con, s, table))
+    for table, act, usr, rk, pc, chost, osuser in rows:
+        who, pcn = usr, pc
+        if (not who or who.strip().upper() in s["generic"]) and (table in s["parent"] or str(table).upper() in s["parent"]):
+            headers.setdefault(table, _header_index(con, s, table))   # a detail line: borrow the header user/pc
             tn = _rowkey_field(rk, "TRANS_NO")
             hd = headers[table].get(tn) if tn else None
-            who = hd[2] if hd else None
-        who = who or "—"
+            if hd:
+                who = who or hd["user"]; pcn = pcn or hd["pc"]
+        who = _display_user(who, pcn, chost, osuser, s["generic"])
         a = agg.setdefault(who, {"user": who, "total": 0, "inserts": 0, "edits": 0, "deletes": 0})
         a["total"] += 1
         a["inserts" if act == "I" else "edits" if act == "U" else "deletes" if act == "D" else "total"] += 0 if act not in ("I", "U", "D") else 1
