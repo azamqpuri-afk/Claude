@@ -326,17 +326,23 @@ def cmd_grants(cfg, args):
              if m.lower() != "dual"}
     tables = sorted(t for t in found if "." in t)          # schema-qualified objects only (grantable with certainty)
     unqualified = sorted(t for t in found if "." not in t)  # CTE/derived aliases or same-schema objects - note, don't grant
-    if getattr(args, "missing", False):                    # keep only the tables the ERP user currently CANNOT read
+    user, driver = args.user, cfg["erp"].get("driver", "oracle")
+    # A <prefix>.<name>( is a package function only when <prefix> is a real SCHEMA (it owns a table in a FROM/JOIN,
+    # e.g. dostex.get_item_stock). When the prefix is a table alias it is a column reference (e.g. emp.sec_code) and
+    # must NOT become a GRANT EXECUTE line.
+    schemas = {t.split(".")[0].lower() for t in tables}
+    funcs = sorted({m.lower() for m in re.findall(r"\b([A-Za-z_]\w*\.[A-Za-z_]\w*)\s*\(", erp_sql)
+                    if "." in m and m.split(".")[0].lower() in schemas})
+    if getattr(args, "missing", False):                    # print ONLY the GRANT SELECT lines the user still needs
         missing = _unreadable_tables(cfg, tables)
         if not missing:
-            print(f"-- All {len(tables)} mapped table(s) are already readable by the ERP user - no grants needed.")
+            print(f"-- All {len(tables)} mapped table(s) are already readable by {user} - no grants needed.")
             return 0
-        print(f"-- {len(missing)} of {len(tables)} mapped table(s) are NOT yet readable - grant only these:")
-        tables = missing
-        funcs = []                                         # a missing grant is about tables; functions are rarely the blocker
-    funcs = sorted({m.lower() for m in re.findall(r"\b([A-Za-z_]\w*\.[A-Za-z_]\w*)\s*\(", erp_sql)
-                    if m.split(".")[0].lower() not in {t.split(".")[-1] for t in tables} and "." in m})
-    user, driver = args.user, cfg["erp"].get("driver", "oracle")
+        print(f"-- {len(missing)} of {len(tables)} mapped table(s) are NOT yet readable by {user} - grant these:")
+        q = "'%s'@'%%'" % user if driver == "mysql" else user
+        for t in missing:
+            print(f"GRANT SELECT ON {t} TO {q};")
+        return 0
     print(f"-- Read-only user for {PRODUCT} ({mapping.name})")
     print("-- Run as a database administrator. Replace the password; put the same one in .env as ERP_PASSWORD.")
     print("-- Grants are generated only for the main-ERP entities (a second source such as an MS Access loom")

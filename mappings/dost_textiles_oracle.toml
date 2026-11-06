@@ -20,8 +20,8 @@ sql = """
 SELECT i.ic AS item_code, MAX(i.idesc) AS item_name, MAX(i.uom) AS unit,
        MAX(s.sn) AS sub_head, MAX(h.hn) AS head
 FROM dostex.i i
-LEFT JOIN dostex.isubs s ON s.sc = i.sc
-LEFT JOIN dostex.ih h ON h.hc = s.hc
+LEFT JOIN dostex.isubs s ON s.sc = i.sc AND s.uc = i.uc
+LEFT JOIN dostex.ih h ON h.hc = s.hc AND h.uc = s.uc
 GROUP BY i.ic
 """
 
@@ -357,10 +357,11 @@ source = "scoreboard"
 # NOTE: this runs on MS Access (Jet SQL), which rejects -- comments inside the query, so keep comments out here.
 sql = """
 SELECT PDATE AS read_date, PMACH AS loom_code,
+       IIF(PSHIFT = 1, 'day', IIF(PSHIFT = 2, 'night', CStr(PSHIFT))) AS shift,
        SUM(IIF(PPINCH > 0, PPROD * PDELV / (PPINCH * 39.37), 0)) AS meters,
        IIF(SUM(PSHFTDUR) > 0, 100 * (SUM(PSHFTDUR) - SUM(PTSTPDUR)) / SUM(PSHFTDUR), NULL) AS efficiency_pct,
        AVG(IIF(PRPM > 0, PRPM, NULL)) AS rpm, SUM(PWRP + PUD) AS stops, SUM(PSHFTDUR) AS shift_sec
-FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH
+FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH, PSHIFT
 """
 
 # The CURRENT (running) shift, one row per loom, from the OLMS SCREEN table - a live snapshot (no date window),
@@ -565,14 +566,15 @@ WHERE event_id > :since
 # NOTE for live verify: SMARTLAYER_RO has SELECT on DMN but NOT on TM/TD. The voucher header is therefore read
 # from ACL (which carries vt, vno, vd, usern, pcn by TRANS_NO) rather than TM. Confirm ACL has TRANS_NO on live.
 [entities.erp_doc_headers]
+# Vouchers come from dostex.TM (verified live: TRANS_NO, VT, VNO, VD, USERN, PCN); store documents from dostex.DMN.
+# SMARTLAYER_RO is granted SELECT on TM, TD and DMN for this. Scoped to the TRANS_NOs that appear in the edit log.
 sql = """
-SELECT 'TM' AS table_name, TO_CHAR(l.trans_no) AS trans_no,
-       l.vt || '-' || TO_CHAR(l.vno) AS doc_ref, TRUNC(l.vd) AS doc_date, l.usern AS erp_user, l.pcn AS pc_name
-FROM dostex.acl l
-WHERE l.trans_no IN (
+SELECT 'TM' AS table_name, TO_CHAR(t.trans_no) AS trans_no,
+       t.vt || '-' || TO_CHAR(t.vno) AS doc_ref, TRUNC(t.vd) AS doc_date, t.usern AS erp_user, t.pcn AS pc_name
+FROM dostex.tm t
+WHERE t.trans_no IN (
    SELECT TO_NUMBER(REGEXP_SUBSTR(e.row_key, 'TRANS_NO=([0-9]+)', 1, 1, NULL, 1))
    FROM audit_hist.erp_change_events e WHERE e.table_name IN ('TD','TM') AND e.row_key LIKE 'TRANS_NO=%')
-GROUP BY l.trans_no, l.vt, l.vno, TRUNC(l.vd), l.usern, l.pcn
 UNION ALL
 SELECT 'DMN' AS table_name, TO_CHAR(m.trans_no) AS trans_no,
        m.dt || '-' || TO_CHAR(m.dno) AS doc_ref, TRUNC(m.dd) AS doc_date, m.usern AS erp_user, m.pcn AS pc_name
@@ -611,8 +613,8 @@ LEFT JOIN dostex.ach a ON a.ac = m.ac
 LEFT JOIN (
    SELECT dd.ref_po_tno, dd.ref_po_sr, dd.ref_po_uc, SUM(dd.qty) AS recv_qty, MAX(dd.rate) AS recv_rate,
           MAX(TRUNC(dm.dd)) AS recv_date, MAX(dm.dt || '-' || TO_CHAR(dm.dno)) AS grn_no
-   FROM dostex.ddt dd JOIN dostex.dmn dm ON dm.trans_no = dd.trans_no
-   WHERE dd.ref_po_tno IS NOT NULL
+   FROM dostex.ddt dd JOIN dostex.dmn dm ON dm.trans_no = dd.trans_no AND dm.uc = dd.uc
+   WHERE dd.ref_po_tno IS NOT NULL AND dm.dt = 'SRN'
    GROUP BY dd.ref_po_tno, dd.ref_po_sr, dd.ref_po_uc
 ) g ON g.ref_po_tno = d.trans_no AND g.ref_po_sr = d.sr_no AND g.ref_po_uc = d.uc
 WHERE m.po_date >= :since
@@ -620,18 +622,25 @@ WHERE m.po_date >= :since
 
 # ----- Loom standards (item 30c): standard RPM per loom/period (LOOMS_D has only RPM filled on live) ----------
 [entities.loom_standards]
+# loom_code must be the BARE number to match looms / loom_production (which use lcode / p.lcode), else it never joins.
 sql = """
-SELECT 'L' || LPAD(TO_CHAR(lcode), 2, '0') AS loom_code, TRUNC(fdate) AS from_date, TRUNC(tdate) AS to_date,
+SELECT TO_CHAR(lcode) AS loom_code, TRUNC(fdate) AS from_date, TRUNC(tdate) AS to_date,
        rpm AS standard_rpm, prd AS production, trg_prd AS target
 FROM dostex.looms_d
 """
 
 # ----- Yarn purchase contracts (item 30d): YARN_CONT (Dost's are from 2022, so likely stale) -----------------
 [entities.yarn_contracts]
+# names resolved: yarn via dostex.yarn (ycode -> yarn_desc), brand via dostex.ybrands (bcode -> bname),
+# buyer/seller account codes via dostex.ach (ac -> an).
 sql = """
-SELECT TO_CHAR(cont_no) AS contract_no, TRUNC(cont_date) AS contract_date, cont_type AS contract_type,
-       buyer AS buyer, seller AS seller, TO_CHAR(yarn_code) AS yarn_code, TO_CHAR(yarn_code) AS yarn_name,
-       TO_CHAR(brand_code) AS brand, qty AS bags, rate AS rate, TRUNC(last_delivery_date) AS delivery_date,
-       payment_term AS payment_term, status AS status
-FROM dostex.yarn_cont
+SELECT TO_CHAR(c.cont_no) AS contract_no, TRUNC(c.cont_date) AS contract_date, c.cont_type AS contract_type,
+       NVL(bu.an, c.buyer) AS buyer, NVL(se.an, c.seller) AS seller, TO_CHAR(c.yarn_code) AS yarn_code,
+       y.yarn_desc AS yarn_name, NVL(b.bname, TO_CHAR(c.brand_code)) AS brand, c.qty AS bags, c.rate AS rate,
+       TRUNC(c.last_delivery_date) AS delivery_date, c.payment_term AS payment_term, c.status AS status
+FROM dostex.yarn_cont c
+LEFT JOIN dostex.yarn y ON y.ycode = c.yarn_code
+LEFT JOIN dostex.ybrands b ON b.bcode = c.brand_code
+LEFT JOIN dostex.ach bu ON bu.ac = c.buyer
+LEFT JOIN dostex.ach se ON se.ac = c.seller
 """
