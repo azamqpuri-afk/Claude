@@ -198,10 +198,12 @@ class ERP:
         entity = schema.BY_NAME[entity_name]
         con, style = self.connection(entity_name)
         params = {"since": since, "today": as_of or date.today()}
+        # `since` is normally a date (the rolling window). For edit-history entities it is a NUMERIC event_id
+        # cursor instead (incremental sync); such a value is bound as-is, not reformatted as a date.
         if isinstance(con, sqlite3.Connection):          # SQLite keeps dates as ISO text
-            params = {k: v.isoformat() for k, v in params.items()}
+            params = {k: (v.isoformat() if isinstance(v, (date, datetime)) else v) for k, v in params.items()}
         elif style == "qmark":                            # ODBC (SQL Server, Access) binds datetimes most reliably
-            params = {k: datetime(v.year, v.month, v.day) for k, v in params.items()}
+            params = {k: (datetime(v.year, v.month, v.day) if isinstance(v, (date, datetime)) else v) for k, v in params.items()}
         sql, params = bind(self.mapping.entities[entity_name], params, style)
         cur = con.cursor()
         cur.execute(sql, params)

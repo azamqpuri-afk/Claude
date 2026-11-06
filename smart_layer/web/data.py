@@ -344,6 +344,7 @@ def build(con, cfg, as_of=None):
         "synced_at": _one(con, "SELECT MAX(synced_at) FROM sync_log") or None,
         "now": datetime.now().isoformat(sep=" ", timespec="seconds"),   # server clock, for the "Live HH:MM" display
         "change_cursor": _change_cursor(con),           # the change_log id to pass back as `since` on the next refresh
+        "edits_installed": _edits_installed(con),        # show the Edits tab only when the ERP change-history layer is present
         "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound", "colour_scheme")},
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "kpis": {
@@ -381,6 +382,14 @@ def build(con, cfg, as_of=None):
         "weaving": _weaving(con, cfg, as_of),
         "yarn_fabric": _yarn_fabric(con, cfg, as_of),
     }
+
+
+def _edits_installed(con):
+    from .. import erp_edits
+    try:
+        return erp_edits.installed(con)
+    except Exception:
+        return False
 
 
 def _change_cursor(con):

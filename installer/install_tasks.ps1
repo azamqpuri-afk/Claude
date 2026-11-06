@@ -15,7 +15,12 @@ $at = "07:30"
 # re-register would otherwise silently revert that working setup every upgrade, so we keep each task's current
 # principal when it already exists and only refresh its action/trigger/settings (the new run scripts, the
 # repetition fix). A clean reinstall as SYSTEM is still available with -AsSystem.
-function Resolve-Principal($name) {
+# $fallback is the principal to use when the task does NOT already exist. For a task added in a later version
+# (e.g. "Smart Layer Morning", new in 0.15.0), a plain SYSTEM default would make it run under a DIFFERENT principal
+# than the others on a mill that had switched the existing tasks to the signed-in user - so it could not read the
+# user-sealed .env / licence context and its licence check failed while Daily's passed. Passing the Daily principal
+# as the fallback makes every new task inherit the same logon as Daily, so they all behave the same.
+function Resolve-Principal($name, $fallback = $null) {
     if ($AsSystem) { return $principal }
     $ex = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     if ($ex -and $ex.Principal -and $ex.Principal.UserId) {
@@ -27,6 +32,7 @@ function Resolve-Principal($name) {
             return New-ScheduledTaskPrincipal -UserId $ex.Principal.UserId -LogonType $lt -RunLevel $ex.Principal.RunLevel
         } catch { return $principal }
     }
+    if ($fallback) { return $fallback }
     return $principal
 }
 
@@ -51,7 +57,7 @@ Register-ScheduledTask -TaskName "Smart Layer Daily" -Action (New-RunAction $dai
 # (New-TimeSpan -Days 3650 registered as ~9 days, then stopped for good) and [TimeSpan]::MaxValue is REJECTED on
 # Windows 10 ("Duration ... out of range"). The reliable way is to build the repetition with the interval only and
 # then set Duration to '' (empty = indefinite) before registering.
-$livePrin = Resolve-Principal "Smart Layer Live"
+$livePrin = Resolve-Principal "Smart Layer Live" $dailyPrin
 $liveTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 5)
 $liveTrigger.Repetition.Duration = ''
 $liveSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 4) `
@@ -70,14 +76,14 @@ try {
 } catch { Write-Host "Could not verify the live-sync repetition: $_" }
 
 # Morning push (~06:20): the morning production summary, the night-shift sensor report and the weft check.
-$mornPrin = Resolve-Principal "Smart Layer Morning"
+$mornPrin = Resolve-Principal "Smart Layer Morning" $dailyPrin
 Register-ScheduledTask -TaskName "Smart Layer Morning" -Action (New-RunAction $mornPrin "$AppDir\run_morning.cmd") `
     -Principal $mornPrin -Force -Trigger (New-ScheduledTaskTrigger -Daily -At "06:20") `
     -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) | Out-Null
 
 # Dashboard: always on. AtStartup fires for SYSTEM (runs with no session); an Interactive principal has no session
 # at boot, so it must start AtLogOn instead - otherwise the dashboard never comes up on an Interactive install.
-$dashPrin = Resolve-Principal "Smart Layer Dashboard"
+$dashPrin = Resolve-Principal "Smart Layer Dashboard" $dailyPrin
 # AtLogOn must be scoped to the task's own user: unscoped it needs elevation (Access denied otherwise) and would
 # fire at ANY user's logon. SYSTEM has no logon session, so it starts AtStartup instead.
 $dashTrigger = if ("$($dashPrin.LogonType)" -eq "Interactive") { New-ScheduledTaskTrigger -AtLogOn -User $dashPrin.UserId } `

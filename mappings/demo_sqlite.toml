@@ -262,3 +262,20 @@ SELECT gp_id AS gatepass_id, gp_no AS gp_no, gp_dt AS gp_date, io AS direction, 
        NULL AS item_code, item AS item, qty AS qty, uom AS uom, NULL AS contract_no, beam AS beam_no, entered_by AS entered_by
 FROM gatepass WHERE gp_dt >= :since
 """
+
+# ERP edit history (item 31): a small fictional change-history layer (aud_event / aud_value), like the AUDIT_HIST
+# triggers a real mill installs. Read incrementally by event_id (:since is the numeric cursor, not a date).
+[entities.erp_change_events]
+sql = """
+SELECT event_id AS event_id, changed_at AS changed_at, table_name AS table_name, action AS action,
+       row_key AS row_key, doc_ref AS doc_ref, doc_date AS doc_date, erp_user AS erp_user,
+       pc_name AS pc_name, ip_addr AS ip_addr, db_user AS db_user, os_user AS os_user,
+       client_host AS client_host, client_ip AS client_ip, module AS module
+FROM aud_event WHERE event_id > :since
+"""
+
+[entities.erp_change_values]
+sql = """
+SELECT event_id AS event_id, column_name AS column_name, old_value AS old_value, new_value AS new_value
+FROM aud_value WHERE event_id > :since
+"""

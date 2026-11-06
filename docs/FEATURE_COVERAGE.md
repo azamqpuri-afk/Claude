@@ -56,6 +56,7 @@ the mapping/config, never the core).
 | 22 | Weft-only consumption by owner-given counts | `report weft-consumption` |
 | 23 | Logo + 6 colour schemes + weave-forming opening animation + thread-to-signal header + colour picker | Overview 🎨 · `[dashboard] colour_scheme` |
 | 24 | Fabric-in-stock history drill (produced / dispatched / returned / rejection / stock per contract) | Overview Dispatched tile · `api/fabric/history` |
+| 31 | ERP edit history → Edits tab: list of every insert/edit/delete, filters (date/user/area/document), click a row for every field old→new, highlights (deletes, old entries, amount/account changes), "re-entered" pairing hint; phone push per delete and per old-entry edit; "edits by user" line in the morning summary | Edits tab · `api/edits` · `erp_change_events`/`erp_change_values` (optional) · `[edits]` |
 
 ## Not in the product, and why
 

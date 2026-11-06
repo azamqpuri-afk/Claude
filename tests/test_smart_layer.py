@@ -1563,3 +1563,124 @@ def test_v015_cost_headline_closed_months(env):
     finally:
         cfg.data["cost"]["closed_requires"] = ["store", "payroll"]
     assert h2.get("closed") in (False, None)
+
+
+from smart_layer import erp_edits as _edits   # noqa: E402
+
+
+def test_v0156_edits_list_flags_and_names(env):
+    cfg, con = env
+    assert _edits.installed(con)
+    st = _edits.status(con)
+    assert st["installed"] and st["events"] >= 8
+    L = _edits.list_edits(con, cfg)
+    assert L["installed"] and L["rows"]
+    docs = {r["doc"].split(" · ")[0] for r in L["rows"]}
+    assert "BP-00412" in docs and "ISS-5233" in docs            # the planted voucher edit and the deleted store doc
+    byd = {}
+    for r in L["rows"]:
+        byd.setdefault(r["doc"].split(" · ")[0], []).append(r)
+    # the 24-day-old BP voucher: its line edits are flagged as old-entry AND amount changes, with the amount shown
+    bp_lines = [r for r in byd["BP-00412"] if r["action"] == "U" and r["summary"]]
+    assert bp_lines and all(r["is_old_edit"] and r["touches_amount"] for r in bp_lines)
+    assert any("42,000 → 27,000" in r["summary"] for r in bp_lines)
+    # the account change resolves the account CODE to its name in the summary
+    sv = [r for r in L["rows"] if r["doc"].startswith("SV-00455") and r["summary"]]
+    assert sv and "(" in sv[0]["summary"] and r"→" in sv[0]["summary"]
+    assert sv[0]["touches_account"]
+    # the store-doc delete is flagged as a delete; a same-day journal edit is NOT old
+    assert any(r["is_delete"] for r in byd["ISS-5233"])
+    jv = [r for r in L["rows"] if r["doc"].startswith("JV-00460")]
+    assert jv and not any(r["is_old_edit"] for r in jv)
+    # detail: every changed field old -> new
+    bp_line1 = next(r for r in bp_lines if "42,000" in r["summary"])
+    d = _edits.detail(con, cfg, bp_line1["event_id"])
+    assert d and d["fields"] and d["fields"][0]["material"]
+
+
+def test_v0156_edits_pairing_and_header_user(env):
+    cfg, con = env
+    L = _edits.list_edits(con, cfg)
+    # a delete + insert of the SAME store line within a minute is flagged as a re-entered pair (not a scary delete)
+    pairs = [r for r in L["rows"] if r.get("paired")]
+    assert len(pairs) >= 2 and {r["action"] for r in pairs} == {"I", "D"}
+    # a voucher LINE has no user of its own; it is attributed to its header's user
+    line = next(r for r in L["rows"] if r["doc"].startswith("BP-00412 · line"))
+    assert line["user"] == "acc2"
+    # filters: by user, by action, by document
+    assert all(r["user"] == "acc1" for r in _edits.list_edits(con, cfg, user="acc1")["rows"])
+    assert all(r["is_delete"] for r in _edits.list_edits(con, cfg, action="D")["rows"])
+    assert _edits.list_edits(con, cfg, doc="BP-00412")["total"] >= 1
+
+
+def test_v0156_edits_by_user_attributes_lines(env):
+    cfg, con = env
+    rows = _edits.by_user(con, cfg=cfg)
+    users = {r["user"]: r for r in rows}
+    assert "—" not in users                                     # NULL-user lines are attributed to their header user
+    assert users["acc2"]["edits"] >= 1                          # acc2 keyed the BP voucher + its lines
+    assert any(r["deletes"] for r in rows)                      # the store deletes are counted
+
+
+def test_v0156_edits_incremental_cursor(env, tmp_path):
+    # a fresh store synced twice adds no duplicates; a brand-new event is picked up on the next sync
+    cfg, _ = env
+    e = erp.ERP(*erp.connect(cfg["erp"], cfg.base_dir), erp.Mapping(cfg.path(cfg["erp"]["mapping"])),
+                cfg["sources"], cfg.base_dir)
+    con2 = store.open_store(tmp_path / "s2.db")
+    store.sync(con2, e, 400, log=lambda *_: None)
+    n1 = con2.execute("SELECT COUNT(*) FROM erp_change_events").fetchone()[0]
+    cur1 = store.get_state(con2, "edits_cursor_erp_change_events")
+    store.sync(con2, e, 400, log=lambda *_: None)               # re-sync: cursor means nothing re-read
+    assert con2.execute("SELECT COUNT(*) FROM erp_change_events").fetchone()[0] == n1
+    assert store.get_state(con2, "edits_cursor_erp_change_events") == cur1
+    con2.close()
+
+
+def test_v0156_edit_pushes_and_morning_line(env):
+    cfg, con = env
+    sent = []
+    import smart_layer.pushes as P
+    orig = P.notify.send
+    P.notify.send = lambda cfg, title, body, **k: sent.append((title, body, k))
+    try:
+        store.set_state(con, "edit_push_cursor", None)          # first run seeds the cursor, pushes nothing
+        assert _pushes.edit_pushes(cfg, con) == 0 and not sent
+        store.set_state(con, "edit_push_cursor", 0)             # now push the whole (small) demo history
+        assert _pushes.edit_pushes(cfg, con) == 1
+        title, body, k = sent[-1]
+        assert "delete" in title.lower() and k.get("priority") == "high"
+        assert "BP-00412" in body and "ISS-5233" in body
+        # one voucher's header + two line edits collapse to a single line in the push
+        assert body.count("BP-00412") == 1
+        assert _pushes.edit_pushes(cfg, con) == 0               # cursor advanced: nothing new
+        line = _pushes._edits_by_user_line(con, END, cfg)
+        assert line.startswith("ERP edits today:") and "acc2" in line
+    finally:
+        P.notify.send = orig
+
+
+def test_v0156_edits_not_installed(tmp_path):
+    # a mill without the change-history layer: the entities are empty, so the tab is off and nothing errors
+    con = store.open_store(tmp_path / "empty.db")
+    try:
+        assert not _edits.installed(con)
+        assert _edits.list_edits(con, None)["installed"] is False
+        assert _edits.status(con)["installed"] is False
+        assert _edits.by_user(con) == []
+        assert _edits.detail(con, None, 1) is None
+    finally:
+        con.close()
+
+
+def test_v0156_edits_web_route(env):
+    cfg, con = env
+    app = web_server.App(cfg)
+    code, body, _ctype, _h = web_server.get_response(app, "/api/edits", "")
+    assert code == 200 and body["installed"] and body["rows"]
+    # detail route
+    eid = body["rows"][0]["event_id"]
+    code2, body2, _c, _hh = web_server.get_response(app, "/api/edits/detail", f"id={eid}")
+    assert code2 == 200 and body2["event_id"] == eid
+    # the dashboard payload flags the tab on
+    assert web_data.build(con, cfg, END)["edits_installed"] is True

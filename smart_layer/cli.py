@@ -46,11 +46,21 @@ def cmd_check(cfg, args):
             print(f"  {ent.name:<17} not mapped")
             continue
         try:
-            n = sum(1 for _ in e.fetch(ent.name, since))
+            # edit-history entities are read by a numeric event_id cursor, not a date window - probe from 0
+            probe = 0 if ent.name in store.CURSOR_ENTITIES else since
+            n = sum(1 for _ in e.fetch(ent.name, probe))
             src = e.mapping.source.get(ent.name, "erp")
             print(f"  {ent.name:<17} ok ({n:,} rows{' in the last 30 days' if ent.date_column else ''})"
                   + (f"  [source: {src}]" if src != "erp" else ""))
         except Exception as ex:                      # report every entity, not just the first failure
+            # an optional edit-history entity whose source tables do not exist yet is "not installed", not a failure
+            # (the mill has not installed the ERP change-history layer) - it must not make `check` report an error.
+            msg = str(ex)
+            if ent.name in store.CURSOR_ENTITIES and any(
+                    s in msg for s in ("ORA-00942", "no such table", "does not exist", "Invalid object name",
+                                       "doesn't exist", "Unknown table", "relation", "not found")):
+                print(f"  {ent.name:<17} not installed (ERP change-history layer not present)")
+                continue
             ok = False
             print(f"  {ent.name:<17} FAILED: {ex}")
     if getattr(args, "deep", False):                 # also validate the VALUES in the local store, not just the SQL
@@ -231,7 +241,8 @@ def cmd_notify_changes(cfg, args):
     from . import pushes
     con = _store(cfg)
     try:
-        print(f"{pushes.notify_changes(cfg, con)} push(es)")
+        n = pushes.notify_changes(cfg, con) + pushes.edit_pushes(cfg, con)
+        print(f"{n} push(es)")
     finally:
         con.close()
     return 0

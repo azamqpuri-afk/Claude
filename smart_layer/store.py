@@ -110,7 +110,10 @@ def create(con):
                  ("yarn_movements", "contract_no"), ("fabric_dispatches", "contract_no"),
                  ("beam_movements", "beam_no"), ("loom_monitor", "loom_code"),
                  ("sized_sets", "set_no"), ("sized_sets", "contract_no"),
-                 ("loom_stops", "loom_code"), ("loom_stops", "stop_time")):
+                 ("loom_stops", "loom_code"), ("loom_stops", "stop_time"),
+                 ("erp_change_events", "event_id"), ("erp_change_events", "changed_at"),
+                 ("erp_change_events", "table_name"), ("erp_change_events", "erp_user"),
+                 ("erp_change_values", "event_id")):
         con.execute(f"CREATE INDEX IF NOT EXISTS ix_{t}_{c} ON {t} ({c})")
     con.execute("CREATE TABLE IF NOT EXISTS sync_log (entity TEXT, synced_at TEXT, since TEXT, rows INTEGER)")
     con.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
@@ -147,8 +150,14 @@ FULL_HISTORY = ("yarn_movements", "fabric_dispatches", "beam_movements",     # c
 # other entities that carry an all-time "opening" row, attendance, the month-end fabric history) is left to the
 # daily full sync: windowing an entity whose query also returns opening rows would re-insert those opening rows
 # every run (they fall outside the delete window), duplicating balances. Snapshots here are replaced wholesale.
+# ERP edit-history entities are synced INCREMENTALLY by event_id (a cursor), not by date window and not by
+# wholesale replace: each run pulls only events newer than the highest event_id already stored, so the full
+# history is kept and a huge audit table is never re-read. They sync on BOTH the live and the daily run.
+CURSOR_ENTITIES = ("erp_change_events", "erp_change_values")
+
 LIVE_ENTITIES = ("loom_production", "loom_monitor", "loom_monitor_live", "loom_stops", "gate_passes", "stock_balances",
                  "store_issues", "store_receipts", "store_returns", "yarn_stock", "fabric_stock",
+                 "erp_change_events", "erp_change_values",   # edits appear within 5 minutes and drive the edit pushes
                  # account_balances is a whole-ledger snapshot (replaced entirely each sync, no date window and no
                  # 'opening' rows), so it is safe to refresh live - this keeps the Overview cash / bank / receivable
                  # / payable balances current every 5 minutes instead of only after the daily sync.
@@ -173,6 +182,16 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
             continue
         if e.name not in erp.mapping.entities:
             log(f"  {e.name:<17} skipped (not in mapping)")
+            continue
+        if e.name in CURSOR_ENTITIES:
+            try:
+                n = _sync_cursor(con, erp, e, now)
+                result[e.name] = n
+                log(f"  {e.name:<17} {n:>8,} new rows (incremental)")
+            except Exception as exc:                      # AUDIT_HIST not installed yet, or a bad SQL: keep going
+                log(f"  {e.name:<17} FAILED ({str(exc).splitlines()[0][:80]}) - kept the previous data")
+                result[e.name] = None
+                failed.append(e.name)
             continue
         if e.name in full_history:
             since = date(1900, 1, 1)
@@ -224,6 +243,30 @@ def sync(con, erp, history_days, entities=None, log=print, full_history=FULL_HIS
         log(f"  WARNING: {len(failed)} data set(s) did not sync and still hold OLD data: {', '.join(failed)}")
     result["_failed"] = failed
     return result
+
+
+def _cursor_key(entity_name):
+    return f"edits_cursor_{entity_name}"
+
+
+def _sync_cursor(con, erp, entity, now):
+    """Incrementally pull an edit-history entity by its event_id cursor. Rows are APPENDED (never a window delete):
+    event_id only grows, so `event_id > cursor` never returns a row already stored. The mapping's SELECT reads the
+    bound :since as the numeric cursor (e.g. WHERE event_id > :since). Returns the number of new rows."""
+    cursor = get_state(con, _cursor_key(entity.name), 0) or 0
+    rows = list(erp.fetch(entity.name, cursor))
+    eid = entity.column_names.index("event_id")
+    maxc = cursor
+    for r in rows:
+        v = r[eid]
+        if v is not None and v > maxc:
+            maxc = v
+    with con:
+        marks = ", ".join("?" * len(entity.columns))
+        con.executemany(f"INSERT INTO {entity.name} VALUES ({marks})", rows)
+        con.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (_cursor_key(entity.name), json.dumps(maxc)))
+        con.execute("INSERT INTO sync_log VALUES (?, ?, ?, ?)", (entity.name, now, f"event_id>{cursor}", len(rows)))
+    return len(rows)
 
 
 def _month_ends(n=12, today=None):

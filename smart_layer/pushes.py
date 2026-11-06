@@ -111,6 +111,87 @@ def _production_line(con, d, cfg=None):
     return f"{d:%d-%b}: {erp} | {scb}"
 
 
+def edit_pushes(cfg, con):
+    """Push ERP edits that matter (item 31): every DELETE, and every EDIT of a document older than
+    [edits] push_older_than_days, grouped into ONE push per sync. Cursor-based on event_id (like notify_changes),
+    so each event is considered once; the first run after an upgrade seeds the cursor and pushes nothing. Quiet-hours
+    aware. A mill without the change-history layer has no events, so this is a no-op."""
+    if _quiet(cfg):
+        return 0
+    if not con.execute("SELECT 1 FROM sync_log WHERE entity = 'erp_change_events' LIMIT 1").fetchone():
+        return 0                                           # the edit-history layer is not installed here
+    first_run = store.get_state(con, "edit_push_cursor", None) is None
+    cursor = store.get_state(con, "edit_push_cursor", 0) or 0
+    rows = con.execute("""SELECT event_id, changed_at, table_name, action, row_key, doc_ref, doc_date, erp_user
+                          FROM erp_change_events WHERE event_id > ? ORDER BY event_id""", (cursor,)).fetchall()
+    if not rows:
+        if first_run:
+            store.set_state(con, "edit_push_cursor", 0)
+        return 0
+    maxid = rows[-1][0]
+    if first_run:                                          # seed past the pre-upgrade backlog, push nothing
+        store.set_state(con, "edit_push_cursor", maxid)
+        return 0
+    from . import erp_edits
+    s = erp_edits._settings(cfg)
+    older = int(cfg["edits"].get("push_older_than_days", 2) or 0)
+    headers = {}                                           # parent table -> TRANS_NO -> (doc_ref, doc_date, user)
+    seen, flagged = set(), []                              # collapse a voucher's header + its line edits into one item
+    for eid, at, table, act, rk, dref, ddt, usr in rows:
+        is_del = act == "D"
+        old_edit = act == "U" and erp_edits._is_old_edit(act, at, ddt, older)
+        if not (is_del or old_edit):
+            continue
+        area, doc, who = erp_edits.area_label(s, table), dref or rk or "?", usr
+        parent = s["parent"].get(table) or s["parent"].get(str(table).upper())
+        if parent:                                         # a detail line: name it by its header document and user
+            headers.setdefault(table, erp_edits._header_index(con, s, table))
+            tn = erp_edits._rowkey_field(rk, "TRANS_NO")
+            hd = headers[table].get(tn) if tn else None
+            if hd:
+                area, doc, who = erp_edits.area_label(s, parent), hd[0] or doc, who or hd[2]
+        key = (is_del, doc, who or "")
+        if key in seen:                                    # same document already listed (header + its lines)
+            continue
+        seen.add(key)
+        flagged.append({"area": area, "del": is_del, "doc": doc,
+                        "date": str(ddt)[:10] if ddt else None, "user": who or "?"})
+    store.set_state(con, "edit_push_cursor", maxid)        # advance past everything we have now considered
+    if not flagged:
+        return 0
+    ndel = sum(1 for f in flagged if f["del"])
+    nold = len(flagged) - ndel
+    bits = ([f"{ndel} delete{'s' if ndel != 1 else ''}"] if ndel else []) + \
+           ([f"{nold} old-entry edit{'s' if nold != 1 else ''}"] if nold else [])
+    title = "ERP edits: " + ", ".join(bits)
+    lines = []
+    for f in flagged[:10]:
+        what = "Deleted" if f["del"] else "Edited"
+        when = f" ({f['date']})" if f["date"] else ""
+        lines.append(f"• {what} {f['area']} {f['doc']}{when} by {f['user']}")
+    if len(flagged) > 10:
+        lines.append(f"… and {len(flagged) - 10} more")
+    notify.send(cfg, title, "\n".join(lines), tags=("warning" if ndel else "pencil"),
+                priority=("high" if ndel else "default"))
+    return 1
+
+
+def _edits_by_user_line(con, d, cfg=None):
+    """One line summarising the day's edits per ERP user, for the morning summary. '' when nothing / not installed."""
+    from . import erp_edits
+    try:
+        rows = erp_edits.by_user(con, d, d, cfg)
+    except Exception:
+        return ""
+    if not rows:
+        return ""
+    parts = []
+    for r in rows[:6]:
+        extra = f", {r['deletes']} del" if r["deletes"] else ""
+        parts.append(f"{r['user']} {r['total']}{extra}")
+    return "ERP edits today: " + "; ".join(parts)
+
+
 def morning_summary(cfg, con, d=None):
     """Push the morning line for date d (default yesterday): scoreboard vs ERP production, fabric out, fabric stock.
     If the ERP day is not keyed, say so and show the last keyed day."""
@@ -123,6 +204,9 @@ def morning_summary(cfg, con, d=None):
                            WHERE dispatch_date = ?""", (d.isoformat(),)).fetchone()[0] or 0
     stock = con.execute("SELECT SUM(meters) FROM fabric_stock").fetchone()[0] or 0
     body = f"{line}\nFabric out {out_m:,.0f} m · fabric in stock {stock:,.0f} m"
+    edits_line = _edits_by_user_line(con, d, cfg)          # item 31: one "edits by user" line when the history layer is on
+    if edits_line:
+        body += f"\n{edits_line}"
     notify.send(cfg, f"Morning summary {d:%d-%b}", body, tags="sunrise")
     return body
 

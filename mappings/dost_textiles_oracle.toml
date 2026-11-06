@@ -528,3 +528,26 @@ LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id
 LEFT JOIN dostex.ach a ON a.ac = NVL(m.ac1, m.ac2)
 WHERE m.tt = 'IGP_SIZED_BEAMS' AND m.gp_date >= :since
 """
+
+# ERP edit history (item 31). The owner's ERP does not record edits itself, so a small history layer was added:
+# Oracle triggers (installed by the owner/vendor as SYSTEM, 6-Nov-2026) write every insert/edit/delete of a line
+# into the locked AUDIT_HIST schema. SMARTLAYER_RO has SELECT on these two tables. Smart Layer reads them
+# incrementally by EVENT_ID (:since is the numeric cursor, not a date), so the whole history is kept and the huge
+# audit table is never re-read. Phase 1 covers TM / TD / DMN / DDT; later phases add more tables, no mapping change.
+# If the AUDIT_HIST schema is ever absent, `check` reports "not installed" and the Edits tab simply stays hidden.
+[entities.erp_change_events]
+sql = """
+SELECT event_id AS event_id, changed_at AS changed_at, table_name AS table_name, action AS action,
+       row_key AS row_key, doc_ref AS doc_ref, doc_date AS doc_date, erp_user AS erp_user,
+       pc_name AS pc_name, ip_addr AS ip_addr, db_user AS db_user, os_user AS os_user,
+       client_host AS client_host, client_ip AS client_ip, module AS module
+FROM audit_hist.erp_change_events
+WHERE event_id > :since
+"""
+
+[entities.erp_change_values]
+sql = """
+SELECT event_id AS event_id, column_name AS column_name, old_value AS old_value, new_value AS new_value
+FROM audit_hist.erp_change_values
+WHERE event_id > :since
+"""

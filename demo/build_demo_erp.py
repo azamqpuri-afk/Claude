@@ -254,6 +254,7 @@ def build(out, end):
     build_yarn(db, cprod, cfresh, start, end)
     build_beams(db, lsegs, lday, end)
     build_hr_and_gatepasses(db, start, end, rnd)
+    build_edit_history(db, end)
     build_scoreboard(out.with_name(out.stem.replace("_erp", "") + "_scoreboard.db"), lday, end)
     db.commit()
     db.close()
@@ -322,6 +323,61 @@ def build_hr_and_gatepasses(db, start, end, rnd):
                     round(rnd.uniform(50, 3000), 1), "beam" if beam else rnd.choice(["m", "kg", "nos"]),
                     beam, rnd.choice(["ADMIN", "STORE", "ACCOUNT", "GATE"])))
     db.executemany("INSERT INTO gatepass VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", gps)
+
+
+PLANTED += """
+  edits    - BP voucher ~24 days old: two line amounts edited (old-entry + amount change)
+           - a sale voucher's customer account changed (account change)
+           - a store issue slip deleted days after it was saved (delete + old-entry)
+           - a store line deleted and re-entered within a minute (re-entered pair, not a real delete)
+           - a journal edited today (amount change, recent - not flagged as old)"""
+
+
+def build_edit_history(db, end):
+    """A small fictional ERP edit-history layer (like Oracle AUDIT_HIST triggers), so the Edits tab (item 31) has
+    data in the demo. One row per change in aud_event, one row per changed field in aud_value. Uses the demo ERP's
+    own account codes so name resolution (code -> account name) is demonstrated. Deterministic."""
+    db.executescript("""
+        CREATE TABLE aud_event (event_id INTEGER PRIMARY KEY, changed_at TEXT, table_name TEXT, action TEXT,
+                                row_key TEXT, doc_ref TEXT, doc_date TEXT, erp_user TEXT, pc_name TEXT, ip_addr TEXT,
+                                db_user TEXT, os_user TEXT, client_host TEXT, client_ip TEXT, module TEXT);
+        CREATE TABLE aud_value (event_id INTEGER, column_name TEXT, old_value TEXT, new_value TEXT);
+    """)
+    eid = [0]
+
+    def ev(table, action, row_key, doc_ref, doc_dt, at, user, pc, values=()):
+        eid[0] += 1
+        db.execute("INSERT INTO aud_event VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                   (eid[0], at.isoformat(sep=" "), table, action, row_key, doc_ref, doc_dt.isoformat() if doc_dt else None,
+                    user, pc, "192.168.1." + str(20 + eid[0] % 30), "DOSTEX", user.lower() if user else None,
+                    pc, "192.168.1." + str(20 + eid[0] % 30), "ACCOUNTS.EXE"))
+        for col, ov, nv in values:
+            db.execute("INSERT INTO aud_value VALUES (?,?,?,?)", (eid[0], col, ov, nv))
+        return eid[0]
+
+    old_doc = end - timedelta(days=24)               # an "old" document (older than the 2-day window)
+    t = datetime.combine(end, dtime(11, 30))
+    # 1) a BP voucher ~24 days old, two line amounts edited (header + two lines). Header first so the lines join to it.
+    ev("TM", "U", "TRANS_NO=90412", "BP-00412", old_doc, t, "acc2", "ACCOUNTS-02")
+    ev("TD", "U", "TRANS_NO=90412;SR_NO=1", "line 1", old_doc, t, None, None,
+       [("DR", "42000", "27000")])
+    ev("TD", "U", "TRANS_NO=90412;SR_NO=2", "line 2", old_doc, t, None, None,
+       [("CR", "-1372159", "-1357159")])
+    # 2) a sale voucher's customer account changed today (account change - shows the account NAME resolution)
+    ev("TM", "U", "TRANS_NO=90455", "SV-00455", end - timedelta(days=1), datetime.combine(end, dtime(12, 10)), "acc1", "ACCOUNTS-01")
+    ev("TD", "U", "TRANS_NO=90455;SR_NO=1", "line 1", end - timedelta(days=1), datetime.combine(end, dtime(12, 10)), None, None,
+       [("AC", "1301", "1303")])      # Gul Fabrics -> Kohinoor Home Textiles (demo customer account codes)
+    # 3) a store issue slip deleted days after it was saved (delete + old entry; a delete carries every old field)
+    ev("DMN", "D", "TRANS_NO=70233", "ISS-5233", old_doc, datetime.combine(end, dtime(14, 5)), "store2", "STORE-01",
+       [("DOC_NO", "ISS-5233", ""), ("ITEM", "SP-010", ""), ("QTY", "3", ""), ("AMOUNT", "7950", ""), ("DEPT", "LOOM-06", "")])
+    # 4) a store line deleted then re-entered within a minute (some screens save a line as delete+insert; a pairing hint)
+    ev("DDT", "D", "TRANS_NO=70240;SR_NO=2", "line 2 item SP-003", end, datetime.combine(end, dtime(15, 20, 10)), "store1", "STORE-02",
+       [("ITEM", "SP-003", ""), ("QTY", "40", ""), ("RATE", "9", "")])
+    ev("DDT", "I", "TRANS_NO=70240;SR_NO=2", "line 2 item SP-003", end, datetime.combine(end, dtime(15, 20, 55)), "store1", "STORE-02")
+    # 5) a journal edited TODAY (recent amount change - flagged amount, but NOT "old entry")
+    ev("TM", "U", "TRANS_NO=90460", "JV-00460", end, datetime.combine(end, dtime(16, 40)), "acc1", "ACCOUNTS-01")
+    ev("TD", "U", "TRANS_NO=90460;SR_NO=1", "line 1", end, datetime.combine(end, dtime(16, 40)), None, None,
+       [("DR", "85000", "90000")])
 
 
 YARNS = [("Y60", "60/1 CTN", 60), ("Y40", "40/1 CTN", 40), ("Y20", "20/1 CTN", 20)]

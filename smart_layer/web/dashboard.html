@@ -103,6 +103,13 @@
   tr:hover td{background:var(--teal-soft)}
   tr.hit td{background:var(--amber-soft)}
   td b{font-weight:700} .muted{color:var(--muted)}
+  /* edits (ERP edit history) */
+  table.edtbl tr.edrow{cursor:pointer} table.edtbl tr.ed-del td{background:var(--red-soft)} table.edtbl tr.ed-old td{background:var(--amber-soft)}
+  table.edtbl tr.ed-del:hover td,table.edtbl tr.ed-old:hover td{filter:brightness(.97)}
+  .edb{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px;margin-left:5px;white-space:nowrap}
+  .edb.del{background:var(--red);color:#fff} .edb.old{background:var(--amber-soft);color:var(--amber)}
+  .edb.amt{background:var(--teal-soft);color:var(--teal-deep)} .edb.pair{background:var(--line);color:var(--muted)}
+  .eddet{font-size:13px;line-height:1.5} .eddet .muted{font-size:12px} span.edm{font-weight:700;color:var(--red)}
   .tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
   .tag.ok,.tag.run{background:var(--teal-soft);color:var(--teal-deep)} .tag.low,.tag.stop,.tag.OUT.OF.STOCK{background:var(--red-soft);color:var(--red)}
   .tag.mid,.tag.idle{background:var(--amber-soft);color:var(--amber)} .tag.dr{background:var(--teal-soft);color:var(--teal-deep)} .tag.cr{background:var(--amber-soft);color:var(--amber)} .tag.out{background:var(--red);color:#fff}
@@ -292,6 +299,7 @@
     <button data-tab="finance">Finance</button>
     <button data-tab="payroll">Payroll</button>
     <button data-tab="gate">Gate Passes</button>
+    <button data-tab="edits" id="tab-edits" style="display:none">Edits</button>
     <button data-tab="reports">Reports</button>
   </nav>
 
@@ -421,6 +429,23 @@
     </div>
     <div id="gate-out"></div>
     <div class="rep-sum" id="gate-msg"></div>
+  </section>
+
+  <!-- EDITS (ERP edit history, item 31) -->
+  <section class="pane" data-pane="edits" hidden>
+    <div class="grid g4" id="ed-tiles" style="margin-bottom:14px"></div>
+    <div class="tools">
+      <label class="fld">From <input type="date" id="ed-from"></label>
+      <label class="fld">To <input type="date" id="ed-to"></label>
+      <label class="fld">User <select id="ed-user"><option value="">All users</option></select></label>
+      <label class="fld">Area <select id="ed-area"><option value="">All areas</option></select></label>
+      <label class="fld">Action <select id="ed-action"><option value="">All</option><option value="U">Edited</option><option value="D">Deleted</option><option value="I">Added</option></select></label>
+      <label class="fld">🔎 <input id="ed-doc" placeholder="Document no."></label>
+      <label class="fld" style="gap:6px"><input type="checkbox" id="ed-flagged"> Flagged only</label>
+      <button class="btn ghost" id="ed-reset">Reset</button>
+    </div>
+    <div id="ed-out"></div>
+    <div class="rep-sum" id="ed-msg"></div>
   </section>
 
   <!-- REPORTS -->
@@ -636,6 +661,7 @@ function render(){
   if(!savedScheme && dc.colour_scheme && SCHEMES[dc.colour_scheme] && dc.colour_scheme!==curScheme) applyScheme(dc.colour_scheme, false);
   $("#millName").textContent = D.company || "Mill";
   $("#subtitle").textContent = "by Azam Puri";
+  var te=$("#tab-edits"); if(te) te.style.display = (D.edits_installed && !STATIC_DATA) ? "" : "none";   // Edits tab only when the ERP change-history layer is present
   var _s=D.sync||{};
   $("#asof").textContent = "as of " + dshort(D.as_of) + (_s.live_at? " · live sync "+String(_s.live_at).slice(11,16) : (D.synced_at? " · synced "+String(D.synced_at).slice(11,16) : ""));
   $("#asof").style.color = (_s.stale) ? "var(--red)" : "";
@@ -1404,6 +1430,105 @@ function renderGate(){
 var gqT; $("#gate-q").addEventListener("input",()=>{clearTimeout(gqT);gqT=setTimeout(loadGate,300);});
 $("#gate-type").onchange=()=>{$("#gate-q").value="";loadGate();};
 
+/* ---------- edits (ERP edit history, item 31) ---------- */
+var edInit=false, edData=null, edFacets=false;
+function initEdits(){
+  if(STATIC_DATA){ $("#ed-msg").textContent="Open from the server to see the edit history."; return; }
+  if(!edInit){
+    edInit=true;
+    var deb; function reload(){ clearTimeout(deb); deb=setTimeout(loadEdits,300); }
+    ["ed-from","ed-to","ed-doc"].forEach(id=>$("#"+id).addEventListener("input",reload));
+    ["ed-user","ed-area","ed-action"].forEach(id=>$("#"+id).onchange=loadEdits);
+    $("#ed-flagged").onchange=renderEdits;
+    $("#ed-reset").onclick=()=>{ ["ed-from","ed-to","ed-doc"].forEach(id=>$("#"+id).value="");
+      ["ed-user","ed-area","ed-action"].forEach(id=>$("#"+id).value=""); $("#ed-flagged").checked=false; loadEdits(); };
+  }
+  loadEdits();
+}
+function loadEdits(){
+  if(STATIC_DATA) return;
+  var qs=[]; var f=$("#ed-from").value, t=$("#ed-to").value;
+  if(f) qs.push("from="+f); if(t) qs.push("to="+t);
+  if($("#ed-user").value) qs.push("user="+encodeURIComponent($("#ed-user").value));
+  if($("#ed-area").value) qs.push("area="+encodeURIComponent($("#ed-area").value));
+  if($("#ed-action").value) qs.push("action="+$("#ed-action").value);
+  if($("#ed-doc").value.trim()) qs.push("doc="+encodeURIComponent($("#ed-doc").value.trim()));
+  $("#ed-msg").textContent="Loading…";
+  fetch("api/edits"+(qs.length?("?"+qs.join("&")):"")).then(r=>r.json()).then(j=>{
+    edData=j;
+    if(!edFacets && j.installed){
+      edFacets=true;
+      (j.users||[]).forEach(u=>$("#ed-user").insertAdjacentHTML("beforeend",`<option>${esc(u)}</option>`));
+      (j.areas||[]).forEach(a=>$("#ed-area").insertAdjacentHTML("beforeend",`<option value="${esc(a.table)}">${esc(a.area)}</option>`));
+    }
+    renderEdits();
+  }).catch(()=>{ $("#ed-msg").textContent="Could not load the edit history."; });
+}
+function edBadges(r){
+  var b="";
+  if(r.is_delete) b+=`<span class="edb del">deleted</span>`;
+  if(r.is_old_edit) b+=`<span class="edb old">old entry</span>`;
+  if(r.touches_account) b+=`<span class="edb amt">account</span>`;
+  else if(r.touches_amount) b+=`<span class="edb amt">amount</span>`;
+  if(r.paired) b+=`<span class="edb pair">re-entered</span>`;
+  return b;
+}
+function renderEdits(){
+  if(!edData) return;
+  if(!edData.installed){
+    $("#ed-tiles").innerHTML=""; $("#ed-out").innerHTML="";
+    $("#ed-msg").textContent="The ERP edit-history layer is not installed on this server yet."; return;
+  }
+  var rows=edData.rows||[];
+  if($("#ed-flagged").checked) rows=rows.filter(r=>r.is_delete||r.is_old_edit||r.touches_amount);
+  var ndel=rows.filter(r=>r.is_delete).length, nold=rows.filter(r=>r.is_old_edit).length;
+  var users=new Set(rows.map(r=>r.user).filter(u=>u&&u!=="—"));
+  $("#ed-tiles").innerHTML =
+    tile("✏ Changes", num(rows.length), "matching the filter","accent")+
+    tile("🗑 Deletes", num(ndel), "in this list", ndel?"bad":"")+
+    tile("🕓 Old-entry edits", num(nold), "older than the window", nold?"warn":"")+
+    tile("👤 Users", num(users.size), "made these changes");
+  var head=["When","User","Area","Document","What changed",""];
+  var body=rows.map(r=>{
+    var cls=r.is_delete?"ed-del":(r.is_old_edit?"ed-old":"");
+    var doc=esc(r.doc||"—")+(r.doc_date?` <span class="muted">${dshort(r.doc_date)}</span>`:"");
+    var what = r.action==="I" ? `<span class="muted">added${r.fields?" ("+r.fields+" fields)":""}</span>`
+             : (r.summary ? esc(r.summary) : `<span class="muted">${esc(r.action_word)}</span>`);
+    return `<tr class="edrow ${cls}" data-id="${r.event_id}" tabindex="0">`+
+      `<td>${esc((r.at||"").slice(0,16).replace("T"," "))}</td>`+
+      `<td>${esc(r.user)}${r.pc?` <span class="muted">${esc(r.pc)}</span>`:""}</td>`+
+      `<td>${esc(r.area)}</td>`+
+      `<td>${doc}</td>`+
+      `<td>${what} ${edBadges(r)}</td>`+
+      `<td class="num"><span class="chev">›</span></td></tr>`;
+  }).join("");
+  $("#ed-out").innerHTML=`<div class="card" style="margin:0"><div class="tscroll"><table class="edtbl"><thead><tr>`+
+    head.map(h=>`<th>${h}</th>`).join("")+`</tr></thead><tbody>`+body+`</tbody></table></div></div>`;
+  $("#ed-out").querySelectorAll(".edrow").forEach(tr=>{
+    tr.onclick=()=>openEdit(tr.dataset.id);
+    tr.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openEdit(tr.dataset.id); } };
+  });
+  var total=edData.total||rows.length;
+  $("#ed-msg").textContent = rows.length+" change"+(rows.length!==1?"s":"")+(total>edData.rows.length?` (newest ${edData.rows.length} of ${total})`:"");
+  applyFilter();
+}
+function openEdit(id){
+  openDrawer("Change detail", `<p class="muted">Loading…</p>`);
+  fetch("api/edits/detail?id="+encodeURIComponent(id)).then(r=>r.json()).then(d=>{
+    if(!d){ $("#drawer-body").innerHTML=`<p class="muted">Not found.</p>`; return; }
+    var head=`<div class="eddet"><div><b>${esc(d.action_word)}</b> · ${esc(d.area)} · ${esc(d.doc||"—")}`+
+      (d.doc_date?` <span class="muted">(${dshort(d.doc_date)})</span>`:"")+`</div>`+
+      `<div class="muted">${esc((d.at||"").replace("T"," "))} · by ${esc(d.user)}`+(d.pc?` · ${esc(d.pc)}`:"")+(d.ip?` · ${esc(d.ip)}`:"")+`</div></div>`;
+    var fields = (d.fields&&d.fields.length)
+      ? table(["Field","Before","After"], d.fields.map(f=>[esc(f.column), `<span class="${f.material?"edm":""}">${esc(f.old)}</span>`, `<span class="${f.material?"edm":""}">${esc(f.new)}</span>`]))
+      : `<p class="muted">${d.action==="I"?"New entry — the values are in the ERP.":"No field-level detail recorded."}</p>`;
+    var sess = (d.session && Object.keys(d.session).length)
+      ? `<div class="muted" style="margin-top:10px;font-size:12px">Session: `+Object.entries(d.session).map(([k,v])=>`${esc(k)}=${esc(v)}`).join(" · ")+`</div>` : "";
+    $("#drawer-title").textContent="Change #"+esc(String(d.event_id));
+    $("#drawer-body").innerHTML=head+`<div style="margin-top:10px">`+fields+`</div>`+sess;
+  }).catch(()=>{ $("#drawer-body").innerHTML=`<p class="muted">Could not load the detail.</p>`; });
+}
+
 async function browseInto(entity, q, outSel, msgSel, offset, append){
   if(STATIC_DATA){ $(msgSel).textContent="Open from the server to browse data."; return 0; }
   $(msgSel).textContent="Loading…";
@@ -1617,6 +1742,7 @@ function setTab(name){
     if(name==="yf") loadYF();
     if(name==="payroll"){ initPay(); loadPay(); }
     if(name==="gate") initGate();
+    if(name==="edits") initEdits();
     if(name==="reports"){ initReports().then(()=>{ if($("#rep-name").value) loadReportNamed($("#rep-name").value); loadSavedFiles(); }); }
   }
   applyFilter();

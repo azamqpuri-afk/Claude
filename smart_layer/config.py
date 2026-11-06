@@ -58,6 +58,13 @@ DEFAULTS = {
         "trial_balance_tolerance": 10,    # rounding differences below this are not an error
         "dismiss": [],                    # [{match = "regex", why = "normal practice ..."}]
     },
+    "edits": {                            # ERP edit history / Edits tab (item 31) - needs the optional change-history entities
+        "push_older_than_days": 2,        # phone-push every DELETE, and any EDIT of an entry older than this many days
+        "old_edit_days": 2,               # highlight edits of entries older than this many days in the Edits tab
+        "pair_minutes": 5,                # "deleted then re-entered" hint: a delete + insert of the same line within this
+        "amount_keywords": [],            # EXTRA column-name fragments to treat as money/qty/rate/account (per-ERP names)
+        "table_names": {},                # friendly area names per ERP table, e.g. TM = "Voucher" (else a generic label)
+    },
     "closing": {},                        # the mill's closing method - see smart_layer/textile/method.py
     "pilferage": {},                      # thresholds - see smart_layer/textile/pilferage.py
     "beams": {},                          # see smart_layer/textile/beams.py

@@ -428,6 +428,29 @@ class App:
         finally:
             con.close()
 
+    def edits(self, d0=None, d1=None, user="", area="", action="", doc="", limit=500):
+        """The Edits tab list (item 31): ERP edit history, newest first, filtered."""
+        from .. import erp_edits
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return erp_edits.list_edits(con, self.cfg, d0, d1, user or None, area or None,
+                                        action or None, doc or None, int(limit or 500))
+        finally:
+            con.close()
+
+    def edit_detail(self, event_id):
+        """Every field old → new for one change event."""
+        from .. import erp_edits
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            try:
+                eid = float(event_id)
+            except (TypeError, ValueError):
+                return None
+            return erp_edits.detail(con, self.cfg, eid)
+        finally:
+            con.close()
+
     def ask(self, session, question):
         import os
         try:
@@ -548,6 +571,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/store/issues", "/api/store/rates", "/api/store/slip", "/api/store/loom",
                 "/api/manual", "/api/manual/history", "/api/closing/contracts", "/api/closing/sheet",
                 "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
+                "/api/edits", "/api/edits/detail",
                 "/api/reports/files", "/api/changes"):
         if check_licence:
             st = licence.status(app.cfg)
@@ -620,6 +644,17 @@ def get_response(app, path, query, check_licence=True):
                 sday = None
             return 200, app.month_sales(a0, a1, day=sday, month=params.get("month") or None,
                                         history=(params.get("history") == "1")), "application/json", {}
+        if path == "/api/edits/detail":                  # one change event, every field old → new
+            d = app.edit_detail(params.get("id", ""))
+            return (200, d, "application/json", {}) if d else (404, {"error": "unknown change event"}, "application/json", {})
+        if path == "/api/edits":                          # the Edits tab list (ERP edit history), filtered
+            try:
+                a0 = date.fromisoformat(params["from"]) if params.get("from") else None
+                a1 = date.fromisoformat(params["to"]) if params.get("to") else None
+            except ValueError:
+                return 400, {"error": "from/to must be YYYY-MM-DD"}, "application/json", {}
+            return 200, app.edits(a0, a1, params.get("user", ""), params.get("area", ""),
+                                  params.get("action", ""), params.get("doc", ""), params.get("limit", 500)), "application/json", {}
         if path == "/api/feed":                          # the Overview live-feed panel (optional ?date=)
             try:
                 fday = date.fromisoformat(params["date"]) if params.get("date") else None

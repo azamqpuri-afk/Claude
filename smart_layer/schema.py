@@ -471,6 +471,46 @@ ENTITIES += (
     ),
 )
 
+# ERP edit history (item 31). An optional add-on: a mill whose ERP does not record edits can install a small
+# history layer (e.g. Oracle triggers writing an AUDIT_HIST schema) that logs every insert / edit / delete of an
+# ERP line. Smart Layer reads it read-only and shows it in the Edits tab. A mill without the history tables simply
+# has no Edits tab (the entities stay unmapped / "not installed"). Core stays generic; the SQL lives in the mapping.
+ENTITIES += (
+    Entity(
+        "erp_change_events",
+        "One row per insert / edit / delete of one ERP line, from the ERP's own change-history layer (optional). "
+        "Synced incrementally by event_id, which only ever grows, so the whole history is kept. Optional: only "
+        "mills that have installed an edit-history layer map it; its absence means the Edits tab is simply off.",
+        (C("event_id", "REAL", "Change event id - a number that only grows; the sync cursor and the join key to "
+                               "erp_change_values", True),
+         C("changed_at", "DATETIME", "When the change happened (the edit / insert / delete time)", True),
+         C("table_name", "TEXT", "The ERP table the changed line belongs to (e.g. TM, TD, DMN, DDT)", True),
+         C("action", "TEXT", "I = inserted, U = updated (edited), D = deleted", True),
+         C("row_key", "TEXT", "Identifies the exact ERP line, e.g. 'TRANS_NO=123' or 'TRANS_NO=123;SR_NO=2'"),
+         C("doc_ref", "TEXT", "Human document reference (voucher type-number, store doc type-number, or 'line n')"),
+         C("doc_date", "DATE", "Date on the document the line belongs to"),
+         C("erp_user", "TEXT", "ERP login that made the change (taken from the line, or its header for detail lines)"),
+         C("pc_name", "TEXT", "PC name the change was made from, if recorded"),
+         C("ip_addr", "TEXT", "IP address the change was made from, if recorded"),
+         C("db_user", "TEXT", "Database user of the Oracle session"),
+         C("os_user", "TEXT", "OS user of the Oracle session"),
+         C("client_host", "TEXT", "Client host of the Oracle session"),
+         C("client_ip", "TEXT", "Client IP of the Oracle session"),
+         C("module", "TEXT", "Oracle session module / program")),
+        key=("event_id",),
+    ),
+    Entity(
+        "erp_change_values",
+        "One row per field that changed in a change event (optional, pairs with erp_change_events on event_id). "
+        "For an edit, only the fields that really changed; for a delete, every old field (new_value blank); for an "
+        "insert, no value rows (the values live in the ERP itself). Synced incrementally by event_id.",
+        (C("event_id", "REAL", "Change event id (erp_change_events.event_id)", True),
+         C("column_name", "TEXT", "The ERP column that changed", True),
+         C("old_value", "TEXT", "Value before the change (blank for an insert)"),
+         C("new_value", "TEXT", "Value after the change (blank for a delete)")),
+    ),
+)
+
 BY_NAME = {e.name: e for e in ENTITIES}
 
 

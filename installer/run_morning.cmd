@@ -6,7 +6,7 @@ set LOG=output\morning_log.txt
 if not exist config.toml (exit /b 0)
 SmartLayer.exe logtrim "%LOG%" --max-mb 2 --keep-mb 1
 echo ==== %date% %time% ==== >> "%LOG%"
-SmartLayer.exe licence check >nul 2>&1 || (echo no valid licence >> "%LOG%" & exit /b 1)
+SmartLayer.exe licence check >> "%LOG%" 2>&1 || (echo no valid licence - nothing run >> "%LOG%" & exit /b 1)
 SmartLayer.exe morning >> "%LOG%" 2>&1
 SmartLayer.exe night-sensor >> "%LOG%" 2>&1
 SmartLayer.exe weft-check >> "%LOG%" 2>&1
