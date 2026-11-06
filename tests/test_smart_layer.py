@@ -1794,3 +1794,25 @@ def test_v0160_scoreboard_web_routes(env):
         assert code == 200 and isinstance(body, dict)
     # the dashboard payload flags the Purchasing tab on
     assert web_data.build(con, cfg, END)["purchasing_installed"] is True
+
+
+def test_v0161_config_warnings(tmp_path):
+    from smart_layer import cli, config as _cfg
+    # no dashboard password + ntfy enabled but no topic -> two clear warnings
+    (tmp_path / "config.toml").write_text(
+        '[company]\nname="M"\n[erp]\ndriver="sqlite"\npath="d.db"\nmapping="m.toml"\n[store]\npath="s.db"\n'
+        '[serve]\nhost="0.0.0.0"\nport=8080\n[notify]\nchannels=["console","ntfy"]\n')
+    cfg = _cfg.load(tmp_path / "config.toml")
+    w = cli._config_warnings(cfg)
+    assert any("DASHBOARD_PASSWORD missing" in x for x in w)
+    assert any("NTFY_TOPIC missing" in x for x in w)
+    # with a password set and a proper ntfy topic, no warnings
+    (tmp_path / "config.toml").write_text(
+        '[company]\nname="M"\n[erp]\ndriver="sqlite"\npath="d.db"\nmapping="m.toml"\n[store]\npath="s.db"\n'
+        '[serve]\nhost="0.0.0.0"\npassword="secretpw"\n[notify]\nchannels=["console","ntfy"]\nntfy_topic="a-long-random-topic-name"\n')
+    assert cli._config_warnings(_cfg.load(tmp_path / "config.toml")) == []
+    # ntfy not a channel -> a short/absent topic is not flagged
+    (tmp_path / "config.toml").write_text(
+        '[company]\nname="M"\n[erp]\ndriver="sqlite"\npath="d.db"\nmapping="m.toml"\n[store]\npath="s.db"\n'
+        '[serve]\npassword="x"\n[notify]\nchannels=["console"]\n')
+    assert cli._config_warnings(_cfg.load(tmp_path / "config.toml")) == []

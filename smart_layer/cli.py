@@ -70,6 +70,8 @@ def cmd_check(cfg, args):
         from . import selfcheck
         con = _store(cfg)
         print("\n" + selfcheck.summary(selfcheck.run(con, cfg)))
+    for w in _config_warnings(cfg):
+        print(f"  WARNING: {w}")
     return 0 if ok else 1
 
 
@@ -434,6 +436,24 @@ def cmd_licence(cfg, args):
     return 0 if st.allowed else 1
 
 
+def _config_warnings(cfg):
+    """Plain-language warnings about .env / config gaps that otherwise only show up deep inside the dashboard loop:
+    a missing dashboard password (the dashboard refuses to serve on a network host) and a missing/short ntfy topic
+    when push alerts are on (pushes silently fail). Returns a list of one-line strings (empty when all is well)."""
+    out = []
+    sv = cfg["serve"]
+    host = str(sv.get("host") or "127.0.0.1")
+    if not str(sv.get("password") or ""):
+        where = "network" if host not in ("127.0.0.1", "localhost") else "local-only"
+        out.append(f"DASHBOARD_PASSWORD missing in .env - the dashboard has no password ({where} host '{host}'); "
+                   f"it will refuse to serve on a network host. Set DASHBOARD_PASSWORD in .env (or [serve] password).")
+    n = cfg["notify"]
+    if "ntfy" in (n.get("channels") or []) and len(str(n.get("ntfy_topic") or "")) < 16:
+        out.append("NTFY_TOPIC missing (or too short) in .env - push alerts are enabled but will fail, so pushes are "
+                   "disabled. Set NTFY_TOPIC in .env to a long random name (or remove 'ntfy' from [notify] channels).")
+    return out
+
+
 def cmd_status(cfg, args):
     import os
     import subprocess
@@ -464,6 +484,8 @@ def cmd_status(cfg, args):
             r = subprocess.run(["schtasks", "/query", "/tn", task, "/fo", "list"], capture_output=True, text=True)
             state = next((ln.split(":", 1)[1].strip() for ln in r.stdout.splitlines() if ln.startswith("Status")), "not installed")
             print(f"  Task        : {task} - {state}")
+    for w in _config_warnings(cfg):
+        print(f"  WARNING     : {w}")
     return 0
 
 
