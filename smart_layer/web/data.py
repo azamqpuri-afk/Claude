@@ -382,7 +382,20 @@ def build(con, cfg, as_of=None):
         "cost": _cost_head(con, cfg, as_of),
         "weaving": _weaving(con, cfg, as_of),
         "yarn_fabric": _yarn_fabric(con, cfg, as_of),
+        "gully": _gully_summary(con, cfg, as_of),
     }
+
+
+def _gully_summary(con, cfg, as_of):
+    """A small Overview summary of the gully / rewind book balance (0 when no gully is recorded)."""
+    from ..textile import gully
+    try:
+        bal = gully.rewind_balance(con, cfg, as_of)
+    except Exception:
+        return {"book_kg": 0, "gully_kg": 0, "yarns": 0}
+    t = bal.get("totals", {})
+    return {"book_kg": t.get("book", 0), "gully_kg": t.get("gully", 0),
+            "reused_kg": t.get("reused", 0), "yarns": len(bal.get("rows", []))}
 
 
 def _edits_installed(con):

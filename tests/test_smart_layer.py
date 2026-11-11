@@ -1877,3 +1877,91 @@ def test_v0161_physical_rejection_count_feeds_the_review(env):
     assert hit["as_on"] == END.isoformat()
     assert hit["difference"] == 1234 - hit["erp_rejection"]
     assert rev["counted"] >= 1
+
+
+# ---- 0.17.0: gully / rewind yarn -------------------------------------------------------------
+
+def test_v0170_gully_route_and_cone_weight():
+    from smart_layer.textile import gully
+    g = {"reuse_to": {"30/1 PC": "sizing", "default": "weft"},
+         "cone_weight_kg": 0.060, "cone_weight_by_yarn": {"52/1 CTN": 0.07}}
+    # route: named yarn (as a substring) -> its route; anything else -> the default
+    assert gully.route_for(g, "30/1 PC CARDED") == "sizing"
+    assert gully.route_for(g, "52/1 CTN") == "weft"
+    assert gully.route_for({"reuse_to": {"default": "weft"}}, "anything") == "weft"
+    # cone (tube) weight: per-yarn override, else the scalar default
+    assert gully.cone_weight(g, "52/1 CTN") == pytest.approx(0.07)
+    assert gully.cone_weight(g, "30/1 PC") == pytest.approx(0.060)
+
+
+def test_v0170_gully_auto_rewound_match():
+    from smart_layer.textile import gully
+    line = {"date": "2026-05-10", "yarn": "30/1 PC", "kg": 1000.0}
+    near = [{"date": "2026-05-12", "yarn": "30/1 PC", "kg": 1005.0}]      # within 3 days, within 1%
+    far = [{"date": "2026-05-20", "yarn": "30/1 PC", "kg": 1000.0}]       # outside the window
+    other = [{"date": "2026-05-10", "yarn": "40/1 CTN", "kg": 1000.0}]    # different yarn
+    assert gully._auto_rewound(line, near, 3, 1.0) is False               # matches a fresh receipt -> fresh
+    assert gully._auto_rewound(line, far, 3, 1.0) is True                 # no match -> rewound gully
+    assert gully._auto_rewound(line, other, 3, 1.0) is True
+
+
+def test_v0170_gully_net_of_tubes_and_balance(env):
+    cfg, con = env
+    from smart_layer import manual
+    from smart_layer.textile import gully
+    saved = cfg.data.get("gully", {})
+    cfg.data["gully"] = {**config.DEFAULTS["gully"], "reuse_to": {"default": "weft"}, "cone_weight_kg": 0.060}
+    try:
+        sets0 = gully.gully_sets(con, cfg, END)
+        set0 = next((r for r in sets0["rows"] if r["slip_kg"] > 0), None)
+        assert set0, "demo needs a sized set with gully"
+        # the gully-cone count comes from the set record; the empty tubes net off the gully weight
+        assert set0["cones"] >= 0
+        assert set0["tube_kg"] == pytest.approx(set0["cones"] * 0.060, abs=0.05)
+        assert set0["net_kg"] == pytest.approx(max(0.0, set0["slip_kg"] - set0["tube_kg"]), abs=0.2)
+        # the gate-app count is kept only as a cross-check (does not change the net)
+        manual.set_value(con, "gully_set", str(set0["set_no"]), "cones", set0["cones"] + 9, "tester")
+        r1 = next(r for r in gully.gully_sets(con, cfg, END)["rows"] if str(r["set_no"]) == str(set0["set_no"]))
+        assert r1["gate_cones"] == set0["cones"] + 9 and r1["cones_diff"] == -9
+        assert r1["net_kg"] == pytest.approx(set0["net_kg"], abs=0.1)     # net unchanged by the cross-check
+        # book balance per yarn = opening + gully net - rewound re-used (0 on weft until marked) - waste (0)
+        bal = gully.rewind_balance(con, cfg, END)
+        yr = next((r for r in bal["rows"] if r["gully_returned_kg"] > 0), None)
+        assert yr and yr["route"] == "weft"
+        manual.set_value(con, "gully_yarn", yr["yarn"], "opening_kg", 500, "tester")
+        manual.set_value(con, "gully_yarn", yr["yarn"], "physical_kg", 100, "tester")
+        bal2 = gully.rewind_balance(con, cfg, END)
+        yr2 = next(r for r in bal2["rows"] if r["yarn"] == yr["yarn"])
+        assert yr2["book_balance_kg"] == 500 + yr2["gully_returned_kg"] - yr2["rewound_reused_kg"] - yr2["waste_kg"]
+        assert yr2["physical_kg"] == 100
+        assert yr2["difference_kg"] == yr2["book_balance_kg"] - 100
+    finally:
+        cfg.data["gully"] = saved
+
+
+def test_v0170_yarn_weight_flags():
+    from smart_layer.textile import gully
+
+    class _Cfg:
+        def __init__(self, g):
+            self.g = {"gully": g}
+
+        def __getitem__(self, k):
+            return self.g.get(k, {})
+
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE yarn_movements (move_date TEXT, doc_no TEXT, move_type TEXT, yarn_name TEXT, "
+                "contract_no TEXT, bags REAL, kg REAL)")
+    con.executemany("INSERT INTO yarn_movements VALUES (?,?,?,?,?,?,?)", [
+        ("2026-01-10", "IGP-1", "party_receipt", "30/1 PC", "C1", 10, 453.6),   # fine: ~1 bag/bag
+        ("2024-01-05", "IGP-89", "party_receipt", "30/1 PC", "C1", 55, None),   # bags but no weight
+        ("2026-05-11", "IGP-543", "party_receipt", "30/1 PC", "C1", 10, 5896.8),  # kg typed in the bags box
+    ])
+    con.commit()
+    cfg = _Cfg({"bag_kg": 45.359237, "weight_ratio_low": 0.5, "weight_ratio_high": 2.0})
+    out = gully.yarn_weight_flags(con, cfg, date(2026, 10, 2))
+    docs = {r["doc_no"]: r["issue"] for r in out["rows"]}
+    assert out["count"] == 2
+    assert docs["IGP-89"] == "weight missing"
+    assert docs["IGP-543"] == "weight too high"
+    assert "IGP-1" not in docs

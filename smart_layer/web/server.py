@@ -451,6 +451,101 @@ class App:
         finally:
             con.close()
 
+    # ---- gully / rewind yarn (item: gully tracking) --------------------------------------------
+    def gully_balance(self, day=None):
+        from ..textile import gully
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return gully.rewind_balance(con, self.cfg, day)
+        finally:
+            con.close()
+
+    def gully_sets(self, day=None):
+        from ..textile import gully
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return gully.gully_sets(con, self.cfg, day)
+        finally:
+            con.close()
+
+    def gully_lines(self, day=None):
+        from ..textile import gully
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return {"lines": gully.rewind_lines(con, self.cfg, day)}
+        finally:
+            con.close()
+
+    def gully_quality(self, day=None):
+        from ..textile import gully
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return gully.yarn_weight_flags(con, self.cfg, day)
+        finally:
+            con.close()
+
+    def save_gully_set(self, set_no, gate_kg, cones, who=""):
+        """The owner's figures for one sized set: the gully weighed at the gate (kg) and/or the gully-cone (tube)
+        count. Either may be given; a blank is not recorded."""
+        from .. import manual
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            key = str(set_no).strip()
+            if gate_kg not in (None, ""):
+                manual.set_value(con, "gully_set", key, "gate_kg", gate_kg, who)
+            if cones not in (None, ""):
+                manual.set_value(con, "gully_set", key, "cones", cones, who)
+            return {"ok": True}
+        finally:
+            con.close()
+
+    def save_gully_yarn(self, yarn, fields, who=""):
+        """Owner figures per yarn kept only in Smart Layer: opening_kg, waste_kg, physical_kg (+ its date). A value
+        may be entered as bags+cones instead of kg; the conversion to kg happens here so the engine only sees kg."""
+        from datetime import date as _date
+
+        from .. import manual
+        from ..textile import gully as _g
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            key = str(yarn).strip()
+            f = dict(fields or {})
+            # bags + cones -> kg for whichever opening/physical was entered that way
+            cpb = f.pop("cone_pbag", None)
+            for base in ("opening", "physical"):
+                bags, cones = f.pop(base + "_bags", None), f.pop(base + "_cones", None)
+                if (bags not in (None, "")) or (cones not in (None, "")):
+                    ck = _g.cone_kg(self.cfg["gully"], key, cpb)
+                    bag_kg = float(self.cfg["gully"].get("bag_kg", 45.359237) or 45.359237)
+                    try:
+                        kg = float(bags or 0) * bag_kg + float(cones or 0) * ck
+                        f.setdefault(base + "_kg", round(kg, 2))
+                    except (TypeError, ValueError):
+                        pass
+            for fld in ("opening_kg", "waste_kg", "physical_kg"):
+                if fld in f and f[fld] not in (None, ""):
+                    manual.set_value(con, "gully_yarn", key, fld, f[fld], who)
+            if f.get("physical_kg") not in (None, "") and f.get("physical_at"):
+                try:
+                    manual.set_value(con, "gully_yarn", key, "physical_at_iso",
+                                     _date.fromisoformat(str(f["physical_at"])[:10]).toordinal(), who,
+                                     note=str(f["physical_at"])[:10])
+                except ValueError:
+                    pass
+            return {"ok": True}
+        finally:
+            con.close()
+
+    def save_gully_line(self, doc_no, rewound, who=""):
+        """The owner's rewound/fresh tick on one movement line (1 = rewound gully, 0 = fresh yarn)."""
+        from .. import manual
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            manual.set_value(con, "gully_line", str(doc_no).strip(), "rewound", (1 if rewound else 0), who)
+            return {"ok": True}
+        finally:
+            con.close()
+
     def closing_counts(self, day, party, quality=None):
         """The warp/weft closing counts in effect for a party's closing, prefilled for the editable dashboard panel,
         plus the party's qualities and any cross-party fabric deliveries."""
@@ -723,6 +818,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/store/issues", "/api/store/rates", "/api/store/slip", "/api/store/loom",
                 "/api/manual", "/api/manual/history", "/api/closing/contracts", "/api/closing/sheet",
                 "/api/closing/count-review", "/api/closing/counts-saved",
+                "/api/gully", "/api/gully/sets", "/api/gully/lines", "/api/gully/quality",
                 "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
                 "/api/edits", "/api/edits/detail",
                 "/api/looms/efficiency", "/api/looms/days",
@@ -777,6 +873,18 @@ def get_response(app, path, query, check_licence=True):
             except ValueError:
                 return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
             return 200, app.fabric_count_review(cday), "application/json", {}
+        if path in ("/api/gully", "/api/gully/sets", "/api/gully/lines", "/api/gully/quality"):   # gully / rewind yarn
+            try:
+                gday = date.fromisoformat(params["date"]) if params.get("date") else None
+            except ValueError:
+                return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
+            if path == "/api/gully/sets":
+                return 200, app.gully_sets(gday), "application/json", {}
+            if path == "/api/gully/lines":
+                return 200, app.gully_lines(gday), "application/json", {}
+            if path == "/api/gully/quality":
+                return 200, app.gully_quality(gday), "application/json", {}
+            return 200, app.gully_balance(gday), "application/json", {}
         if path == "/api/closing/contracts":             # contracts for the closing picker (optional party filter)
             return 200, app.closing_contracts(params.get("party", "")), "application/json", {}
         if path == "/api/closing/sheet":                 # IGP yarn + OGP fabric date-wise for a party/contract
@@ -1062,6 +1170,21 @@ def handler(app):
                     res = app.save_fabric_count(str(body.get("contract", ""))[:50], str(body.get("quality", ""))[:80],
                                                 body.get("as_on"), body.get("grades") or {}, who)
                     return self._send(200 if res.get("ok") else 400, res)
+                except Exception as e:
+                    return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
+            if self.path in ("/api/gully/set", "/api/gully/yarn", "/api/gully/line"):   # gully owner inputs
+                from .. import licence
+                if not licence.status(app.cfg).allowed:
+                    return self._send(403, {"error": "Licence: " + licence.status(app.cfg).message})
+                try:
+                    n = min(int(self.headers.get("Content-Length", 0)), 100000)
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                    who = str(body.get("who", "")).strip()[:60]
+                    if self.path == "/api/gully/set":
+                        return self._send(200, app.save_gully_set(str(body.get("set_no", ""))[:40], body.get("gate_kg"), body.get("cones"), who))
+                    if self.path == "/api/gully/line":
+                        return self._send(200, app.save_gully_line(str(body.get("doc_no", ""))[:40], body.get("rewound"), who))
+                    return self._send(200, app.save_gully_yarn(str(body.get("yarn", ""))[:80], body.get("fields") or {}, who))
                 except Exception as e:
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path != "/api/ask":

@@ -27,6 +27,21 @@ DEFAULTS = {
     "sizing": {"gullay_g": 55,                    # grams of yarn left on each returned baby cone (gullay)
                "pick_factor": 1.0936,             # metres-to-yards-ish factor in the closing-count formula
                "shrink_pct": 7},                  # default warp->fabric shrinkage for the sized-yarn closing count
+    "gully": {                                    # gully / rewind-yarn tracking - see smart_layer/textile/gully.py
+        "reuse_to": {"default": "weft"},          # per-yarn reuse route: yarn label -> "sizing" | "weft"; "default" is the fallback
+        "to_sizing_types": ["to_sizer"],          # yarn_movements.move_type values that mean "yarn sent to sizing"
+        "party_receipt_types": ["party_receipt"], # fresh party-yarn receipts (used to tell rewound from fresh on the sizing route)
+        "weft_issue_types": ["to_looms"],         # yarn issued to the looms as weft
+        "match_days": 3,                          # a to-sizing line matching a party receipt within +/- this many days ...
+        "match_tolerance_pct": 1.0,               # ... and +/- this % on kg is treated as FRESH, not rewound (an owner tick always wins)
+        "waste_pct": 0.0,                         # rewind waste as a % of gully returned, until the owner enters a measured figure
+        "bag_kg": 45.359237,                      # default bag weight (100 lb) for an opening entered as bags+cones -> kg
+        "cone_pbag": {},                          # per-yarn cones/bag for cone<->kg, e.g. { "30/1 PC" = 24 } (else from the yarn stock)
+        "cone_weight_kg": 0.060,                  # weight of one empty gully cone/tube (kg): net rewind yarn = gully kg - cones x this
+        "cone_weight_by_yarn": {},                # per-yarn override of cone_weight_kg
+        "default_gully_cones": {},                # per-yarn fallback gully-cone count per set, when the set record has no cone detail
+        "weight_ratio_low": 0.5,                  # yarn-ledger data check: flag a line if kg / (bags x bag_kg) is below this ...
+        "weight_ratio_high": 2.0},                # ... or above this (a weight typed in the bags box, or bags with no weight)
     "cost": {"heads": {},                         # map a ledger account_group/head -> a cost bucket (store/payroll/power/sizing/other)
              "closed_requires": ["store", "payroll"]},   # a month is "closed" (month-end entries posted) when these buckets are all > 0
     "monitor": {                                  # loom-monitor (scoreboard) efficiency

@@ -96,6 +96,34 @@ gullay_g = 55            # grams of yarn left on each returned baby cone (gullay
 pick_factor = 1.0936     # picks-per-metre factor used in the closing weight formula
 shrink_pct = 7           # default sizing shrinkage % (metres after shrink); per-set input overrides it in the sheet
 
+# Gully / rewind-yarn tracking (Yarn & Fabric -> Gully / Rewind). A sized beam comes back with gully (yarn left on
+# the returned cones). The ERP records the gully weight on the sized-beam receipt (the per-set gullay_kg) but not
+# the rewind: the mill rewinds it and re-uses it - back to SIZING for some yarns, as WEFT for others. This tracks a
+# per-yarn book balance = opening + gully returned (net of the empty cones/tubes) - rewound re-used - waste, against
+# a later physical count. All generic: yarn labels, move types and the route come from config / the mapping.
+[gully]
+# Per-yarn reuse route. "default" is the fallback; name a yarn (matched as a substring) to override it.
+reuse_to = { default = "weft" }
+# reuse_to = { "30/1 PC" = "sizing", default = "weft" }
+# move_type values (as the yarn_movements mapping emits them) used to find each flow:
+# to_sizing_types = ["to_sizer"]        # yarn sent to the sizer
+# party_receipt_types = ["party_receipt"]  # fresh party-yarn receipts (a to-sizing line matching one is FRESH, not rewound)
+# weft_issue_types = ["to_looms"]       # yarn issued to the looms as weft
+# match_days = 3           # a to-sizing line within this many days of a fresh receipt ...
+# match_tolerance_pct = 1  # ... and this % on kg is treated as fresh (the owner's tick on a line always wins)
+# waste_pct = 0            # rewind waste as a % of gully returned, until the owner enters a measured figure
+# Empty gully cones (tubes) are part of the gully weight; net rewind yarn = gully kg − cones × cone weight.
+# The gully-cone count is taken from the set record itself (bags × cones_per_bag + loose_cones).
+# cone_weight_kg = 0.060                 # weight of one empty cone/tube (kg)
+# cone_weight_by_yarn = { "30/1 PC" = 0.060 }
+# default_gully_cones = { "30/1 PC" = 1400 }   # per-yarn fallback count for old sets with no cone detail on the record
+# Yarn-ledger data check (flagged in the Gully view): a line with bags but a missing / implausible weight.
+# weight_ratio_low = 0.5                 # flag if kg / (bags × bag_kg) is below this ...
+# weight_ratio_high = 2.0                # ... or above this
+# For an opening entered as bags + cones rather than kg:
+# bag_kg = 45.359237                     # one bag = 100 lb
+# cone_pbag = { "30/1 PC" = 24 }         # cones per bag (else taken from the yarn stock)
+
 [cost]
 # Map a ledger account_group or head name to a cost bucket for the cost-per-metre report.
 # Buckets: store | payroll | power | sizing | other. Example:

@@ -74,6 +74,13 @@ the mapping/config, never the core).
 | 5 | ERP system routines (e.g. nightly average-rate re-rating) collapse to one muted "ERP routine — N lines" row in the Edits tab and are never phone-pushed, so a person's real edits stand out | Edits tab · `[edits] system_modules`/`system_columns` |
 | 6 | Real-PC attribution: when the ERP records the Forms server as the host, the true client PC is recovered from the WebLogic access log by time-matching the request, shown as "PC (by log match)" | Edits tab · `[edits] weblogic_access_log`/`ip_names`/`server_hosts` |
 
+## New in 0.17.0
+
+| # | What it does | Where |
+|---|--------------|-------|
+| Gully/Rewind | Tracks the gully (yarn left on the returned sizing cones) the ERP records but never follows: the mill rewinds and re-uses it — back to **sizing** for some yarns, as **weft** for others (a per-yarn route in config). Keeps a per-yarn book balance = opening + gully returned (net of the empty cones/tubes) − rewound re-used − waste, against a later physical count. Gully-cone count comes from the set record (bags × cones/bag + loose); the gate-app count is a cross-check. A per-set slip-vs-gate view, rewound/fresh line ticks (a to-sizing line matching a fresh receipt is auto-fresh; owner tick wins), an Overview "Gully book" tile, and PDF/Excel | Yarn & Fabric → **Gully / Rewind** · `api/gully`, `api/gully/sets`, `api/gully/lines`, POST `api/gully/set`,`/yarn`,`/line` · `[gully]` |
+| Yarn weight check | Flags yarn-ledger lines with bags but a missing or implausible weight (kg/(bags×bag_kg) outside the band) — bad weights that throw the gully and yarn balances off | Yarn & Fabric → Gully / Rewind · `api/gully/quality` · `[gully] weight_ratio_low`/`weight_ratio_high` |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |

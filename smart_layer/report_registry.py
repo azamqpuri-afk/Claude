@@ -10,7 +10,7 @@ Each entry is  name -> (builder, label shown to the owner, day_report)
 from datetime import date, timedelta
 
 from .reports import finance, gatepass, payroll, production, reconcile, stock, store_extra
-from .textile import beams, closing, contracts, pilferage, sizing, stock_position
+from .textile import beams, closing, contracts, gully, pilferage, sizing, stock_position
 
 REPORTS = {
     "stock":        (stock.stock_status,            "Store: stock status (out / low / in stock)", False),
@@ -34,6 +34,7 @@ REPORTS = {
     "sizer-ledger": (sizing.sizer_ledger_full,      "Sizer ledger (yarn, beams, gullay, balances)", False),
     "empty-beams":  (sizing.empty_beams,            "Empty beams in mill and at sizers (by size)", False),
     "sized-closing": (sizing.sized_yarn_closing,     "Sizing: sized-yarn closing count (per set)", False),
+    "gully":        (gully.gully_report,            "Yarn: gully / rewind balance", False),
     "weft-consumption": (sizing.weft_consumption,    "Yarn: weft consumption vs issued", False),
     "cost-metre":   (finance.cost_per_metre,        "Finance: cost per metre (with / without sizing)", False),
     "contracts":    (contracts.contract_progress,   "Weaving: contract progress", False),

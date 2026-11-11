@@ -59,6 +59,11 @@ sizing_loss_pct = 6
 warn_days = 5
 urgent_days = 3
 
+[gully]
+# Demo: all three demo yarns re-use their rewound gully as weft (the sizing route needs receipt-paired sizing
+# sends, which this small demo does not model). Enter a gully-cone count on a set to see the net-of-tubes effect.
+reuse_to = { default = "weft" }
+
 # The loom scoreboard - a separate database, read from a copy
 [sources.scoreboard]
 driver = "sqlite"
