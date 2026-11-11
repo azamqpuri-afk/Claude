@@ -1816,3 +1816,64 @@ def test_v0161_config_warnings(tmp_path):
         '[company]\nname="M"\n[erp]\ndriver="sqlite"\npath="d.db"\nmapping="m.toml"\n[store]\npath="s.db"\n'
         '[serve]\npassword="x"\n[notify]\nchannels=["console"]\n')
     assert cli._config_warnings(_cfg.load(tmp_path / "config.toml")) == []
+
+
+# ---- 0.16.1: balance wording, physical rejection count, ERP system routines -------------------
+
+def test_v0161_balance_phrase_reads_as_a_sentence():
+    # negative = the party owes the mill; positive = the mill holds the party's yarn; ~0 = square
+    assert "owes the mill" in closing.balance_phrase("Kohinoor", -12.3, yarn="40 CARDED")
+    assert "40 CARDED" in closing.balance_phrase("Kohinoor", -12.3, yarn="40 CARDED")
+    held = closing.balance_phrase("Lahore Textile", 8.0)
+    assert "mill holds" in held and "Lahore Textile's" in held
+    assert "square" in closing.balance_phrase("A", 0.0)
+    assert closing.balance_side(-5) == "owes mill"
+    assert closing.balance_side(5) == "mill holds"
+    assert closing.balance_side(0) == "square"
+    # a value is appended in brackets when given
+    assert "Rs 1,000" in closing.balance_phrase("A", -2, value=1000)
+
+
+def test_v0161_system_routine_grouping():
+    from smart_layer import erp_edits
+    s = {"system_modules": {"UPDATE_AVG_RATE"}, "system_columns": {"AVG_RATE"}}
+    # by module
+    assert erp_edits._is_system("UPDATE_AVG_RATE", "U", ["QTY"], s) is True
+    # by column-only update (AVG_RATE only)
+    assert erp_edits._is_system("SOMEFORM", "U", ["AVG_RATE"], s) is True
+    # a real edit that also touches another column is NOT a system routine
+    assert erp_edits._is_system("SOMEFORM", "U", ["AVG_RATE", "RATE"], s) is False
+    # an insert is never collapsed by column
+    assert erp_edits._is_system("SOMEFORM", "I", ["AVG_RATE"], s) is False
+    # a run of adjacent system rows collapses to one grouped line
+    rows = [{"event_id": i, "at": "2026-11-01T0%d:00" % i, "table": "IM", "area": "Item", "user": "DOSTEX",
+             "is_system": True, "module": "UPDATE_AVG_RATE", "system_cols": ["AVG_RATE"], "fields": 1} for i in range(5)]
+    rows.append({"event_id": 9, "at": "2026-11-01T06:00", "table": "TM", "area": "Voucher", "user": "AMIR",
+                 "is_system": False, "module": "VOUCHER", "fields": 3})
+    out = erp_edits._collapse_system(rows)
+    grouped = [r for r in out if r.get("grouped")]
+    assert len(out) == 2 and len(grouped) == 1
+    assert grouped[0]["count"] == 5 and "5 lines" in grouped[0]["summary"] and "AVG_RATE" in grouped[0]["summary"]
+
+
+def test_v0161_physical_rejection_count_feeds_the_review(env):
+    cfg, con = env
+    from smart_layer import manual
+    # a contract+quality with ERP fabric stock (not CON-41, which other closing tests pin)
+    row = con.execute(
+        "SELECT contract_no, quality, SUM(c_m)+SUM(cp_m) FROM fabric_stock "
+        "WHERE contract_no <> 'CON-41' GROUP BY contract_no, quality "
+        "HAVING SUM(meters) > 0 ORDER BY SUM(meters) DESC LIMIT 1").fetchone()
+    assert row, "demo needs some fabric stock to count"
+    cno, quality = str(row[0]), str(row[1] or "")
+    key = f"{cno}|{quality}"
+    # count the goods in hand with an explicit REJECTION, as-on today so nothing rolls forward
+    manual.set_value(con, "fabric_count", key, "as_on", END.toordinal(), "tester", note=END.isoformat())
+    manual.set_value(con, "fabric_count", key, "REJECTION", 1234.0, "tester")
+    rev = closing.fabric_count_review(con, cfg, END)
+    hit = next((r for r in rev["rows"] if r["contract"] == cno and (r["quality"] or "") == quality), None)
+    assert hit is not None
+    assert hit["physical_rejection"] == 1234            # as-on today -> exactly what was counted
+    assert hit["as_on"] == END.isoformat()
+    assert hit["difference"] == 1234 - hit["erp_rejection"]
+    assert rev["counted"] >= 1

@@ -61,7 +61,52 @@ def _settings(cfg):
     money = set(MONEY_WORDS) | {str(w).lower() for w in (e.get("amount_keywords") or [])}
     generic = {str(u).strip().upper() for u in (e.get("generic_users") or ["DOSTEX"])}
     return {"areas": areas, "parent": parent, "money": money, "generic": generic,
+            "system_modules": {str(m).strip().upper() for m in (e.get("system_modules") or ["UPDATE_AVG_RATE"])},
+            "system_columns": {str(c).strip().upper() for c in (e.get("system_columns") or ["AVG_RATE"])},
+            "weblogic_access_log": e.get("weblogic_access_log") or "",
+            "ip_names": e.get("ip_names") or {},
+            "server_hosts": e.get("server_hosts") or ["DESKTOP-KUMU41H", "127.0.0.1", "localhost"],
             "old_days": int(e.get("old_edit_days", 2) or 0), "pair_minutes": int(e.get("pair_minutes", 5) or 0)}
+
+
+def _is_system(module, action, changed_cols, s):
+    """True for an ERP's own routine posting (not a person): its Oracle MODULE is in system_modules, or it is an
+    update whose ONLY changed column(s) are in system_columns (e.g. the average-cost re-rating that touches only
+    AVG_RATE). These are grouped into one line and never pushed; real human edits still alert."""
+    if str(module or "").strip().upper() in s["system_modules"]:
+        return True
+    if action != "U":
+        return False
+    cols = {str(c).strip().upper() for c in (changed_cols or [])}
+    return bool(cols) and cols <= s["system_columns"]
+
+
+def _collapse_system(rows):
+    """Collapse a run of adjacent ERP-routine rows (same module) into one grouped line, so 114 AVG_RATE updates show
+    as a single 'ERP rate update - 114 lines, AVG_RATE only' instead of 114 rows. `rows` is newest-first."""
+    out, i, n = [], 0, len(rows)
+    while i < n:
+        r = rows[i]
+        if not r.get("is_system"):
+            out.append(r); i += 1
+            continue
+        mod = (r.get("module") or "")
+        j, grp = i, []
+        while j < n and rows[j].get("is_system") and (rows[j].get("module") or "") == mod:
+            grp.append(rows[j]); j += 1
+        if len(grp) == 1:
+            out.append(grp[0])
+        else:
+            cols = sorted({c for g in grp for c in (g.get("system_cols") or [])})
+            label = (mod.replace("_", " ").title() if mod else "ERP routine")
+            summ = f"{label} - {len(grp)} lines" + (f", {', '.join(cols)} only" if cols else "")
+            out.append({"grouped": True, "count": len(grp), "event_id": grp[0]["event_id"], "at": grp[0]["at"],
+                        "table": grp[0]["table"], "area": grp[0]["area"], "action": "U", "action_word": "ERP routine",
+                        "module": mod, "user": grp[0]["user"], "doc": f"{len(grp)} lines", "summary": summ,
+                        "fields": sum(g.get("fields", 0) for g in grp), "is_system": True, "is_delete": False,
+                        "is_old_edit": False, "touches_amount": False, "touches_account": False})
+        i = j
+    return out
 
 
 def _strip_host(v):
@@ -110,6 +155,97 @@ def _is_old_edit(action, changed_at, doc_date, old_days):
         return (date.fromisoformat(str(changed_at)[:10]) - date.fromisoformat(str(doc_date)[:10])).days > old_days
     except (ValueError, TypeError):
         return False
+
+
+class _WebLogicLog:
+    """Optional: attribute an event to the real browser PC by matching its time to the WebLogic access log.
+
+    Oracle Forms runs as frmweb on the DB server, so every event's recorded PC/host is the server. The real client
+    IP is only in the WebLogic access log (POST /forms/lservlet lines). When [edits].weblogic_access_log is set,
+    this parses those lines once, and pc_for(time) returns the client IP whose request is closest within +-60 s.
+    The IP is mapped to a name via [edits].ip_names (127.0.0.1 -> 'server itself'). No log configured = disabled.
+    """
+    LINE = re.compile(r'^(\d{1,3}(?:\.\d{1,3}){3})\b.*\[(\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2})')
+
+    def __init__(self, settings):
+        self.path = str((settings or {}).get("weblogic_access_log") or "").strip()
+        self.ip_names = {str(k): str(v) for k, v in ((settings or {}).get("ip_names") or {}).items()}
+        self.enabled = bool(self.path)
+        self._events = None                                 # sorted [(epoch, ip)] of lservlet POSTs, parsed lazily
+
+    def _parse(self):
+        import glob
+        from datetime import datetime as _dt
+        self._events = []
+        if not self.enabled:
+            return
+        try:
+            files = sorted(glob.glob(self.path))
+        except Exception:
+            files = []
+        seen = 0
+        for f in files:
+            try:
+                with open(f, "r", errors="ignore") as fh:
+                    for line in fh:
+                        if "lservlet" not in line:
+                            continue
+                        m = self.LINE.match(line)
+                        if not m:
+                            continue
+                        try:
+                            ts = _dt.strptime(m.group(2), "%d/%b/%Y:%H:%M:%S").timestamp()
+                        except ValueError:
+                            continue
+                        self._events.append((ts, m.group(1)))
+                        seen += 1
+                        if seen >= 500000:                  # safety cap on a huge log
+                            break
+            except OSError:
+                continue
+            if seen >= 500000:
+                break
+        self._events.sort()
+
+    def pc_for(self, at, window=60):
+        """The client PC name for an event time `at` (ISO string), matched to the nearest lservlet request within
+        +-window seconds. Returns a name (via ip_names, else the bare IP) or None."""
+        if not self.enabled:
+            return None
+        if self._events is None:
+            self._parse()
+        if not self._events:
+            return None
+        from datetime import datetime as _dt
+        try:
+            t = _dt.fromisoformat(str(at)[:19]).timestamp()
+        except (ValueError, TypeError):
+            return None
+        import bisect
+        times = [e[0] for e in self._events] if not hasattr(self, "_times") else self._times
+        self._times = times
+        i = bisect.bisect_left(times, t)
+        best, bestd = None, window + 1
+        for j in range(max(0, i - 50), min(len(self._events), i + 50)):
+            d = abs(self._events[j][0] - t)
+            if d <= window and d < bestd:
+                bestd, best = d, self._events[j][1]
+        if best is None:
+            return None
+        return self.ip_names.get(best, best)
+
+
+def _resolve_pc(s, wlog, pcn, chost, osuser, client_ip, at):
+    """Return (display_pc, by_log): the PC to show, and whether it came from the access-log match. When the recorded
+    PC/host is really the Forms server, try the WebLogic log; otherwise show the recorded PC."""
+    recorded = _strip_host(pcn) or _strip_host(chost) or (str(osuser).strip() if osuser else "") or None
+    servers = {str(h).strip().upper() for h in (s.get("server_hosts") or [])}
+    is_server = (str(recorded or "").upper() in servers) or (str(client_ip or "").strip() in servers) or not recorded
+    if wlog.enabled and is_server:
+        match = wlog.pc_for(at)
+        if match:
+            return (f"{match} (by log match)", True)
+    return (recorded, False)
 
 
 def _rowkey_field(row_key, field):
@@ -243,14 +379,16 @@ def list_edits(con, cfg, d0=None, d1=None, user=None, area=None, action=None, do
     CAP = 6000                                             # resolve at most this many recent matching events
     rows = con.execute(
         f"SELECT event_id, changed_at, table_name, action, row_key, doc_ref, doc_date, erp_user, pc_name, "
-        f"client_host, os_user FROM erp_change_events{wsql} ORDER BY event_id DESC LIMIT ?", [*params, CAP]).fetchall()
+        f"client_host, os_user, module, client_ip FROM erp_change_events{wsql} ORDER BY event_id DESC LIMIT ?",
+        [*params, CAP]).fetchall()
     names = _resolve_names(con)
     vals = _values(con, [r[0] for r in rows])
     headers = {}                                           # table -> TRANS_NO header index (built lazily per table)
+    wlog = _WebLogicLog(s)                                 # item 6: real PC by access-log match (when configured)
     doc_q = str(doc).lower() if doc else None
     user_q = str(user).lower() if user else None
     out = []
-    for eid, at, table, act, rk, dref, ddt, usr, pc, chost, osuser in rows:
+    for eid, at, table, act, rk, dref, ddt, usr, pc, chost, osuser, module, cip in rows:
         s_area = area_label(s, table)
         # resolve the document, date, user and PC - for a detail line, from its header (event or live document)
         doc_txt, doc_date, who, pcn = dref, ddt, usr, pc
@@ -263,21 +401,27 @@ def list_edits(con, cfg, d0=None, d1=None, user=None, area=None, action=None, do
                 doc_date = doc_date or hd["date"]
                 who = who or hd["user"]
                 pcn = pcn or hd["pc"]
+        pc_disp, pc_by_log = _resolve_pc(s, wlog, pcn, chost, osuser, cip, at)
         who = _display_user(who, pcn, chost, osuser, s["generic"])
         if doc_q and doc_q not in str(doc_txt or "").lower() and doc_q not in str(rk or "").lower():
             continue
         if user_q and user_q not in str(who or "").lower():
             continue
+        changed_cols = [c for (c, _ov, _nv) in vals.get(eid, [])]
         summary, touches_money, touches_account = _change_summary(s, vals.get(eid, []), names)
         old_edit = _is_old_edit(act, at, doc_date, s["old_days"])
+        sysr = _is_system(module, act, changed_cols, s)
         out.append({
             "event_id": eid, "at": str(at)[:19] if at else None, "table": table, "area": s_area,
-            "action": act, "action_word": ACTION_WORD.get(act, act), "row_key": rk,
+            "action": act, "action_word": ACTION_WORD.get(act, act), "row_key": rk, "module": module,
             "doc": doc_txt, "doc_date": str(doc_date)[:10] if doc_date else None, "user": who,
-            "pc": _strip_host(pcn) or None, "summary": summary, "fields": len(vals.get(eid, [])),
-            "is_delete": act == "D", "is_old_edit": old_edit,
-            "touches_amount": touches_money or touches_account, "touches_account": touches_account,
+            "pc": pc_disp, "pc_by_log": pc_by_log, "summary": summary, "fields": len(vals.get(eid, [])),
+            "system_cols": changed_cols, "is_system": sysr,
+            "is_delete": act == "D" and not sysr, "is_old_edit": old_edit and not sysr,
+            "touches_amount": (touches_money or touches_account) and not sysr,
+            "touches_account": touches_account and not sysr,
         })
+    out = _collapse_system(out)                            # 114 AVG_RATE rows -> one grouped line, before the limit
     total = len(out)
     out = out[:int(limit)]
     _mark_pairs(out, s["pair_minutes"])
@@ -347,12 +491,14 @@ def detail(con, cfg, event_id):
             doc_txt = f"{hd['doc']} · {ev['doc_ref']}" if (ev["doc_ref"] and hd["doc"]) else (hd["doc"] or ev["doc_ref"])
             doc_date = doc_date or hd["date"]; who = who or hd["user"]; pcn = pcn or hd["pc"]
     who = _display_user(who, pcn, ev["client_host"], ev["os_user"], s["generic"])
+    pc_disp, pc_by_log = _resolve_pc(s, _WebLogicLog(s), pcn, ev["client_host"], ev["os_user"], ev["client_ip"], ev["changed_at"])
     return {
         "event_id": ev["event_id"], "at": str(ev["changed_at"])[:19] if ev["changed_at"] else None,
         "table": ev["table_name"], "area": area_label(s, ev["table_name"]),
         "action": ev["action"], "action_word": ACTION_WORD.get(ev["action"], ev["action"]),
         "row_key": ev["row_key"], "doc": doc_txt, "doc_date": str(doc_date)[:10] if doc_date else None,
-        "user": who, "pc": _strip_host(pcn), "ip": ev["ip_addr"],
+        "user": who, "pc": pc_disp or _strip_host(pcn), "pc_by_log": pc_by_log, "ip": ev["ip_addr"],
+        "module": ev["module"],
         "session": {k: ev[k] for k in ("db_user", "os_user", "client_host", "client_ip", "module") if ev[k]},
         "fields": fields,
     }

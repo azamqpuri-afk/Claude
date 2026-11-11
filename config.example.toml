@@ -80,6 +80,11 @@ basis = "dispatched"               # dispatched (net of returns) | woven
 rejection_charged_to = "mill"      # mill: party pays yarn for fresh meters only | party: all meters
 wastage_allowance_pct = 0
 yarn_groups = []                   # e.g. [["6", "18"]] when one yarn is booked under two codes
+# Physical rejection count. The ERP marks only these grades as rejection, so its "fresh stock" runs high; when the
+# mill enters a physical count (Weaving > Closing > Fabric counts) the closing uses the counted rejection instead,
+# rolled forward by production and dispatch since the count date. rejection_grades names the ERP's rejection grades.
+# rejection_grades = ["C", "CP"]
+# erp_start_date = "2023-01-01"    # contracts older than this (pre go-live) are left out of the fresh-stock top-up
 # weight_formula = "threads_per_inch * width_in * 1.0936 / divisor / count"
 # [closing.yarns."<yarn code>"]
 # warp_closing_count = 38
@@ -117,6 +122,17 @@ old_edit_days = 2            # highlight edits of entries older than this many d
 pair_minutes = 5             # "deleted then re-entered" hint: a delete + insert of the same line within this
 # generic_users = ["DOSTEX"] # ERP logins that are really the DB owner (not a person) - show the PC/host instead
 # amount_keywords = []       # EXTRA column-name fragments to treat as money/qty/rate on top of the built-in set
+# ERP system routines (e.g. nightly average-rate re-rating): collapsed to one muted "ERP routine" line in the Edits
+# tab and never phone-pushed, so a person's real edits stand out. Matched by Oracle MODULE, or an update whose only
+# changed column(s) are listed in system_columns.
+# system_modules = ["UPDATE_AVG_RATE"]
+# system_columns = ["AVG_RATE"]
+# Real-PC attribution. When the ERP records the Forms server as the host, the true client PC can be recovered from
+# the WebLogic access log by matching the edit's time to the request. Point weblogic_access_log at the log (a glob is
+# fine); map IPs to friendly names in ip_names; server_hosts lists the recorded hosts that really mean "the server".
+# weblogic_access_log = "C:/Oracle/Middleware/.../logs/access.log*"
+# ip_names = { "192.168.18.177" = "STORE-PC", "192.168.18.42" = "ACCOUNTS-PC" }
+# server_hosts = ["DESKTOP-KUMU41H", "127.0.0.1", "localhost"]
 # [edits.table_names]        # friendly area name per ERP table code (defaults cover TM/TD/DMN/DDT)
 # TM = "Voucher"
 # TD = "Voucher line"

@@ -16,6 +16,77 @@ from ..reports import Report
 from .method import KG_PER_LB, Method
 
 
+def balance_phrase(party, bags, value=None, cur="Rs", yarn=None):
+    """A plain sentence for a yarn balance, instead of a signed number the owner has to decode.
+    Negative = the party owes the mill; positive = the mill holds the party's yarn."""
+    n = abs(bags)
+    yq = f"{yarn} " if yarn else ""
+    if bags < -0.05:
+        s = f"{party} owes the mill {n:,.1f} bags" + (f" of {yarn}" if yarn else " of yarn")
+    elif bags > 0.05:
+        s = f"The mill holds {n:,.1f} bags of {party}'s {yq}yarn".replace("'s  ", "'s ")
+    else:
+        s = f"{party} is square ({yq}0 bags)"
+    if value:
+        s += f" ({cur} {abs(value):,.0f})"
+    return s
+
+
+def balance_side(bags):
+    """A short label for the Balance column: which way the yarn is owed."""
+    if bags < -0.05:
+        return "owes mill"
+    if bags > 0.05:
+        return "mill holds"
+    return "square"
+
+
+def _fabric_counts(con):
+    """Latest physical fabric count per (contract, quality) from manual_inputs scope 'fabric_count'. The key is
+    'contract|quality'; fields are grade meters (C, CP, FRESH, B, PRINT, REJECTION ...) plus 'as_on' (a date stored
+    as its ordinal). Returns {(contract, quality): {'grades': {GRADE: meters}, 'as_on': 'YYYY-MM-DD' | None}}."""
+    from datetime import date as _date
+
+    from .. import manual as _manual
+    out = {}
+    try:
+        latest = _manual.latest(con, "fabric_count")
+    except Exception:
+        return out
+    for key, fields in latest.items():
+        cno, _, quality = str(key).partition("|")
+        grades, as_on = {}, None
+        for f, v in fields.items():
+            if f == "as_on":
+                try:
+                    as_on = _date.fromordinal(int(v)).isoformat()
+                except (TypeError, ValueError, OverflowError):
+                    as_on = None
+            elif v is not None:
+                grades[str(f).upper()] = float(v)
+        out[(cno, quality)] = {"grades": grades, "as_on": as_on}
+    return out
+
+
+def _physical_rejection(con, cno, quality, cnt, rej_grades, as_of):
+    """The physical rejection meters for a contract+quality now = the counted rejection rolled forward from the
+    count date: + rejection graded in ERP production since, - rejection dispatched (OGP) since. Counted rejection is
+    the 'REJECTION' field if entered, else the sum of the configured rejection grades (default C + CP)."""
+    grades = cnt.get("grades") or {}
+    counted = grades["REJECTION"] if "REJECTION" in grades else sum(grades.get(g, 0.0) for g in rej_grades)
+    as_on = cnt.get("as_on")
+    if not as_on:
+        return max(0.0, counted)
+    qcl, qp = ((" AND COALESCE(quality,'') = ?", [quality]) if quality else ("", []))
+    prod = con.execute(f"""SELECT SUM(COALESCE(rejected_m, 0)) FROM loom_production
+                          WHERE contract_no = ?{qcl} AND prod_date > ? AND prod_date <= ?""",
+                       [cno, *qp, as_on, as_of.isoformat()]).fetchone()[0] or 0
+    disp = con.execute(f"""SELECT SUM(COALESCE(rejected_m, 0)) FROM fabric_dispatches
+                          WHERE contract_no = ?{qcl} AND direction = 'out' AND dispatch_date > ? AND dispatch_date <= ?""",
+                       [cno, *qp, as_on, as_of.isoformat()]).fetchone()[0] or 0
+    return max(0.0, counted + prod - disp)
+
+
 def contract_rows(con, method, as_of):
     """The party's yarn account per contract and yarn group. Balance = net yarn received from the party, less the
     party's yarn the mill can account for: fabric delivered to the party (all grades, net of returns) plus - when
@@ -92,31 +163,54 @@ def contract_rows(con, method, as_of):
         if subs:
             pm_subq[max(subs, key=lambda k: pm_subq[k])] -= m
 
-    # fresh fabric in stock = stock - C - CP (C and CP in stock are mill rejection, not the party's), per contract and sub-quality
+    # fresh fabric in stock = stock - rejection in stock, per contract and sub-quality. Rejection is normally the
+    # ERP's C + CP, BUT for a contract+quality with an owner PHYSICAL COUNT (item 3) it is the counted rejection
+    # rolled forward from the count date (+ produced since, - dispatched since) - the physical count is the truth.
+    counts = _fabric_counts(con)
+    rej_grades = [str(g).upper() for g in (cfg.get("rejection_grades") or ["C", "CP"])]
+    counted_contracts = {c for (c, q) in counts}
+    cdate_of = {str(r[0]): r[13] for r in contracts}
     fresh_stock, fs_subq, full_stock, full_subq = defaultdict(float), defaultdict(float), defaultdict(float), defaultdict(float)
     for cno, quality, meters, cm, cpm in con.execute("SELECT contract_no, quality, SUM(meters), SUM(c_m), SUM(cp_m) FROM fabric_stock GROUP BY contract_no, quality"):
-        cno, k = str(cno), (str(cno), str(quality or ""))
-        fresh_stock[cno] += (meters or 0) - (cm or 0) - (cpm or 0)
-        fs_subq[k] += (meters or 0) - (cm or 0) - (cpm or 0)
-        full_stock[cno] += (meters or 0)
-        full_subq[k] += (meters or 0)
-    # hook b: when a fixed rejection-in-stock is set for a party, use TOTAL fabric stock minus that fixed meters
-    # (owner's physical rejection figure) instead of - C - CP
+        cno, q = str(cno), str(quality or "")
+        k, meters = (cno, q), (meters or 0)
+        cnt = counts.get((cno, q)) or counts.get((cno, ""))        # exact quality, else a contract-level count
+        if cnt:
+            rej = _physical_rejection(con, cno, (q if (cno, q) in counts else ""), cnt, rej_grades, as_of)
+            fresh = meters - rej
+        else:
+            fresh = meters - (cm or 0) - (cpm or 0)
+        fresh_stock[cno] += fresh
+        fs_subq[k] += fresh
+        full_stock[cno] += meters
+        full_subq[k] += meters
+    # hook b (back-compat): a single fixed rejection-in-stock figure per party. Kept only as a fallback for a simple
+    # single-contract party - it is SKIPPED for any contract that now has a per-contract count, for pre-go-live or
+    # negative-stock contracts, and for multi-contract parties (where one figure landed on the wrong contract).
+    stock_contracts = {c for c in full_stock if full_stock.get(c, 0) > 0}
+    party_contracts = defaultdict(set)
+    for c in stock_contracts:
+        party_contracts[(pname_of.get(c) or "").lower()].add(c)
     for psub, rejm in rej_stock.items():
-        cs = [c for c in {c for c, pn in pname_of.items() if psub in (pn or "").lower()} if full_stock.get(c)]
+        cs = [c for c in {c for c, pn in pname_of.items() if psub in (pn or "").lower()}
+              if full_stock.get(c, 0) > 0 and c not in counted_contracts
+              and not (go_live and cdate_of.get(c) and str(cdate_of[c]) < go_live)]
+        parties = {(pname_of.get(c) or "").lower() for c in cs}
+        multi = any(len(party_contracts.get(pn, set())) > 1 for pn in parties)
+        if not cs or multi:
+            continue                                               # multi-contract party: use per-contract counts instead
         for c in cs:
             fresh_stock[c] = full_stock[c]
             for key in [key for key in fs_subq if key[0] == c]:
                 fs_subq[key] = full_subq.get(key, 0.0)
-        if cs:
-            big = max(cs, key=lambda c: full_stock[c])
-            fresh_stock[big] -= rejm
-            subs = [key for key in fs_subq if key[0] == big]
-            if subs:
-                # take the rejection out of the contract's OWN-weft cloth, not a sub-quality remapped to another
-                # weft (e.g. 31/34 -> 125), so it reduces the right yarn's stock
-                own = [key for key in subs if not any(qk in key[1] for qk in weft_by_q)]
-                fs_subq[max(own or subs, key=lambda key: fs_subq[key])] -= rejm
+        big = max(cs, key=lambda c: full_stock[c])
+        fresh_stock[big] -= rejm
+        subs = [key for key in fs_subq if key[0] == big]
+        if subs:
+            # take the rejection out of the contract's OWN-weft cloth, not a sub-quality remapped to another
+            # weft (e.g. 31/34 -> 125), so it reduces the right yarn's stock
+            own = [key for key in subs if not any(qk in key[1] for qk in weft_by_q)]
+            fs_subq[max(own or subs, key=lambda key: fs_subq[key])] -= rejm
 
     # warp still tied up in beams (fabric-meters-equivalent), per contract; shrinkage is learned per beam set
     by_c, by_q, mill_shrink, qual = learned_shrinkage(con, cfg.get("default_shrinkage_pct", 7))
@@ -295,6 +389,34 @@ def third_party_deliveries(con, method, as_of):
     return rows
 
 
+def fabric_count_review(con, cfg, as_of=None):
+    """ERP vs the last physical count per contract + quality (item 3 review): ERP total stock, the ERP's own
+    rejection (C+CP), the physical rejection rolled forward from the count date, the 'as on' date, and the
+    difference. One row per contract+quality that has stock or a count, biggest difference first."""
+    as_of = as_of or date.today()
+    ccfg = cfg["closing"]
+    rej_grades = [str(g).upper() for g in (ccfg.get("rejection_grades") or ["C", "CP"])]
+    counts = _fabric_counts(con)
+    pname = {str(c): n for c, n in con.execute("SELECT contract_no, COALESCE(party_name, party_code) FROM contracts")}
+    stock = {}
+    for cno, quality, meters, cm, cpm in con.execute(
+            "SELECT contract_no, quality, SUM(meters), SUM(c_m), SUM(cp_m) FROM fabric_stock GROUP BY contract_no, quality"):
+        stock[(str(cno), str(quality or ""))] = ((meters or 0), (cm or 0) + (cpm or 0))
+    rows = []
+    for (cno, quality) in sorted(set(stock) | set(counts)):
+        meters, erp_rej = stock.get((cno, quality), (0, 0))
+        cnt = counts.get((cno, quality))
+        phys = _physical_rejection(con, cno, quality, cnt, rej_grades, as_of) if cnt else None
+        rows.append({"contract": cno, "party": pname.get(cno), "quality": quality,
+                     "erp_stock": round(meters), "erp_rejection": round(erp_rej),
+                     "physical_rejection": (round(phys) if phys is not None else None),
+                     "as_on": (cnt or {}).get("as_on"),
+                     "difference": (round(phys - erp_rej) if phys is not None else None)})
+    rows.sort(key=lambda r: -(r["difference"] if r["difference"] is not None else -1e9))
+    return {"date": as_of.isoformat(), "rejection_grades": rej_grades, "rows": rows,
+            "counted": sum(1 for r in rows if r["physical_rejection"] is not None)}
+
+
 def _yarn_label(method, code, names):
     for g in method.cfg["yarn_groups"]:
         if str(g[0]) == str(code) and len(g) > 1:
@@ -390,7 +512,8 @@ def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None, qua
             continue                                # started in the old ERP: history incomplete, keep out of the totals
         by_py[(r["party"], r["yarn_name"])][0] += r["balance_bags"]
         by_py[(r["party"], r["yarn_name"])][1] += r["value"] or 0
-    summary = [f"Party yarn balances as at {as_of:%d-%b-%Y} (+ = we hold the party's yarn, - = party is short):"]
+    summary = [f"Party yarn balances as at {as_of:%d-%b-%Y} - \"owes the mill\" = the party is short; "
+               "\"the mill holds\" = we are keeping the party's yarn:"]
     if incomplete:
         summary.append(f"{len({r['contract'] for r in incomplete})} contract(s) started in the previous ERP are listed "
                        "but NOT counted in the totals above - their yarn/fabric history is incomplete here.")
@@ -400,7 +523,7 @@ def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None, qua
             tot_v = sum(vv for (pp, _), (_, vv) in by_py.items() if pp == p)
             summary.append(f"  {p}:" + (f"  (net {cur} {tot_v:+,.0f})" if tot_v else ""))
             last_party = p
-        summary.append(f"      {y}: {b:+,.1f} bags" + (f" ({cur} {v:+,.0f})" if v else ""))
+        summary.append("      " + balance_phrase(p, b, v, cur, yarn=y))
     # Fabric of a contract billed to ANOTHER party: not in the closing above; listed so the owner can settle each.
     exc = third_party_deliveries(con, method, as_of)
     if party:
@@ -438,9 +561,10 @@ def contract_closing(con, cfg, as_of=None, party=None, count_overrides=None, qua
         whatif = " (what-if)"
     return Report(f"Contract closing - {as_of:%d-%b-%Y}{whatif}",
                   ["Contract", "Party", "Status", "Yarn", "Meters", "Received bags", "Used bags", "Balance bags",
-                   f"Value {cur}", "Note"],
+                   "Balance", f"Value {cur}", "Note"],
                   [[r["contract"], r["party"], r["status"], r["yarn_name"], round(r["meters"]), round(r["received_bags"], 1),
-                    round(r["used_bags"], 1), round(r["balance_bags"], 1), r["value"], r["note"]] for r in rows], summary)
+                    round(r["used_bags"], 1), round(r["balance_bags"], 1), balance_side(r["balance_bags"]),
+                    r["value"], r["note"]] for r in rows], summary)
 
 
 # ---- #6 yarn-closing sheet (party + yarn + contract; IGP yarn and OGP fabric date-wise) -----------------------
@@ -592,7 +716,7 @@ def closing_sheet_report(con, cfg, party=None, contract=None, quality=None, as_o
          f"{counts.get('ends_per_inch')}/{counts.get('picks_per_inch')} @ {counts.get('width_in')}\", divisor {divisor:g})."
          if warp_cc and weft_cc else "Closing counts not available (missing construction)."),
         (f"Closing balance (mill's method, = closing report) PER YARN above; combined {bal_bags:+,.1f} bags "
-         f"({bal_kg:+,} kg) - {'mill holds party yarn' if bal_bags >= 0 else 'party short'}. "
+         f"({bal_kg:+,} kg) - {'the mill holds the party yarn' if bal_bags >= 0 else 'the party owes the mill'}. "
          f"Received {recv_bags:,.1f} bags, accounted {used_bags:,.1f} bags."),
     ]
     rep = Report(title, columns, rows, summary)

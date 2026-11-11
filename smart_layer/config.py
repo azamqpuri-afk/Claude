@@ -65,6 +65,11 @@ DEFAULTS = {
         "amount_keywords": [],            # EXTRA column-name fragments to treat as money/qty/rate/account (per-ERP names)
         "table_names": {},                # friendly area names per ERP table, e.g. TM = "Voucher" (else a generic label)
         "generic_users": ["DOSTEX"],      # ERP logins that are really the DB owner, not a person - fall back to PC/host
+        "system_modules": ["UPDATE_AVG_RATE"],   # ERP routines (by Oracle MODULE): grouped as one line, never pushed
+        "system_columns": ["AVG_RATE"],   # an update whose ONLY changed column(s) are these is an ERP routine too
+        "weblogic_access_log": "",        # optional: path/glob to the WebLogic access log, to attribute the real PC
+        "ip_names": {},                   # optional: IP -> friendly PC name (e.g. "192.168.18.177" = "STORE-PC")
+        "server_hosts": ["DESKTOP-KUMU41H", "127.0.0.1", "localhost"],   # PCs that really mean "the Forms server"
     },
     "closing": {},                        # the mill's closing method - see smart_layer/textile/method.py
     "pilferage": {},                      # thresholds - see smart_layer/textile/pilferage.py

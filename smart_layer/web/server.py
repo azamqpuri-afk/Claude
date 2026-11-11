@@ -348,6 +348,109 @@ class App:
         finally:
             con.close()
 
+    def fabric_count_review(self, day=None):
+        """ERP vs the last physical fabric count per contract+quality (item 3 review)."""
+        from ..textile import closing as cl
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return cl.fabric_count_review(con, self.cfg, day)
+        finally:
+            con.close()
+
+    def fabric_counts(self):
+        """The saved physical counts (latest per contract+quality), to prefill the entry panel."""
+        from .. import manual
+        from datetime import date as _date
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            out = {}
+            for key, fields in manual.latest(con, "fabric_count").items():
+                cno, _, q = str(key).partition("|")
+                rec = {"contract": cno, "quality": q, "grades": {}, "as_on": None}
+                for f, v in fields.items():
+                    if f == "as_on":
+                        try:
+                            rec["as_on"] = _date.fromordinal(int(v)).isoformat()
+                        except (TypeError, ValueError, OverflowError):
+                            pass
+                    elif v is not None:
+                        rec["grades"][str(f).upper()] = v
+                out[key] = rec
+            return {"counts": list(out.values())}
+        finally:
+            con.close()
+
+    def save_fabric_count(self, contract, quality, as_on, grades, who=""):
+        """Save a physical fabric count for one contract+quality: the 'as on' date and the meters per grade, into
+        manual_inputs (append-only, with who/when/history), like the closing counts."""
+        from datetime import date as _date
+
+        from .. import manual
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            key = f"{str(contract).strip()}|{str(quality or '').strip()}"
+            saved = []
+            try:
+                ord_ = _date.fromisoformat(str(as_on)[:10]).toordinal() if as_on else None
+            except ValueError:
+                ord_ = None
+            if ord_:
+                manual.set_value(con, "fabric_count", key, "as_on", ord_, who, note=str(as_on)[:10])
+            for g, v in (grades or {}).items():
+                if v in (None, ""):
+                    continue
+                try:
+                    val = float(v)
+                except (TypeError, ValueError):
+                    continue
+                manual.set_value(con, "fabric_count", key, str(g).upper().strip()[:20], val, who)
+                saved.append(str(g).upper())
+            return {"ok": True, "contract": contract, "quality": quality, "as_on": as_on, "saved": saved}
+        finally:
+            con.close()
+
+    def import_fabric_counts(self, csv_text, who=""):
+        """Bulk import physical counts from a simple CSV: header row then `contract, quality, grade, meters` (an
+        optional 'as_on' column, or a date in any row, sets the count date). Tolerant of column order by header."""
+        import csv
+        import io
+        from datetime import date as _date
+
+        from .. import manual
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            rdr = csv.reader(io.StringIO(csv_text))
+            rows = [r for r in rdr if any(str(c).strip() for c in r)]
+            if not rows:
+                return {"ok": False, "error": "empty CSV"}
+            hdr = [str(c).strip().lower() for c in rows[0]]
+            idx = {name: hdr.index(name) for name in ("contract", "quality", "grade", "meters", "as_on") if name in hdr}
+            if "contract" not in idx or "grade" not in idx or "meters" not in idx:
+                return {"ok": False, "error": "need columns: contract, quality, grade, meters (optional as_on)"}
+            n, seen_asof = 0, {}
+            for r in rows[1:]:
+                def cell(name):
+                    return str(r[idx[name]]).strip() if name in idx and idx[name] < len(r) else ""
+                cno, q, grade, meters = cell("contract"), cell("quality"), cell("grade"), cell("meters")
+                if not cno or not grade:
+                    continue
+                key = f"{cno}|{q}"
+                if "as_on" in idx and cell("as_on") and key not in seen_asof:
+                    try:
+                        manual.set_value(con, "fabric_count", key, "as_on",
+                                         _date.fromisoformat(cell("as_on")[:10]).toordinal(), who, note=cell("as_on")[:10])
+                        seen_asof[key] = True
+                    except ValueError:
+                        pass
+                try:
+                    manual.set_value(con, "fabric_count", key, grade.upper()[:20], float(meters.replace(",", "")), who)
+                    n += 1
+                except (TypeError, ValueError):
+                    continue
+            return {"ok": True, "rows": n}
+        finally:
+            con.close()
+
     def closing_counts(self, day, party, quality=None):
         """The warp/weft closing counts in effect for a party's closing, prefilled for the editable dashboard panel,
         plus the party's qualities and any cross-party fabric deliveries."""
@@ -619,6 +722,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/finance/parties", "/api/finance/daily", "/api/finance/group", "/api/closing", "/api/closing/counts",
                 "/api/store/issues", "/api/store/rates", "/api/store/slip", "/api/store/loom",
                 "/api/manual", "/api/manual/history", "/api/closing/contracts", "/api/closing/sheet",
+                "/api/closing/count-review", "/api/closing/counts-saved",
                 "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
                 "/api/edits", "/api/edits/detail",
                 "/api/looms/efficiency", "/api/looms/days",
@@ -665,6 +769,14 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.loom_lines(params.get("loom", ""), a0, a1), "application/json", {}
         if path == "/api/store/slip":                    # one issue slip's lines
             return 200, app.slip_lines(params.get("doc", "")), "application/json", {}
+        if path == "/api/closing/counts-saved":          # the saved physical fabric counts (prefill the entry panel)
+            return 200, app.fabric_counts(), "application/json", {}
+        if path == "/api/closing/count-review":          # ERP vs last physical count per contract+quality (#3)
+            try:
+                cday = date.fromisoformat(params["date"]) if params.get("date") else None
+            except ValueError:
+                return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
+            return 200, app.fabric_count_review(cday), "application/json", {}
         if path == "/api/closing/contracts":             # contracts for the closing picker (optional party filter)
             return 200, app.closing_contracts(params.get("party", "")), "application/json", {}
         if path == "/api/closing/sheet":                 # IGP yarn + OGP fabric date-wise for a party/contract
@@ -934,6 +1046,21 @@ def handler(app):
                                                   str(body.get("who", "")).strip()[:60],
                                                   str(body.get("party", "")).strip()[:80],
                                                   scope=scope, clear=clear)
+                    return self._send(200 if res.get("ok") else 400, res)
+                except Exception as e:
+                    return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
+            if self.path in ("/api/closing/count", "/api/closing/count-import"):   # save / import physical fabric counts (#3)
+                from .. import licence
+                if not licence.status(app.cfg).allowed:
+                    return self._send(403, {"error": "Licence: " + licence.status(app.cfg).message})
+                try:
+                    n = min(int(self.headers.get("Content-Length", 0)), 400000)
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                    who = str(body.get("who", "")).strip()[:60]
+                    if self.path == "/api/closing/count-import":
+                        return self._send(200, app.import_fabric_counts(str(body.get("csv", "")), who))
+                    res = app.save_fabric_count(str(body.get("contract", ""))[:50], str(body.get("quality", ""))[:80],
+                                                body.get("as_on"), body.get("grades") or {}, who)
                     return self._send(200 if res.get("ok") else 400, res)
                 except Exception as e:
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})

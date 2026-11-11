@@ -109,6 +109,8 @@
   .edb{display:inline-block;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px;margin-left:5px;white-space:nowrap}
   .edb.del{background:var(--red);color:#fff} .edb.old{background:var(--amber-soft);color:var(--amber)}
   .edb.amt{background:var(--teal-soft);color:var(--teal-deep)} .edb.pair{background:var(--line);color:var(--muted)}
+  .edb.sys{background:var(--line);color:var(--muted);font-weight:600}
+  table.edtbl tr.ed-sys{cursor:default} table.edtbl tr.ed-sys td{background:var(--bg-soft,transparent);color:var(--muted);font-style:italic}
   .eddet{font-size:13px;line-height:1.5} .eddet .muted{font-size:12px} span.edm{font-weight:700;color:var(--red)}
   .tag{font-size:11px;font-weight:700;padding:2px 8px;border-radius:999px;white-space:nowrap}
   .tag.ok,.tag.run{background:var(--teal-soft);color:var(--teal-deep)} .tag.low,.tag.stop,.tag.OUT.OF.STOCK{background:var(--red-soft);color:var(--red)}
@@ -1385,6 +1387,7 @@ async function loadClosingSheet(){
       <button data-m="quality" aria-selected="${clMode==='quality'}">Party + quality</button>
       <button data-m="party" aria-selected="${clMode==='party'}">Whole party</button></span>
     <span class="spacer" style="flex:1"></span>
+    <button class="btn ghost" id="cl-counts">⚖️ Fabric counts</button>
     <a class="btn ghost" id="cl-pdf">⤓ PDF</a><a class="btn ghost" id="cl-xlsx">⤓ Excel</a>`;
   $("#yf-out").innerHTML=""; $("#yf-msg").textContent="";
   if(STATIC_DATA){ $("#yf-msg").textContent="Open from the server to see the closing sheet."; return; }
@@ -1395,7 +1398,96 @@ async function loadClosingSheet(){
   $("#cl-quality").onchange=()=>{ clQuality=$("#cl-quality").value; clMode="quality"; $("#cl-mode").querySelectorAll("button").forEach(x=>x.setAttribute("aria-selected",x.dataset.m==="quality")); renderClosingSheet(); };
   $("#cl-pdf").onclick=()=>{ location.href="api/closing/sheet?fmt=pdf&"+closingQ(); };
   $("#cl-xlsx").onclick=()=>{ location.href="api/closing/sheet?fmt=xlsx&"+closingQ(); };
+  $("#cl-counts").onclick=openFabricCounts;
   await refreshClosingPickers(false);
+}
+
+/* ---------- fabric (physical) counts: ERP stock vs counted rejection ---------- */
+// The ERP marks only C+CP grades as rejection, so its "fresh stock" runs high. A physical count of the
+// goods in hand gives the real rejection; we roll it forward by production/dispatch since the count date,
+// and the closing balance uses that instead. This drawer shows ERP vs count and lets the mill enter counts.
+async function openFabricCounts(){
+  openDrawer("⚖️ Fabric counts — ERP stock vs physical count",
+    '<p class="muted" id="fc-msg" style="margin:0 0 10px">Loading…</p><div id="fc-body"></div>');
+  await renderFabricCounts();
+}
+async function renderFabricCounts(){
+  var d=$("#day")&&$("#day").value;
+  var rev={rows:[]}, saved={counts:[]};
+  try{ rev=await (await fetch("api/closing/count-review"+(d?("?date="+d):""))).json(); }catch(e){}
+  try{ saved=await (await fetch("api/closing/counts-saved")).json(); }catch(e){}
+  var rows=(rev.rows||[]).map(r=>{
+    var diff=r.difference;
+    var dcls=diff==null?"":(Math.abs(diff)>1?"ed-del":"");
+    return `<tr class="${dcls}"><td style="white-space:nowrap">${esc(r.contract)}</td><td>${esc(r.quality||"—")}</td>`+
+      `<td class="num">${num(r.erp_stock)}</td><td class="num">${num(r.erp_rejection)}</td>`+
+      `<td class="num">${r.physical_rejection==null?"—":num(r.physical_rejection)}</td>`+
+      `<td class="muted" style="font-size:12px">${r.as_on?dshort(r.as_on):"—"}</td>`+
+      `<td class="num">${diff==null?"—":((diff>=0?"+":"")+num(diff))}</td></tr>`;
+  }).join("");
+  var revCard=`<div class="card" style="margin:0 0 14px"><div class="hd"><h3>ERP rejection vs counted</h3>`+
+    `<span class="count">${(rev.rows||[]).length} quality-contract(s)${rev.date?" · as of "+dshort(rev.date):""}</span></div><div class="tscroll">`+
+    ((rev.rows||[]).length
+      ? `<table class="edtbl"><thead><tr><th>Contract</th><th>Quality</th><th>ERP stock m</th><th>ERP rej. (C+CP)</th><th>Counted rej. (rolled)</th><th>Counted on</th><th>Stock diff</th></tr></thead><tbody>${rows}</tbody></table>`
+      : '<p class="cnote">No fabric stock to compare. Enter a count below.</p>')+`</div>`+
+    `<p class="muted" style="font-size:12px;margin:8px 16px 4px">A big <b>stock diff</b> means the ERP's C+CP rejection differs from the physical count — the closing uses the counted rejection, rolled forward by production and dispatch since the count date.</p></div>`;
+  // entry panel
+  var sv=(saved.counts||[]).map(r=>`${esc(r.contract)} · ${esc(r.quality||"")}${r.as_on?" ("+dshort(r.as_on)+")":""}`);
+  var entry=`<div class="card" style="margin:0 0 14px;padding:12px 16px"><b>Enter a physical count</b>
+    <div class="tools" style="margin:8px 0 0;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      <label class="fld">Contract <input id="fc-contract" style="min-width:120px"></label>
+      <label class="fld">Quality <input id="fc-quality" style="min-width:120px"></label>
+      <label class="fld">Counted on <input id="fc-ason" type="date" value="${esc(d||"")}"></label>
+    </div>
+    <div class="tools" style="margin:8px 0 0;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      <label class="fld">A-grade m <input id="fc-A" type="number" min="0" step="1" style="width:90px"></label>
+      <label class="fld">B-grade m <input id="fc-B" type="number" min="0" step="1" style="width:90px"></label>
+      <label class="fld">Rejection m <input id="fc-REJECTION" type="number" min="0" step="1" style="width:90px"></label>
+      <label class="fld">Your name <input id="fc-who" placeholder="who counted" style="min-width:110px"></label>
+      <button class="btn" id="fc-save">Save count</button>
+      <span class="muted" id="fc-save-msg" style="font-size:12px"></span>
+    </div>
+    <p class="muted" style="font-size:12px;margin:8px 0 0">Enter the meters you physically counted by grade. Leave a grade blank if you did not count it. If you enter a Rejection figure it is used directly; otherwise rejection is taken as whatever is left after the grades you did count.${sv.length?' <br>Saved: '+esc(sv.join(", ")):""}</p>
+  </div>`;
+  // CSV import
+  var imp=`<div class="card" style="margin:0;padding:12px 16px"><b>Import counts (CSV)</b>
+    <p class="muted" style="font-size:12px;margin:6px 0">Header row: <code>contract,quality,grade,meters,as_on</code> (as_on optional, YYYY-MM-DD). One row per grade.</p>
+    <textarea id="fc-csv" rows="4" style="width:100%;box-sizing:border-box;font-family:monospace;font-size:12px;border:1px solid var(--line);border-radius:7px;background:var(--field);color:var(--ink);padding:7px"></textarea>
+    <div class="tools" style="margin:8px 0 0;gap:10px;align-items:center">
+      <label class="fld">Your name <input id="fc-imp-who" placeholder="who" style="min-width:110px"></label>
+      <button class="btn ghost" id="fc-imp">Import</button><span class="muted" id="fc-imp-msg" style="font-size:12px"></span></div></div>`;
+  $("#fc-body").innerHTML=revCard+entry+imp;
+  $("#fc-msg").textContent="";
+  $("#fc-save").onclick=saveFabricCount;
+  $("#fc-imp").onclick=importFabricCounts;
+}
+async function saveFabricCount(){
+  var m=$("#fc-save-msg");
+  var contract=$("#fc-contract").value.trim(), quality=$("#fc-quality").value.trim();
+  if(!contract){ m.textContent="Enter a contract."; return; }
+  var grades={};
+  [["A","fc-A"],["B","fc-B"],["REJECTION","fc-REJECTION"]].forEach(([g,id])=>{ var v=$("#"+id).value.trim(); if(v!=="") grades[g]=Number(v); });
+  if(!Object.keys(grades).length){ m.textContent="Enter at least one grade's meters."; return; }
+  m.textContent="Saving…";
+  try{
+    var r=await fetch("api/closing/count",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({contract:contract,quality:quality,as_on:$("#fc-ason").value||null,grades:grades,who:$("#fc-who").value.trim()})});
+    var j=await r.json();
+    if(r.ok&&j.ok){ m.textContent="Saved."; await renderFabricCounts(); }
+    else m.textContent=j.error||"Could not save.";
+  }catch(e){ m.textContent="Could not reach the server."; }
+}
+async function importFabricCounts(){
+  var m=$("#fc-imp-msg"), csv=$("#fc-csv").value.trim();
+  if(!csv){ m.textContent="Paste CSV first."; return; }
+  m.textContent="Importing…";
+  try{
+    var r=await fetch("api/closing/count-import",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({csv:csv,who:$("#fc-imp-who").value.trim()})});
+    var j=await r.json();
+    if(r.ok&&j.ok){ m.textContent=`Imported ${j.rows||0} row(s).`; await renderFabricCounts(); }
+    else m.textContent=j.error||"Could not import.";
+  }catch(e){ m.textContent="Could not reach the server."; }
 }
 async function refreshClosingPickers(reset){
   try{
@@ -1551,13 +1643,21 @@ function renderEdits(){
     tile("👤 Users", num(users.size), "made these changes");
   var head=["When","User","Area","Document","What changed",""];
   var body=rows.map(r=>{
+    if(r.grouped || r.is_system){     // an ERP routine (e.g. AVG_RATE re-rating): one muted, non-clickable line
+      return `<tr class="edrow ed-sys"><td>${esc((r.at||"").slice(0,16).replace("T"," "))}</td>`+
+        `<td class="muted">${esc(r.user||"ERP")}</td><td>${esc(r.area)}</td>`+
+        `<td class="muted">${esc(r.doc||"—")}</td>`+
+        `<td class="muted">${esc(r.summary||"ERP routine")} <span class="edb sys">system</span></td>`+
+        `<td class="num"></td></tr>`;
+    }
     var cls=r.is_delete?"ed-del":(r.is_old_edit?"ed-old":"");
     var doc=esc(r.doc||"—")+(r.doc_date?` <span class="muted">${dshort(r.doc_date)}</span>`:"");
     var what = r.action==="I" ? `<span class="muted">added${r.fields?" ("+r.fields+" fields)":""}</span>`
              : (r.summary ? esc(r.summary) : `<span class="muted">${esc(r.action_word)}</span>`);
+    var pc = r.pc?` <span class="muted">${esc(r.pc)}</span>`:"";
     return `<tr class="edrow ${cls}" data-id="${r.event_id}" tabindex="0">`+
       `<td>${esc((r.at||"").slice(0,16).replace("T"," "))}</td>`+
-      `<td>${esc(r.user)}${r.pc?` <span class="muted">${esc(r.pc)}</span>`:""}</td>`+
+      `<td>${esc(r.user)}${pc}</td>`+
       `<td>${esc(r.area)}</td>`+
       `<td>${doc}</td>`+
       `<td>${what} ${edBadges(r)}</td>`+
@@ -1565,7 +1665,7 @@ function renderEdits(){
   }).join("");
   $("#ed-out").innerHTML=`<div class="card" style="margin:0"><div class="tscroll"><table class="edtbl"><thead><tr>`+
     head.map(h=>`<th>${h}</th>`).join("")+`</tr></thead><tbody>`+body+`</tbody></table></div></div>`;
-  $("#ed-out").querySelectorAll(".edrow").forEach(tr=>{
+  $("#ed-out").querySelectorAll(".edrow[data-id]").forEach(tr=>{
     tr.onclick=()=>openEdit(tr.dataset.id);
     tr.onkeydown=(e)=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); openEdit(tr.dataset.id); } };
   });

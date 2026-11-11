@@ -123,7 +123,7 @@ def edit_pushes(cfg, con):
     first_run = store.get_state(con, "edit_push_cursor", None) is None
     cursor = store.get_state(con, "edit_push_cursor", 0) or 0
     rows = con.execute("""SELECT event_id, changed_at, table_name, action, row_key, doc_ref, doc_date, erp_user,
-                                 pc_name, client_host, os_user
+                                 pc_name, client_host, os_user, module
                           FROM erp_change_events WHERE event_id > ? ORDER BY event_id""", (cursor,)).fetchall()
     if not rows:
         if first_run:
@@ -138,7 +138,14 @@ def edit_pushes(cfg, con):
     older = int(cfg["edits"].get("push_older_than_days", 2) or 0)
     headers = {}                                           # parent table -> TRANS_NO -> (doc_ref, doc_date, user)
     seen, flagged = set(), []                              # collapse a voucher's header + its line edits into one item
-    for eid, at, table, act, rk, dref, ddt, usr, pc, chost, osuser in rows:
+    for eid, at, table, act, rk, dref, ddt, usr, pc, chost, osuser, module in rows:
+        # skip the ERP's own routine postings (e.g. AVG_RATE re-rating) - grouped in the tab, never pushed (item 5)
+        if str(module or "").strip().upper() in s["system_modules"]:
+            continue
+        if act == "U":
+            cols = [c for (c,) in con.execute("SELECT column_name FROM erp_change_values WHERE event_id = ?", (eid,))]
+            if erp_edits._is_system(module, act, cols, s):
+                continue
         is_del = act == "D"
         area, doc, who, pcn, ddoc = erp_edits.area_label(s, table), dref or rk or "?", usr, pc, ddt
         parent = s["parent"].get(table) or s["parent"].get(str(table).upper())

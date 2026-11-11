@@ -65,6 +65,15 @@ the mapping/config, never the core).
 | 30e | Item head / sub-head grouping in the store expense and unused-stock reports (a "by head" breakdown) | Store Room → Store expense / Unused stock · `items.head`/`sub_head` |
 | 32 | `set-password` (hidden entry, DPAPI-sealed into .env) and `grants --missing` (prints only the GRANT lines for tables the read-only user cannot yet read); Morning scheduled task inherits the Daily principal and logs the real licence reason | CLI `set-password`, `grants --missing`; `installer/install_tasks.ps1`, `run_morning.cmd` |
 
+## New in 0.16.1
+
+| # | What it does | Where |
+|---|--------------|-------|
+| 3 | Physical fabric-count rejection: enter the goods actually counted in hand per contract+quality (by grade, with an "as on" date), so the closing uses the *counted* rejection instead of the ERP's C+CP grades — rolled forward by production and dispatch since the count date. A review table shows ERP stock vs ERP rejection vs the counted rejection and the difference; counts can be typed or imported as CSV | Weaving → Closing → **Fabric counts** · `api/closing/count-review`, `api/closing/counts-saved`, POST `api/closing/count`, `api/closing/count-import` · `[closing] rejection_grades`/`erp_start_date` |
+| 4 | Closing balance in plain sentences ("X owes the mill N bags of 40 CARDED" / "The mill holds N bags of X's yarn") instead of a signed number, with a "Balance" side column in the report | Yarn & Fabric → Closing; contract-closing report |
+| 5 | ERP system routines (e.g. nightly average-rate re-rating) collapse to one muted "ERP routine — N lines" row in the Edits tab and are never phone-pushed, so a person's real edits stand out | Edits tab · `[edits] system_modules`/`system_columns` |
+| 6 | Real-PC attribution: when the ERP records the Forms server as the host, the true client PC is recovered from the WebLogic access log by time-matching the request, shown as "PC (by log match)" | Edits tab · `[edits] weblogic_access_log`/`ip_names`/`server_hosts` |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |
