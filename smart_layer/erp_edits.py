@@ -171,7 +171,7 @@ class _WebLogicLog:
 
     _IP = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
 
-    def __init__(self, settings):
+    def __init__(self, settings, lo=None, hi=None):
         self.path = str((settings or {}).get("weblogic_access_log") or "").strip()
         self.ip_names = {str(k): str(v) for k, v in ((settings or {}).get("ip_names") or {}).items()}
         self.window = int((settings or {}).get("log_match_window_seconds", 180) or 180)
@@ -179,21 +179,32 @@ class _WebLogicLog:
         # person, so a real client IP in the same window always wins over them.
         self.server_ips = {str(h).strip() for h in ((settings or {}).get("server_hosts") or []) if self._IP.match(str(h).strip())}
         self.server_ips |= {"127.0.0.1", "::1"}
+        # only keep log events within this epoch range (the listed edits' span +/- the match window). The access-log
+        # folder holds many rotated files going back a year; without this bound a global cap fills up from the oldest
+        # files and never reaches the newest ones, so recent edits find no match (the DBSERVER 0.17.2 regression).
+        self.lo = lo
+        self.hi = hi
         self.enabled = bool(self.path)
         self._events = None                                 # sorted [(epoch, ip)] of lservlet POSTs, parsed lazily
 
     def _parse(self):
         import glob
+        import os
         from datetime import datetime as _dt
         self._events = []
         if not self.enabled:
             return
         try:
-            files = sorted(glob.glob(self.path))
+            files = glob.glob(self.path)
         except Exception:
             files = []
-        seen = 0
+        # newest first, so we can stop once a whole file predates the wanted window (rotation = older mtime is older
+        # content). The lo/hi filter keeps correctness whatever the order; the mtime order only makes the stop early.
+        files.sort(key=lambda f: (os.path.getmtime(f) if os.path.exists(f) else 0), reverse=True)
+        lo, hi = self.lo, self.hi
+        kept = 0
         for f in files:
+            file_max = None
             try:
                 with open(f, "r", errors="ignore") as fh:
                     for line in fh:
@@ -206,14 +217,19 @@ class _WebLogicLog:
                             ts = _dt.strptime(m.group(2), "%d/%b/%Y:%H:%M:%S").timestamp()
                         except ValueError:
                             continue
+                        file_max = ts if file_max is None else max(file_max, ts)
+                        if (lo is not None and ts < lo) or (hi is not None and ts > hi):
+                            continue
                         self._events.append((ts, m.group(1)))
-                        seen += 1
-                        if seen >= 500000:                  # safety cap on a huge log
+                        kept += 1
+                        if kept >= 800000:                  # safety cap on the IN-RANGE events (a few days' worth)
                             break
             except OSError:
                 continue
-            if seen >= 500000:
+            if kept >= 800000:
                 break
+            if lo is not None and file_max is not None and file_max < lo:
+                break                                       # this file (and all older ones) ends before the window
         self._events.sort()
 
     def pc_for(self, at, window=None):
@@ -259,6 +275,22 @@ class _WebLogicLog:
         pool = clients or stats                             # ignore the server heartbeat unless it is all there is
         best = min(pool, key=lambda ip: (-pool[ip][0], pool[ip][1]))   # most hits, then nearest in time
         return self.ip_names.get(best, best)
+
+
+def _log_bounds(ats, s):
+    """The epoch range to keep from the access log: the span of the edit times being resolved, padded by the match
+    window. Returns (lo, hi), or (None, None) when there are no usable times (then the whole log is parsed)."""
+    from datetime import datetime as _dt
+    eps = []
+    for a in ats or []:
+        try:
+            eps.append(_dt.fromisoformat(str(a)[:19]).timestamp())
+        except (ValueError, TypeError):
+            continue
+    if not eps:
+        return (None, None)
+    win = int((s or {}).get("log_match_window_seconds", 180) or 180) + 5
+    return (min(eps) - win, max(eps) + win)
 
 
 def _resolve_pc(s, wlog, pcn, chost, osuser, client_ip, at):
@@ -414,7 +446,7 @@ def list_edits(con, cfg, d0=None, d1=None, user=None, area=None, action=None, do
     names = _resolve_names(con)
     vals = _values(con, [r[0] for r in rows])
     headers = {}                                           # table -> TRANS_NO header index (built lazily per table)
-    wlog = _WebLogicLog(s)                                 # item 6: real PC by access-log match (when configured)
+    wlog = _WebLogicLog(s, *_log_bounds([r[1] for r in rows], s))   # item 6: real PC by access-log match (when configured)
     doc_q = str(doc).lower() if doc else None
     user_q = str(user).lower() if user else None
     out = []
@@ -521,7 +553,8 @@ def detail(con, cfg, event_id):
             doc_txt = f"{hd['doc']} · {ev['doc_ref']}" if (ev["doc_ref"] and hd["doc"]) else (hd["doc"] or ev["doc_ref"])
             doc_date = doc_date or hd["date"]; who = who or hd["user"]; pcn = pcn or hd["pc"]
     who = _display_user(who, pcn, ev["client_host"], ev["os_user"], s["generic"])
-    pc_disp, pc_by_log = _resolve_pc(s, _WebLogicLog(s), pcn, ev["client_host"], ev["os_user"], ev["client_ip"], ev["changed_at"])
+    pc_disp, pc_by_log = _resolve_pc(s, _WebLogicLog(s, *_log_bounds([ev["changed_at"]], s)),
+                                     pcn, ev["client_host"], ev["os_user"], ev["client_ip"], ev["changed_at"])
     return {
         "event_id": ev["event_id"], "at": str(ev["changed_at"])[:19] if ev["changed_at"] else None,
         "table": ev["table_name"], "area": area_label(s, ev["table_name"]),

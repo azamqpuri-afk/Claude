@@ -2016,6 +2016,38 @@ def test_v0172_weblogic_ignores_server_heartbeat():
     assert wl.pc_for("2026-11-07 15:00:00") == "127.0.0.1"
 
 
+def test_v0172_weblogic_range_reaches_newest_rotated_file(tmp_path):
+    from smart_layer import erp_edits as E
+    # many rotated files going back a year; the NEEDED day (7-Nov) is only in the last-by-name file. A global cap that
+    # fills from the oldest files would never reach it (the 0.17.2 regression) - the date-range load must still find it.
+    import os
+    import time
+    logdir = tmp_path / "logs"
+    logdir.mkdir()
+    # 00000..00086: one older day each (Jan onward), packed with loopback heartbeat lines
+    for n in range(87):
+        day = f"{(n % 28) + 1:02d}/{['Jan','Feb','Mar','Apr','May','Jun'][(n // 28) % 6]}/2026"
+        lines = [f"127.0.0.1 - - [{day}:0{h % 10}:00:00 +0500] \"POST /forms/lservlet HTTP/1.1\" 200 1\n"
+                 for h in range(200)]
+        (logdir / f"access.log{n:05d}").write_text("".join(lines))
+    # the newest file (current, no suffix) holds 7-Nov with heavy client traffic
+    now = ["192.168.18.177 - - [07/Nov/2026:15:30:0%d +0500] \"POST /forms/lservlet HTTP/1.1\" 200 1\n" % (i % 10)
+           for i in range(300)]
+    (logdir / "access.log").write_text("".join(now))
+    # set mtimes so the current file is newest and the rotated ones get older as the number grows
+    base = time.time()
+    os.utime(logdir / "access.log", (base, base))
+    for n in range(87):
+        t = base - (n + 1) * 86400
+        os.utime(logdir / f"access.log{n:05d}", (t, t))
+
+    s = {"weblogic_access_log": str(logdir / "access.log*"),
+         "server_hosts": ["127.0.0.1", "localhost"], "log_match_window_seconds": 180}
+    lo, hi = E._log_bounds(["2026-11-07 15:30:00"], s)
+    wl = E._WebLogicLog(s, lo, hi)
+    assert wl.pc_for("2026-11-07 15:30:00") == "192.168.18.177"   # found despite 87 older rotated files
+
+
 def test_v0171_opening_date_bounds_the_balance(env):
     cfg, con = env
     from smart_layer import manual
