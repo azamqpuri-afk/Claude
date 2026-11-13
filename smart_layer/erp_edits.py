@@ -65,6 +65,7 @@ def _settings(cfg):
             "system_columns": {str(c).strip().upper() for c in (e.get("system_columns") or ["AVG_RATE"])},
             "weblogic_access_log": e.get("weblogic_access_log") or "",
             "ip_names": e.get("ip_names") or {},
+            "log_match_window_seconds": int(e.get("log_match_window_seconds", 180) or 180),
             "server_hosts": e.get("server_hosts") or ["DESKTOP-KUMU41H", "127.0.0.1", "localhost"],
             "old_days": int(e.get("old_edit_days", 2) or 0), "pair_minutes": int(e.get("pair_minutes", 5) or 0)}
 
@@ -102,7 +103,8 @@ def _collapse_system(rows):
             summ = f"{label} - {len(grp)} lines" + (f", {', '.join(cols)} only" if cols else "")
             out.append({"grouped": True, "count": len(grp), "event_id": grp[0]["event_id"], "at": grp[0]["at"],
                         "table": grp[0]["table"], "area": grp[0]["area"], "action": "U", "action_word": "ERP routine",
-                        "module": mod, "user": grp[0]["user"], "doc": f"{len(grp)} lines", "summary": summ,
+                        "module": mod, "user": grp[0]["user"], "pc": grp[0].get("pc"),
+                        "pc_by_log": grp[0].get("pc_by_log", False), "doc": f"{len(grp)} lines", "summary": summ,
                         "fields": sum(g.get("fields", 0) for g in grp), "is_system": True, "is_delete": False,
                         "is_old_edit": False, "touches_amount": False, "touches_account": False})
         i = j
@@ -170,6 +172,7 @@ class _WebLogicLog:
     def __init__(self, settings):
         self.path = str((settings or {}).get("weblogic_access_log") or "").strip()
         self.ip_names = {str(k): str(v) for k, v in ((settings or {}).get("ip_names") or {}).items()}
+        self.window = int((settings or {}).get("log_match_window_seconds", 180) or 180)
         self.enabled = bool(self.path)
         self._events = None                                 # sorted [(epoch, ip)] of lservlet POSTs, parsed lazily
 
@@ -207,9 +210,12 @@ class _WebLogicLog:
                 break
         self._events.sort()
 
-    def pc_for(self, at, window=60):
+    def pc_for(self, at, window=None):
         """The client PC name for an event time `at` (ISO string), matched to the nearest lservlet request within
-        +-window seconds. Returns a name (via ip_names, else the bare IP) or None."""
+        +-window seconds (default from [edits].log_match_window_seconds). Returns a name (via ip_names, else the
+        bare IP) or None."""
+        if window is None:
+            window = self.window
         if not self.enabled:
             return None
         if self._events is None:
@@ -244,6 +250,10 @@ def _resolve_pc(s, wlog, pcn, chost, osuser, client_ip, at):
     if wlog.enabled and is_server:
         match = wlog.pc_for(at)
         if match:
+            # a request from the Forms server itself (loopback) means the user worked on the server console or over
+            # AnyDesk, not a networked PC - name it plainly, with no "by log match" dressing
+            if str(match).strip().lower() in ("127.0.0.1", "localhost", "::1"):
+                return ("Server (local/AnyDesk)", True)
             return (f"{match} (by log match)", True)
     return (recorded, False)
 

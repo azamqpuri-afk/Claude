@@ -525,23 +525,26 @@ class App:
             for fld in ("opening_kg", "waste_kg", "physical_kg"):
                 if fld in f and f[fld] not in (None, ""):
                     manual.set_value(con, "gully_yarn", key, fld, f[fld], who)
-            if f.get("physical_kg") not in (None, "") and f.get("physical_at"):
-                try:
-                    manual.set_value(con, "gully_yarn", key, "physical_at_iso",
-                                     _date.fromisoformat(str(f["physical_at"])[:10]).toordinal(), who,
-                                     note=str(f["physical_at"])[:10])
-                except ValueError:
-                    pass
+            # dates (opening / physical) are stored as ordinals; the opening date bounds what gully counts on top
+            for base, store_field in (("opening_at", "opening_at_iso"), ("physical_at", "physical_at_iso")):
+                if f.get(base):
+                    try:
+                        manual.set_value(con, "gully_yarn", key, store_field,
+                                         _date.fromisoformat(str(f[base])[:10]).toordinal(), who,
+                                         note=str(f[base])[:10])
+                    except ValueError:
+                        pass
             return {"ok": True}
         finally:
             con.close()
 
-    def save_gully_line(self, doc_no, rewound, who=""):
-        """The owner's rewound/fresh tick on one movement line (1 = rewound gully, 0 = fresh yarn)."""
+    def save_gully_line(self, line_id, rewound, who=""):
+        """The owner's rewound/fresh tick on one movement line (1 = rewound gully, 0 = fresh yarn). line_id is the
+        composite 'date|doc_no|yarn' key (doc numbers repeat across dates, so a doc_no alone would collide)."""
         from .. import manual
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
-            manual.set_value(con, "gully_line", str(doc_no).strip(), "rewound", (1 if rewound else 0), who)
+            manual.set_value(con, "gully_line", str(line_id).strip()[:120], "rewound", (1 if rewound else 0), who)
             return {"ok": True}
         finally:
             con.close()
@@ -1183,7 +1186,7 @@ def handler(app):
                     if self.path == "/api/gully/set":
                         return self._send(200, app.save_gully_set(str(body.get("set_no", ""))[:40], body.get("gate_kg"), body.get("cones"), who))
                     if self.path == "/api/gully/line":
-                        return self._send(200, app.save_gully_line(str(body.get("doc_no", ""))[:40], body.get("rewound"), who))
+                        return self._send(200, app.save_gully_line(str(body.get("line_id", ""))[:120], body.get("rewound"), who))
                     return self._send(200, app.save_gully_yarn(str(body.get("yarn", ""))[:80], body.get("fields") or {}, who))
                 except Exception as e:
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})

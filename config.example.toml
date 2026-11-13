@@ -158,8 +158,9 @@ pair_minutes = 5             # "deleted then re-entered" hint: a delete + insert
 # Real-PC attribution. When the ERP records the Forms server as the host, the true client PC can be recovered from
 # the WebLogic access log by matching the edit's time to the request. Point weblogic_access_log at the log (a glob is
 # fine); map IPs to friendly names in ip_names; server_hosts lists the recorded hosts that really mean "the server".
-# weblogic_access_log = "C:/Oracle/Middleware/.../logs/access.log*"
-# ip_names = { "192.168.18.177" = "STORE-PC", "192.168.18.42" = "ACCOUNTS-PC" }
+# weblogic_access_log = "C:/Oracle/Middleware/.../logs/access.log*"   # a glob is fine; the newest matching file(s) are read
+# log_match_window_seconds = 180        # widen if edits near the Forms server still show the server name, not a PC
+# ip_names = { "192.168.18.177" = "STORE-PC", "192.168.18.42" = "ACCOUNTS-PC" }  # 127.0.0.1 shows as "Server (local/AnyDesk)"
 # server_hosts = ["DESKTOP-KUMU41H", "127.0.0.1", "localhost"]
 # [edits.table_names]        # friendly area name per ERP table code (defaults cover TM/TD/DMN/DDT)
 # TM = "Voucher"

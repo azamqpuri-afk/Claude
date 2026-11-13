@@ -1781,7 +1781,8 @@ def test_v0160_set_password_and_grants_missing(tmp_path):
     getpass.getpass = lambda *a, **k: next(seq)
     assert cli.cmd_set_password(cfg, SimpleNamespace(var="ERP_PASSWORD")) == 0
     txt = (tmp_path / ".env").read_text()
-    assert "ERP_PASSWORD=newpw" in txt and "KEEP=1" in txt and "# c" in txt
+    # off Windows the value is stored in the clear; on Windows it is DPAPI-sealed (ERP_PASSWORD=DPAPI:...)
+    assert ("ERP_PASSWORD=newpw" in txt or "ERP_PASSWORD=DPAPI:" in txt) and "KEEP=1" in txt and "# c" in txt
 
 
 def test_v0160_scoreboard_web_routes(env):
@@ -1949,19 +1950,74 @@ def test_v0170_yarn_weight_flags():
         def __getitem__(self, k):
             return self.g.get(k, {})
 
+    # the store's `kg` is already sanitised by the mapping (bags x bag_kg substituted for a bad ERP weight); the
+    # check must run on the ERP's own weight in raw_kg, where present, or it can never see a missing weight.
     con = sqlite3.connect(":memory:")
     con.execute("CREATE TABLE yarn_movements (move_date TEXT, doc_no TEXT, move_type TEXT, yarn_name TEXT, "
-                "contract_no TEXT, bags REAL, kg REAL)")
-    con.executemany("INSERT INTO yarn_movements VALUES (?,?,?,?,?,?,?)", [
-        ("2026-01-10", "IGP-1", "party_receipt", "30/1 PC", "C1", 10, 453.6),   # fine: ~1 bag/bag
-        ("2024-01-05", "IGP-89", "party_receipt", "30/1 PC", "C1", 55, None),   # bags but no weight
-        ("2026-05-11", "IGP-543", "party_receipt", "30/1 PC", "C1", 10, 5896.8),  # kg typed in the bags box
+                "contract_no TEXT, bags REAL, kg REAL, raw_kg REAL)")
+    con.executemany("INSERT INTO yarn_movements VALUES (?,?,?,?,?,?,?,?)", [
+        ("2026-01-10", "IGP-1", "party_receipt", "30/1 PC", "C1", 10, 453.6, 455.0),   # fine
+        ("2024-01-05", "IGP-89", "party_receipt", "30/1 PC", "C1", 55, 2494.8, 0),     # kg substituted, raw ERP = 0
+        ("2026-05-11", "IGP-543", "party_receipt", "30/1 PC", "C1", 10, 453.6, 5896.8),  # kg substituted, raw ERP huge
+        ("2026-06-01", "IGP-NR", "party_receipt", "30/1 PC", "C1", 8, 362.9, None),    # no raw -> falls back to kg (fine)
     ])
     con.commit()
     cfg = _Cfg({"bag_kg": 45.359237, "weight_ratio_low": 0.5, "weight_ratio_high": 2.0})
     out = gully.yarn_weight_flags(con, cfg, date(2026, 10, 2))
     docs = {r["doc_no"]: r["issue"] for r in out["rows"]}
     assert out["count"] == 2
-    assert docs["IGP-89"] == "weight missing"
-    assert docs["IGP-543"] == "weight too high"
-    assert "IGP-1" not in docs
+    assert docs["IGP-89"] == "weight missing"       # raw_kg 0, even though the stored kg is plausible
+    assert docs["IGP-543"] == "weight too high"     # raw_kg huge, even though the stored kg is plausible
+    assert "IGP-1" not in docs and "IGP-NR" not in docs
+
+
+def test_v0171_opening_date_bounds_the_balance(env):
+    cfg, con = env
+    from smart_layer import manual
+    from smart_layer.textile import gully
+    saved = cfg.data.get("gully", {})
+    cfg.data["gully"] = {**config.DEFAULTS["gully"], "reuse_to": {"default": "weft"}}
+    try:
+        # pick a yarn that has gully, and the dates of its sets
+        yarn = next((r["yarn"] for r in gully.rewind_balance(con, cfg, END)["rows"] if r["gully_returned_kg"] > 0), None)
+        assert yarn
+        dates = sorted(d for (d,) in con.execute(
+            "SELECT DISTINCT s.set_date FROM sized_sets s JOIN contracts c ON c.contract_no = s.contract_no "
+            "WHERE COALESCE(s.gullay_kg,0) > 0") if d)
+        assert len(dates) >= 2
+        # opening dated at the latest set date: only gully AFTER it counts, so gully_returned drops vs no-date
+        full = next(r for r in gully.rewind_balance(con, cfg, END)["rows"] if r["yarn"] == yarn)
+        manual.set_value(con, "gully_yarn", yarn, "opening_kg", 1000, "t")
+        manual.set_value(con, "gully_yarn", yarn, "opening_at_iso",
+                         date.fromisoformat(dates[-1]).toordinal(), "t", note=dates[-1])
+        bounded = next(r for r in gully.rewind_balance(con, cfg, END)["rows"] if r["yarn"] == yarn)
+        assert bounded["opening_at"] == dates[-1]
+        assert bounded["gully_returned_kg"] < full["gully_returned_kg"]   # earlier sets no longer counted
+        assert bounded["opening_kg"] == 1000
+    finally:
+        cfg.data["gully"] = saved
+
+
+def test_v0171_line_tick_keyed_by_date_doc_yarn(env):
+    cfg, con = env
+    from smart_layer import manual
+    from smart_layer.textile import gully
+    saved = cfg.data.get("gully", {})
+    # route every yarn to sizing so to_sizer lines appear as tickable
+    cfg.data["gully"] = {**config.DEFAULTS["gully"], "reuse_to": {"default": "sizing"}}
+    try:
+        lines = gully.rewind_lines(con, cfg, END)
+        assert lines and all("line_id" in ln for ln in lines)
+        # the id is date|doc|yarn, so two lines sharing a doc_no on different dates get different ids
+        ln = lines[0]
+        assert ln["line_id"] == f"{str(ln['date'])[:10]}|{ln['doc_no']}|{gully._norm(ln['yarn'])}"
+        # a tick on one line_id only flips that line
+        manual.set_value(con, "gully_line", ln["line_id"], "rewound", (0 if ln["rewound"] else 1), "t")
+        after = {x["line_id"]: x for x in gully.rewind_lines(con, cfg, END)}
+        assert after[ln["line_id"]]["rewound"] == (not ln["rewound"])
+        assert after[ln["line_id"]]["owner_set"] is not None
+        others = [x for lid, x in after.items() if lid != ln["line_id"] and x["doc_no"] == ln["doc_no"]]
+        for o in others:                                   # same doc_no, different date -> untouched
+            assert o["owner_set"] is None
+    finally:
+        cfg.data["gully"] = saved

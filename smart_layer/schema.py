@@ -208,7 +208,9 @@ ENTITIES = (
          C("party_code", "TEXT", "Party (yarn owner for receipts/returns, the sizer for sizing movements)"),
          C("party_name", "TEXT", "Party name"),
          C("bags", "REAL", "Bags"),
-         C("kg", "REAL", "Weight in kg", True),
+         C("kg", "REAL", "Weight in kg (the mapping may substitute bags x a standard bag weight when the ERP weight "
+                         "is missing/implausible; raw_kg keeps the untouched ERP figure for the data-quality check)", True),
+         C("raw_kg", "REAL", "The ERP's own entered weight, before any plausibility substitution (optional)"),
          C("entered_by", "TEXT", "ERP user who keyed it")),
         date_column="move_date",
     ),

@@ -125,7 +125,7 @@ SELECT t.txn_dt AS move_date, t.entry_ts AS entered_at, t.gp_no AS doc_no,
                        WHEN 'SZO' THEN 'to_sizer' WHEN 'SZR' THEN 'from_sizer' WHEN 'BMR' THEN 'sized_beams_received'
                        WHEN 'WFI' THEN 'to_looms' WHEN 'WFR' THEN 'from_looms' WHEN 'OPN' THEN 'opening' ELSE 'other' END AS move_type,
        l.yarn_cd AS yarn_code, y.descr AS yarn_name, t.order_ref AS contract_no, t.bp_id AS party_code, p.bp_name AS party_name,
-       l.bag_qty AS bags, l.net_kg AS kg, t.user_id AS entered_by
+       l.bag_qty AS bags, l.net_kg AS kg, l.net_kg AS raw_kg, t.user_id AS entered_by
 FROM yrn_txn t JOIN yrn_txn_line l ON l.txn_id = t.txn_id
 LEFT JOIN yrn_master y ON y.yarn_cd = l.yarn_cd LEFT JOIN bp_partner p ON p.bp_id = t.bp_id
 WHERE t.txn_dt >= :since

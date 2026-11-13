@@ -83,6 +83,7 @@ DEFAULTS = {
         "system_modules": ["UPDATE_AVG_RATE"],   # ERP routines (by Oracle MODULE): grouped as one line, never pushed
         "system_columns": ["AVG_RATE"],   # an update whose ONLY changed column(s) are these is an ERP routine too
         "weblogic_access_log": "",        # optional: path/glob to the WebLogic access log, to attribute the real PC
+        "log_match_window_seconds": 180,  # match an edit to the nearest access-log request within +/- this many seconds
         "ip_names": {},                   # optional: IP -> friendly PC name (e.g. "192.168.18.177" = "STORE-PC")
         "server_hosts": ["DESKTOP-KUMU41H", "127.0.0.1", "localhost"],   # PCs that really mean "the Forms server"
     },

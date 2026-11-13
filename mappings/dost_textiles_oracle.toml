@@ -189,7 +189,7 @@ SELECT TRUNC(m.td) AS move_date, m.feedd AS entered_at, TO_CHAR(NVL(m.gp_no, m.t
                                           OR (NVL(d.bags,0) > 0 AND d.yarn_wt BETWEEN d.bags*15 AND d.bags*60 + 60))
             THEN d.yarn_wt
             ELSE NVL(d.bags,0)*45.36 + NVL(d.cones,0)*45.36/NVL(NULLIF(d.cone_pbag,0), CASE WHEN y.count > 40 THEN 40 ELSE 24 END) END AS kg,
-       m.usern AS entered_by
+       d.yarn_wt AS raw_kg, m.usern AS entered_by
 FROM dostex.wytm m JOIN dostex.wytd d ON d.trans_no = m.trans_no
 LEFT JOIN dostex.yarn y ON y.ycode = d.ycode LEFT JOIN dostex.contm c ON c.cont_id = d.cont_id
 LEFT JOIN dostex.ach a ON a.ac = NVL(m.ac1, m.ac2)

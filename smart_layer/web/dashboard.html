@@ -1414,7 +1414,7 @@ async function renderGully(){
     var diff=r.difference_kg;
     return `<tr><td style="white-space:nowrap">${esc(r.yarn)}</td>`+
       `<td><span class="tag ${r.route==='sizing'?'mid':''}">${esc(r.route)}</span></td>`+
-      `<td class="num">${num(r.opening_kg)}</td><td class="num">${num(r.gully_returned_kg)}</td>`+
+      `<td class="num">${num(r.opening_kg)}${r.opening_at?` <span class="muted" style="font-size:11px">${dshort(r.opening_at)}</span>`:""}</td><td class="num">${num(r.gully_returned_kg)}</td>`+
       `<td class="num">${num(r.rewound_reused_kg)}</td><td class="num">${num(r.waste_kg)}</td>`+
       `<td class="num"><b>${num(r.book_balance_kg)}</b></td>`+
       `<td class="num">${r.physical_kg==null?"—":num(r.physical_kg)}${r.physical_at?` <span class="muted" style="font-size:11px">${dshort(r.physical_at)}</span>`:""}</td>`+
@@ -1422,7 +1422,7 @@ async function renderGully(){
   }).join("");
   var balCard=`<div class="card" style="margin:0 0 14px"><div class="hd"><h3>Balance by yarn</h3><span class="count">as of ${bal.date?dshort(bal.date):""} · waste ${num(t.waste)} kg</span></div><div class="tscroll">`+
     ((bal.rows||[]).length
-      ? `<table class="edtbl"><thead><tr><th>Yarn</th><th>Route</th><th>Opening kg</th><th>Gully returned kg</th><th>Rewound re-used kg</th><th>Waste kg</th><th>Book balance kg</th><th>Physical kg</th><th>Difference kg</th></tr></thead><tbody>${brows}</tbody></table>`
+      ? `<table class="edtbl"><thead><tr><th>Yarn</th><th>Route</th><th>Opening kg (on)</th><th>Gully returned kg</th><th>Rewound re-used kg</th><th>Waste kg</th><th>Book balance kg</th><th>Physical kg</th><th>Difference kg</th></tr></thead><tbody>${brows}</tbody></table>`
       : '<p class="cnote">No gully yet. Enter an opening below, or sync.</p>')+`</div></div>`;
   // owner entry per yarn
   var yopts=(bal.rows||[]).map(r=>`<option value="${esc(r.yarn)}">${esc(r.yarn)} · ${esc(r.route)}</option>`).join("");
@@ -1430,13 +1430,14 @@ async function renderGully(){
     <div class="tools" style="margin:8px 0 0;gap:10px;flex-wrap:wrap;align-items:flex-end">
       <label class="fld">Yarn <input id="gy-yarn" list="gy-yarns" placeholder="yarn" style="min-width:140px"><datalist id="gy-yarns">${yopts}</datalist></label>
       <label class="fld">Opening kg <input id="gy-open" type="number" min="0" step="1" style="width:90px"></label>
+      <label class="fld">Opening on <input id="gy-open-at" type="date"></label>
       <label class="fld">Waste kg <input id="gy-waste" type="number" min="0" step="1" style="width:90px"></label>
       <label class="fld">Physical kg <input id="gy-phys" type="number" min="0" step="1" style="width:90px"></label>
       <label class="fld">Counted on <input id="gy-phys-at" type="date"></label>
       <label class="fld">Your name <input id="gy-who" placeholder="who" style="min-width:100px"></label>
       <button class="btn" id="gy-save">Save</button><span class="muted" id="gy-msg" style="font-size:12px"></span>
     </div>
-    <p class="muted" style="font-size:12px;margin:8px 0 0">Leave a box blank to keep its current value. Opening = gully in hand / rewound waiting, on the date you start tracking. Enter a physical kg later to see the difference vs the book balance.</p>
+    <p class="muted" style="font-size:12px;margin:8px 0 0">Leave a box blank to keep its current value. Opening = the gully in hand / rewound waiting on the <b>Opening on</b> date; only gully returned and re-used <b>after</b> that date are counted on top. Enter a physical kg later to see the difference vs the book balance.</p>
   </div>`;
   // per-set slip vs gate
   var ginp=(r,fld,val,step,w)=>`<input type="number" min="0" step="${step||'0.5'}" value="${val==null?"":esc(val)}" data-set="${esc(r.set_no)}" data-fld="${fld}" class="gl-set" style="width:${w||76}px;padding:4px 6px;border:1px solid var(--line);border-radius:6px;background:var(--field);color:var(--ink)">`;
@@ -1454,7 +1455,7 @@ async function renderGully(){
   // rewound lines
   var lrows=(lines.lines||[]).map(l=>`<tr><td class="muted">${l.date?dshort(l.date):""}</td><td>${esc(l.doc_no||"")}</td>`+
     `<td>${esc(l.yarn||"")}</td><td><span class="tag ${l.kind==='weft'?'':'mid'}">${l.kind==='weft'?'weft':'to sizing'}</span></td><td class="num">${num(l.kg)}</td>`+
-    `<td style="text-align:center"><input type="checkbox" ${l.rewound?"checked":""} data-doc="${esc(l.doc_no)}" class="gl-rew"></td>`+
+    `<td style="text-align:center"><input type="checkbox" ${l.rewound?"checked":""} data-line="${esc(l.line_id)}" class="gl-rew"></td>`+
     `<td class="muted" style="font-size:11px">${l.owner_set==null?("auto: "+(l.auto_rewound?"rewound":"fresh")):"you set"}</td></tr>`).join("");
   var lineCard=`<div class="card" style="margin:0"><div class="hd"><h3>Rewound vs fresh — tick the rewound lines</h3><span class="count">${(lines.lines||[]).length} line(s)</span></div>`+
     `<div class="tools" style="margin:0 0 8px"><label class="fld">Your name <input id="gln-who" placeholder="who" style="min-width:100px"></label><span class="muted" style="font-size:12px">Sizing-route lines are auto-guessed (a to-sizing line that matches a fresh receipt is fresh); your tick wins.</span></div><div class="tscroll">`+
@@ -1480,8 +1481,8 @@ async function gullyPost(path, body, done){
 function saveGullyYarn(){
   var m=$("#gy-msg"), yarn=$("#gy-yarn").value.trim();
   if(!yarn){ m.textContent="Pick a yarn."; return; }
-  var f={}, o=$("#gy-open").value.trim(), w=$("#gy-waste").value.trim(), p=$("#gy-phys").value.trim(), pa=$("#gy-phys-at").value;
-  if(o!=="") f.opening_kg=Number(o); if(w!=="") f.waste_kg=Number(w);
+  var f={}, o=$("#gy-open").value.trim(), oa=$("#gy-open-at").value, w=$("#gy-waste").value.trim(), p=$("#gy-phys").value.trim(), pa=$("#gy-phys-at").value;
+  if(o!=="") f.opening_kg=Number(o); if(oa) f.opening_at=oa; if(w!=="") f.waste_kg=Number(w);
   if(p!=="") { f.physical_kg=Number(p); if(pa) f.physical_at=pa; }
   if(!Object.keys(f).length){ m.textContent="Enter at least one figure."; return; }
   m.textContent="Saving…";
@@ -1493,7 +1494,7 @@ function saveGullySet(inp){
   gullyPost("api/gully/set",body,(ok)=>{ if(ok) renderGully(); });
 }
 function saveGullyLine(cb){
-  gullyPost("api/gully/line",{doc_no:cb.dataset.doc,rewound:cb.checked?1:0,who:($("#gln-who")||{}).value||""},(ok)=>{ if(ok) renderGully(); });
+  gullyPost("api/gully/line",{line_id:cb.dataset.line,rewound:cb.checked?1:0,who:($("#gln-who")||{}).value||""},(ok)=>{ if(ok) renderGully(); });
 }
 
 /* ---------- yarn-closing redesign (#6): party → contract → 3 modes, IGP yarn + OGP fabric date-wise ---------- */

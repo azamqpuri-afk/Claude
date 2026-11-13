@@ -32,6 +32,13 @@ def _norm(s):
     return " ".join(str(s or "").strip().upper().split())
 
 
+def _has_column(con, table, col):
+    try:
+        return any(r[1] == col for r in con.execute(f"PRAGMA table_info({table})"))
+    except Exception:
+        return False
+
+
 def route_for(gcfg, yarn_label):
     """The reuse route for a yarn: "sizing" or "weft". reuse_to maps a yarn label -> route; "default" is the
     fallback. Matched case-insensitively, exact first, then as a substring either way, so "30/1 PC" in config
@@ -154,19 +161,26 @@ def gully_sets(con, cfg, as_of=None):
 
 def yarn_weight_flags(con, cfg, as_of=None):
     """Data-quality check on the yarn ledger: receipts/movements whose weight is clearly wrong, because they throw
-    the gully (and every yarn) balance off. Two kinds: (a) bags entered but the weight is 0 / missing; (b) the
-    weight per bag is far from one bag (kg / (bags x bag_kg) outside the band), e.g. a kg typed in the bags box."""
+    the gully (and every yarn) balance off. Two kinds: (a) bags entered but the ERP weight is 0 / missing; (b) the
+    weight per bag is far from one bag (kg / (bags x bag_kg) outside the band), e.g. a kg typed in the bags box.
+
+    The check runs on the ERP's OWN entered weight (raw_kg) where the mapping carries it, because the mapping's `kg`
+    may already substitute bags x a standard bag weight for a missing/implausible ERP weight (which would hide the
+    very rows we want to flag). Where raw_kg is not mapped, it falls back to kg."""
     as_of = as_of or date.today()
     gcfg = cfg["gully"]
     bag_kg = float(gcfg.get("bag_kg", 45.359237) or 45.359237)
     lo = float(gcfg.get("weight_ratio_low", 0.5) or 0.5)
     hi = float(gcfg.get("weight_ratio_high", 2.0) or 2.0)
+    # Use the ERP's own weight where the row has it; fall back to kg for rows (or mappings) without raw_kg, so a
+    # row with a genuinely-0 ERP weight is flagged while a plausible substituted kg is not falsely flagged.
+    wcol = "COALESCE(raw_kg, kg)" if _has_column(con, "yarn_movements", "raw_kg") else "kg"
     rows = []
-    for md, doc, mt, yname, cno, bags, kg in con.execute(
-            "SELECT move_date, doc_no, move_type, yarn_name, contract_no, COALESCE(bags,0), kg "
-            "FROM yarn_movements WHERE move_date <= ? AND COALESCE(bags,0) > 0", (as_of.isoformat(),)):
+    for md, doc, mt, yname, cno, bags, w in con.execute(
+            "SELECT move_date, doc_no, move_type, yarn_name, contract_no, COALESCE(bags,0), " + wcol +
+            " FROM yarn_movements WHERE move_date <= ? AND COALESCE(bags,0) > 0", (as_of.isoformat(),)):
         bags = float(bags or 0)
-        k = (float(kg) if kg is not None else None)
+        k = (float(w) if w is not None else None)
         if k is None or k == 0:
             rows.append({"date": md, "doc_no": doc, "move_type": mt, "yarn": yname, "contract": cno,
                          "bags": round(bags), "kg": (round(k) if k is not None else None),
@@ -192,6 +206,19 @@ def _movements(con, types, upto):
     for md, doc, yname, cno, kg, bags in con.execute(q, tuple(types) + (upto.isoformat(),)):
         out.append({"date": md, "doc_no": doc, "yarn": yname, "contract": cno, "kg": float(kg or 0), "bags": float(bags or 0)})
     return out
+
+
+def _line_key(line):
+    """A stable id for a movement line: date + doc + yarn. Doc numbers repeat across dates/years, so keying an
+    owner's rewound/fresh tick by doc_no alone would flip other lines that share the number."""
+    return f"{str(line['date'])[:10]}|{line.get('doc_no')}|{_norm(line.get('yarn'))}"
+
+
+def _as_date(v):
+    try:
+        return date.fromisoformat(str(v)[:10])
+    except (ValueError, TypeError):
+        return None
 
 
 def _auto_rewound(line, receipts, match_days, tol_pct):
@@ -225,23 +252,25 @@ def rewind_lines(con, cfg, as_of=None):
     gcfg = cfg["gully"]
     md, tol = int(gcfg.get("match_days", 3) or 0), float(gcfg.get("match_tolerance_pct", 1.0) or 0)
     receipts = _movements(con, gcfg.get("party_receipt_types") or [], as_of)
-    override = manual.latest(con, "gully_line")      # {doc_no: {"rewound": 1/0}}
+    override = manual.latest(con, "gully_line")      # {line_id (date|doc|yarn): {"rewound": 1/0}}
     out = []
     for line in _movements(con, gcfg.get("to_sizing_types") or [], as_of):
         if route_for(gcfg, line["yarn"]) != "sizing":
             continue
+        lid = _line_key(line)
         auto = _auto_rewound(line, receipts, md, tol)
-        ov = (override.get(str(line["doc_no"]), {}) or {}).get("rewound")
+        ov = (override.get(lid, {}) or {}).get("rewound")
         rewound = (bool(ov) if ov is not None else auto)
-        out.append({**line, "kind": "to_sizing", "auto_rewound": auto, "owner_set": (None if ov is None else bool(ov)),
-                    "rewound": rewound})
+        out.append({**line, "line_id": lid, "kind": "to_sizing", "auto_rewound": auto,
+                    "owner_set": (None if ov is None else bool(ov)), "rewound": rewound})
     for line in _movements(con, gcfg.get("weft_issue_types") or [], as_of):
         if route_for(gcfg, line["yarn"]) != "weft":
             continue
-        ov = (override.get(str(line["doc_no"]), {}) or {}).get("rewound")
+        lid = _line_key(line)
+        ov = (override.get(lid, {}) or {}).get("rewound")
         rewound = (bool(ov) if ov is not None else False)   # weft lines default fresh until the owner marks them
-        out.append({**line, "kind": "weft", "auto_rewound": False, "owner_set": (None if ov is None else bool(ov)),
-                    "rewound": rewound})
+        out.append({**line, "line_id": lid, "kind": "weft", "auto_rewound": False,
+                    "owner_set": (None if ov is None else bool(ov)), "rewound": rewound})
     return out
 
 
@@ -253,30 +282,40 @@ def rewind_balance(con, cfg, as_of=None):
     as_of = as_of or date.today()
     gcfg = cfg["gully"]
     waste_pct = float(gcfg.get("waste_pct", 0) or 0)
-    cmap = _contract_yarn(con, gcfg)
+
+    # the owner's figures per yarn, incl. the opening DATE: the opening is the physical stock on that day, and only
+    # gully returned and yarn re-used AFTER it are counted on top. Normalise the yarn key so it lines up with the
+    # movement yarns, and read the opening/physical dates (stored as ordinals).
+    open_by, open_at = {}, {}
+    for k, v in manual.latest(con, "gully_yarn").items():
+        y = _norm(k)
+        open_by[y] = v
+        oa = v.get("opening_at_iso")
+        try:
+            open_at[y] = date.fromordinal(int(oa)) if oa is not None else None
+        except (TypeError, ValueError, OverflowError):
+            open_at[y] = None
+
+    def after_open(y, d):
+        oa = open_at.get(y)
+        dd = _as_date(d)
+        return (oa is None) or (dd is not None and dd > oa)
 
     # gully returned per yarn - the NET rewind yarn (gully weight less the empty cones/tubes), attributed via the
-    # contract, taking the gate weight where the owner has weighed it. Reuses the per-set calculation.
-    gully, sets = {}, gully_sets(con, cfg, as_of)
+    # contract, taking the gate weight where the owner has weighed it. Only sets after the opening date count.
+    gully, labels, sets = {}, {}, gully_sets(con, cfg, as_of)
     for r in sets["rows"]:
         y = _norm(r["yarn"])
-        if y:
+        if y and after_open(y, r["set_date"]):
             gully[y] = gully.get(y, 0.0) + r["net_kg"]
 
-    # rewound re-used per yarn, split by route from the ticked lines
+    # rewound re-used per yarn (by route) from the ticked lines, again only after the opening date
     reused = {}
-    labels = {}
     for line in rewind_lines(con, cfg, as_of):
         y = _norm(line["yarn"])
         labels.setdefault(y, line["yarn"])
-        if line["rewound"]:
+        if line["rewound"] and after_open(y, line["date"]):
             reused[y] = reused.get(y, 0.0) + line["kg"]
-
-    openings = manual.latest(con, "gully_yarn")      # {yarn_label(normalised key): {opening_kg, waste_kg, physical_kg, physical_at}}
-    # owner keys openings by the yarn label; normalise the key so it lines up with movement yarns
-    open_by = {}
-    for k, v in openings.items():
-        open_by[_norm(k)] = v
 
     yarns = set(gully) | set(reused) | set(open_by)
     for y in yarns:
@@ -294,12 +333,13 @@ def rewind_balance(con, cfg, as_of=None):
         book = opening + g - used - waste
         phys = o.get("physical_kg")
         phys = (float(phys) if phys is not None else None)
+        oat = (open_at.get(y).isoformat() if open_at.get(y) else None)
         pat = o.get("physical_at_iso")
         try:
             pat = date.fromordinal(int(pat)).isoformat() if pat is not None else None
         except (TypeError, ValueError, OverflowError):
             pat = None
-        rows.append({"yarn": label, "route": route, "opening_kg": round(opening),
+        rows.append({"yarn": label, "route": route, "opening_kg": round(opening), "opening_at": oat,
                      "gully_returned_kg": round(g), "rewound_reused_kg": round(used), "waste_kg": round(waste),
                      "book_balance_kg": round(book), "physical_kg": (round(phys) if phys is not None else None),
                      "difference_kg": (round(book - phys) if phys is not None else None),
@@ -318,12 +358,14 @@ def rewind_balance(con, cfg, as_of=None):
 
 def gully_report(con, cfg, day=None):
     bal = rewind_balance(con, cfg, day)
-    cols = ["Yarn", "Route", "Opening kg", "Gully net kg", "Rewound re-used kg", "Waste kg",
+    cols = ["Yarn", "Route", "Opening kg", "Opening on", "Gully net kg", "Rewound re-used kg", "Waste kg",
             "Book balance kg", "Physical kg", "Difference kg"]
-    rows = [[r["yarn"], r["route"], r["opening_kg"], r["gully_returned_kg"], r["rewound_reused_kg"],
-             r["waste_kg"], r["book_balance_kg"], r["physical_kg"], r["difference_kg"]] for r in bal["rows"]]
+    rows = [[r["yarn"], r["route"], r["opening_kg"], (r["opening_at"] or ""), r["gully_returned_kg"],
+             r["rewound_reused_kg"], r["waste_kg"], r["book_balance_kg"], r["physical_kg"], r["difference_kg"]]
+            for r in bal["rows"]]
     t = bal["totals"]
-    summary = [f"As of {bal['date']}. Book balance = opening + gully returned (net of tubes) − rewound re-used − waste.",
+    summary = [f"As of {bal['date']}. Book balance = opening + gully returned (net of tubes, after the opening date) "
+               "− rewound re-used − waste.",
                f"Gully net {t['gully']:,} kg · rewound re-used {t['reused']:,} kg · "
                f"book balance {t['book']:,} kg across {len(rows)} yarn(s)."]
     return Report("Gully / rewind balance", cols, rows, summary)
