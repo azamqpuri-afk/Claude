@@ -178,6 +178,7 @@ LEFT JOIN dostex.yarn wy ON wy.ycode = c.warp_yarn_code LEFT JOIN dostex.yarn fy
 [entities.yarn_movements]
 sql = """
 SELECT TRUNC(m.td) AS move_date, m.feedd AS entered_at, TO_CHAR(NVL(m.gp_no, m.tno)) AS doc_no,
+       TO_CHAR(m.gp_no) AS gatepass_no,
        CASE m.tt WHEN 'IGP_YARN' THEN 'party_receipt'
                  WHEN 'OGP_YARN' THEN CASE WHEN REGEXP_LIKE(m.tdesc, '@ *[0-9]') THEN 'sale' ELSE 'party_return' END
                  WHEN 'TO_SIZING' THEN 'to_sizer' WHEN 'FROM_SIZING' THEN 'from_sizer'

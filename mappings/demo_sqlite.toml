@@ -120,7 +120,7 @@ LEFT JOIN yrn_master wy ON wy.yarn_cd = o.warp_yarn LEFT JOIN yrn_master fy ON f
 
 [entities.yarn_movements]
 sql = """
-SELECT t.txn_dt AS move_date, t.entry_ts AS entered_at, t.gp_no AS doc_no,
+SELECT t.txn_dt AS move_date, t.entry_ts AS entered_at, t.gp_no AS doc_no, t.gp_no AS gatepass_no,
        CASE t.txn_kind WHEN 'YRCV' THEN 'party_receipt' WHEN 'YRET' THEN 'party_return' WHEN 'YSALE' THEN 'sale'
                        WHEN 'SZO' THEN 'to_sizer' WHEN 'SZR' THEN 'from_sizer' WHEN 'BMR' THEN 'sized_beams_received'
                        WHEN 'WFI' THEN 'to_looms' WHEN 'WFR' THEN 'from_looms' WHEN 'OPN' THEN 'opening' ELSE 'other' END AS move_type,

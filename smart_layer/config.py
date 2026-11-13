@@ -36,6 +36,7 @@ DEFAULTS = {
         "match_tolerance_pct": 1.0,               # ... and +/- this % on kg is treated as FRESH, not rewound (an owner tick always wins)
         "waste_pct": 0.0,                         # rewind waste as a % of gully returned, until the owner enters a measured figure
         "bag_kg": 45.359237,                      # default bag weight (100 lb) for an opening entered as bags+cones -> kg
+        "bag_kg_by_yarn": {},                     # per-yarn bag weight override, e.g. { "120/1 VISCOSE" = 22.68 } (50 lb bags)
         "cone_pbag": {},                          # per-yarn cones/bag for cone<->kg, e.g. { "30/1 PC" = 24 } (else from the yarn stock)
         "cone_weight_kg": 0.060,                  # weight of one empty gully cone/tube (kg): net rewind yarn = gully kg - cones x this
         "cone_weight_by_yarn": {},                # per-yarn override of cone_weight_kg

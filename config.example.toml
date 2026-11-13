@@ -120,8 +120,9 @@ reuse_to = { default = "weft" }
 # Yarn-ledger data check (flagged in the Gully view): a line with bags but a missing / implausible weight.
 # weight_ratio_low = 0.5                 # flag if kg / (bags × bag_kg) is below this ...
 # weight_ratio_high = 2.0                # ... or above this
-# For an opening entered as bags + cones rather than kg:
+# For an opening entered as bags + cones rather than kg, and for the weight check's "one bag" yardstick:
 # bag_kg = 45.359237                     # one bag = 100 lb
+# bag_kg_by_yarn = { "120/1 VISCOSE" = 22.68 }   # per-yarn bag weight (e.g. 50 lb bags) so they are not mis-flagged
 # cone_pbag = { "30/1 PC" = 24 }         # cones per bag (else taken from the yarn stock)
 
 [cost]

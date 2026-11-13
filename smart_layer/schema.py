@@ -198,7 +198,8 @@ ENTITIES = (
         "issued to / returned from looms (weft), sold, opening stock. Quantities are positive; move_type gives the direction.",
         (C("move_date", "DATE", "Date of the movement", True),
          C("entered_at", "DATETIME", "When it was keyed into the ERP"),
-         C("doc_no", "TEXT", "Gate pass / document number"),
+         C("doc_no", "TEXT", "Document / voucher number"),
+         C("gatepass_no", "TEXT", "Gate pass / IGP number the mill looks things up by (optional; else same as doc_no)"),
          C("move_type", "TEXT", "One of: " + ", ".join(
              ("party_receipt", "party_return", "sale", "to_sizer", "from_sizer", "sized_beams_received",
               "to_looms", "from_looms", "opening", "other")), True),

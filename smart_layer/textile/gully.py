@@ -57,7 +57,7 @@ def route_for(gcfg, yarn_label):
 def cone_kg(gcfg, yarn_label, cone_pbag=None):
     """Weight of one cone (kg), for an opening the owner enters as bags + cones. cone kg = bag_kg / cones-per-bag;
     cones-per-bag comes from [gully].cone_pbag per yarn, else the value passed from the yarn stock."""
-    bag_kg = float(gcfg.get("bag_kg", 45.359237) or 45.359237)
+    bag_kg = bag_kg_for(gcfg, yarn_label)
     per = (gcfg.get("cone_pbag") or {})
     cpb = None
     yk = _norm(yarn_label)
@@ -81,6 +81,16 @@ def _per_yarn(mapping, yarn_label, default):
         if _norm(k) == yk or _norm(k) in yk or yk in _norm(k):
             return v
     return default
+
+
+def bag_kg_for(gcfg, yarn_label):
+    """Weight of one bag (kg) for a yarn: [gully].bag_kg_by_yarn per yarn, else the scalar bag_kg (100 lb). Some
+    yarns (e.g. 120/1 viscose) come in 50 lb bags, so a flat 45.36 would mis-flag them as under-weight."""
+    default = gcfg.get("bag_kg", 45.359237)
+    try:
+        return float(_per_yarn(gcfg.get("bag_kg_by_yarn"), yarn_label, default) or default)
+    except (TypeError, ValueError):
+        return 45.359237
 
 
 def cone_weight(gcfg, yarn_label):
@@ -169,27 +179,27 @@ def yarn_weight_flags(con, cfg, as_of=None):
     very rows we want to flag). Where raw_kg is not mapped, it falls back to kg."""
     as_of = as_of or date.today()
     gcfg = cfg["gully"]
-    bag_kg = float(gcfg.get("bag_kg", 45.359237) or 45.359237)
     lo = float(gcfg.get("weight_ratio_low", 0.5) or 0.5)
     hi = float(gcfg.get("weight_ratio_high", 2.0) or 2.0)
     # Use the ERP's own weight where the row has it; fall back to kg for rows (or mappings) without raw_kg, so a
     # row with a genuinely-0 ERP weight is flagged while a plausible substituted kg is not falsely flagged.
     wcol = "COALESCE(raw_kg, kg)" if _has_column(con, "yarn_movements", "raw_kg") else "kg"
+    gcol = "gatepass_no" if _has_column(con, "yarn_movements", "gatepass_no") else "doc_no"
     rows = []
-    for md, doc, mt, yname, cno, bags, w in con.execute(
-            "SELECT move_date, doc_no, move_type, yarn_name, contract_no, COALESCE(bags,0), " + wcol +
+    for md, doc, gp, mt, yname, cno, bags, w in con.execute(
+            "SELECT move_date, doc_no, " + gcol + ", move_type, yarn_name, contract_no, COALESCE(bags,0), " + wcol +
             " FROM yarn_movements WHERE move_date <= ? AND COALESCE(bags,0) > 0", (as_of.isoformat(),)):
         bags = float(bags or 0)
+        bag_kg = bag_kg_for(gcfg, yname)                 # per-yarn bag weight (50 lb bags etc.)
         k = (float(w) if w is not None else None)
+        base = {"date": md, "doc_no": doc, "gatepass_no": gp, "move_type": mt, "yarn": yname, "contract": cno,
+                "bags": round(bags)}
         if k is None or k == 0:
-            rows.append({"date": md, "doc_no": doc, "move_type": mt, "yarn": yname, "contract": cno,
-                         "bags": round(bags), "kg": (round(k) if k is not None else None),
-                         "issue": "weight missing", "ratio": None})
+            rows.append({**base, "kg": (round(k) if k is not None else None), "issue": "weight missing", "ratio": None})
             continue
         ratio = k / (bags * bag_kg) if bags and bag_kg else None
         if ratio is not None and (ratio < lo or ratio > hi):
-            rows.append({"date": md, "doc_no": doc, "move_type": mt, "yarn": yname, "contract": cno,
-                         "bags": round(bags), "kg": round(k),
+            rows.append({**base, "kg": round(k),
                          "issue": ("weight too low" if ratio < lo else "weight too high"), "ratio": round(ratio, 2)})
     rows.sort(key=lambda r: str(r["date"]), reverse=True)
     return {"date": as_of.isoformat(), "rows": rows, "count": len(rows)}
@@ -200,11 +210,13 @@ def yarn_weight_flags(con, cfg, as_of=None):
 def _movements(con, types, upto):
     if not types:
         return []
-    q = "SELECT move_date, doc_no, yarn_name, contract_no, COALESCE(kg,0), COALESCE(bags,0) FROM yarn_movements " \
-        "WHERE move_type IN (%s) AND move_date <= ? ORDER BY move_date, doc_no" % ",".join("?" * len(types))
+    gcol = "gatepass_no" if _has_column(con, "yarn_movements", "gatepass_no") else "doc_no"
+    q = "SELECT move_date, doc_no, " + gcol + ", yarn_name, contract_no, COALESCE(kg,0), COALESCE(bags,0) " \
+        "FROM yarn_movements WHERE move_type IN (%s) AND move_date <= ? ORDER BY move_date, doc_no" % ",".join("?" * len(types))
     out = []
-    for md, doc, yname, cno, kg, bags in con.execute(q, tuple(types) + (upto.isoformat(),)):
-        out.append({"date": md, "doc_no": doc, "yarn": yname, "contract": cno, "kg": float(kg or 0), "bags": float(bags or 0)})
+    for md, doc, gp, yname, cno, kg, bags in con.execute(q, tuple(types) + (upto.isoformat(),)):
+        out.append({"date": md, "doc_no": doc, "gatepass_no": gp, "yarn": yname, "contract": cno,
+                    "kg": float(kg or 0), "bags": float(bags or 0)})
     return out
 
 

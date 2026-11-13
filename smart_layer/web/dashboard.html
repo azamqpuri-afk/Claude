@@ -1453,20 +1453,20 @@ async function renderGully(){
     ((sets.rows||[]).length? `<table class="edtbl"><thead><tr><th>Set</th><th>Date</th><th>Contract</th><th>Yarn</th><th>Slip kg</th><th>Cones</th><th>Gate cones</th><th>Tube kg</th><th>Gate kg</th><th>Net yarn kg</th></tr></thead><tbody>${srows}</tbody></table>`
       : '<p class="cnote">No sized sets in range.</p>')+`</div></div>`;
   // rewound lines
-  var lrows=(lines.lines||[]).map(l=>`<tr><td class="muted">${l.date?dshort(l.date):""}</td><td>${esc(l.doc_no||"")}</td>`+
+  var lrows=(lines.lines||[]).map(l=>`<tr><td class="muted">${l.date?dshort(l.date):""}</td><td>${esc(l.gatepass_no||l.doc_no||"")}</td>`+
     `<td>${esc(l.yarn||"")}</td><td><span class="tag ${l.kind==='weft'?'':'mid'}">${l.kind==='weft'?'weft':'to sizing'}</span></td><td class="num">${num(l.kg)}</td>`+
     `<td style="text-align:center"><input type="checkbox" ${l.rewound?"checked":""} data-line="${esc(l.line_id)}" class="gl-rew"></td>`+
     `<td class="muted" style="font-size:11px">${l.owner_set==null?("auto: "+(l.auto_rewound?"rewound":"fresh")):"you set"}</td></tr>`).join("");
   var lineCard=`<div class="card" style="margin:0"><div class="hd"><h3>Rewound vs fresh — tick the rewound lines</h3><span class="count">${(lines.lines||[]).length} line(s)</span></div>`+
     `<div class="tools" style="margin:0 0 8px"><label class="fld">Your name <input id="gln-who" placeholder="who" style="min-width:100px"></label><span class="muted" style="font-size:12px">Sizing-route lines are auto-guessed (a to-sizing line that matches a fresh receipt is fresh); your tick wins.</span></div><div class="tscroll">`+
-    ((lines.lines||[]).length? `<table class="edtbl"><thead><tr><th>Date</th><th>Doc</th><th>Yarn</th><th>Kind</th><th>Kg</th><th>Rewound?</th><th>Source</th></tr></thead><tbody>${lrows}</tbody></table>`
+    ((lines.lines||[]).length? `<table class="edtbl"><thead><tr><th>Date</th><th>Gate pass</th><th>Yarn</th><th>Kind</th><th>Kg</th><th>Rewound?</th><th>Source</th></tr></thead><tbody>${lrows}</tbody></table>`
       : '<p class="cnote">No sizing / weft movement lines in range.</p>')+`</div></div>`;
   // yarn-ledger data quality: lines whose weight is missing or implausible (they throw the balance off)
-  var qrows=(qual.rows||[]).map(r=>`<tr class="ed-del"><td class="muted">${r.date?dshort(r.date):""}</td><td>${esc(r.doc_no||"")}</td>`+
+  var qrows=(qual.rows||[]).map(r=>`<tr class="ed-del"><td class="muted">${r.date?dshort(r.date):""}</td><td>${esc(r.gatepass_no||r.doc_no||"")}</td>`+
     `<td>${esc(r.yarn||"")}</td><td>${esc(r.contract||"")}</td><td class="num">${num(r.bags)}</td>`+
     `<td class="num">${r.kg==null?"—":num(r.kg)}</td><td>${esc(r.issue)}${r.ratio!=null?` <span class="muted">(×${r.ratio})</span>`:""}</td></tr>`).join("");
   var qCard=(qual.rows||[]).length? `<div class="card" style="margin:0 0 14px"><div class="hd"><h3>⚠️ Yarn weights to check</h3><span class="count">${qual.rows.length} line(s)</span></div>`+
-    `<div class="tscroll"><table class="edtbl"><thead><tr><th>Date</th><th>Doc</th><th>Yarn</th><th>Contract</th><th>Bags</th><th>Kg</th><th>Issue</th></tr></thead><tbody>${qrows}</tbody></table></div>`+
+    `<div class="tscroll"><table class="edtbl"><thead><tr><th>Date</th><th>Gate pass</th><th>Yarn</th><th>Contract</th><th>Bags</th><th>Kg</th><th>Issue</th></tr></thead><tbody>${qrows}</tbody></table></div>`+
     `<p class="muted" style="font-size:12px;margin:8px 16px 4px">These yarn lines have bags but a missing or implausible weight — fix them in the ERP so the gully and yarn balances come right.</p></div>` : "";
   $("#gl-body").innerHTML=tiles+qCard+balCard+entry+setCard+lineCard;
   $("#gl-msg").textContent="";

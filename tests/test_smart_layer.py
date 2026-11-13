@@ -1971,6 +1971,51 @@ def test_v0170_yarn_weight_flags():
     assert "IGP-1" not in docs and "IGP-NR" not in docs
 
 
+def test_v0172_per_yarn_bag_weight():
+    from smart_layer.textile import gully
+
+    class _Cfg:
+        def __init__(self, g):
+            self.g = {"gully": g}
+
+        def __getitem__(self, k):
+            return self.g.get(k, {})
+
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE yarn_movements (move_date TEXT, doc_no TEXT, gatepass_no TEXT, move_type TEXT, "
+                "yarn_name TEXT, contract_no TEXT, bags REAL, kg REAL, raw_kg REAL)")
+    # 50 lb bags: 10 bags ~ 224 kg. Against the default 45.36 yardstick the ratio is ~0.49 -> falsely "too low".
+    con.executemany("INSERT INTO yarn_movements VALUES (?,?,?,?,?,?,?,?,?)", [
+        ("2026-05-02", "V1", "IGP-900", "party_receipt", "120/1 VISCOSE", "C9", 10, 224.0, 224.0)])
+    con.commit()
+    g = {"bag_kg": 45.359237, "weight_ratio_low": 0.5, "weight_ratio_high": 2.0}
+    assert gully.yarn_weight_flags(con, _Cfg(g), date(2026, 10, 2))["count"] == 1   # mis-flagged without the override
+    g2 = {**g, "bag_kg_by_yarn": {"120/1 VISCOSE": 22.68}}
+    out = gully.yarn_weight_flags(con, _Cfg(g2), date(2026, 10, 2))
+    assert out["count"] == 0                                                        # correct with the per-yarn bag weight
+    assert gully.bag_kg_for(g2, "120/1 VISCOSE CARDED") == pytest.approx(22.68)     # substring match
+    assert gully.bag_kg_for(g2, "30/1 PC") == pytest.approx(45.359237)             # default
+
+
+def test_v0172_weblogic_ignores_server_heartbeat():
+    from smart_layer import erp_edits as E
+    from datetime import datetime as _dt
+
+    def ep(s):
+        return _dt.fromisoformat("2026-11-07 15:00:" + s).timestamp()
+    wl = E._WebLogicLog({"weblogic_access_log": "x", "server_hosts": ["DESKTOP-KUMU41H", "127.0.0.1", "localhost"]})
+    # a dense client (.177) plus the loopback heartbeat in the same window
+    wl._events = sorted([(ep("30"), "192.168.18.177"), (ep("31"), "192.168.18.177"), (ep("33"), "192.168.18.177"),
+                         (ep("02"), "127.0.0.1"), (ep("59"), "127.0.0.1")])
+    wl.enabled = True
+    # even though a heartbeat (:02) is nearest to :01, the busy client IP wins
+    assert wl.pc_for("2026-11-07 15:00:01") == "192.168.18.177"
+    # a window with only the server heartbeat returns the loopback (shown later as "Server (local/AnyDesk)")
+    wl._events = [(ep("00"), "127.0.0.1")]
+    del wl._times
+    assert wl.pc_for("2026-11-07 15:00:00") == "127.0.0.1"
+
+
 def test_v0171_opening_date_bounds_the_balance(env):
     cfg, con = env
     from smart_layer import manual

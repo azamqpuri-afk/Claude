@@ -169,10 +169,16 @@ class _WebLogicLog:
     """
     LINE = re.compile(r'^(\d{1,3}(?:\.\d{1,3}){3})\b.*\[(\d{2}/[A-Za-z]{3}/\d{4}:\d{2}:\d{2}:\d{2})')
 
+    _IP = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
     def __init__(self, settings):
         self.path = str((settings or {}).get("weblogic_access_log") or "").strip()
         self.ip_names = {str(k): str(v) for k, v in ((settings or {}).get("ip_names") or {}).items()}
         self.window = int((settings or {}).get("log_match_window_seconds", 180) or 180)
+        # server-side IPs (the Forms server itself / loopback): their lservlet hits are a keep-alive heartbeat, not a
+        # person, so a real client IP in the same window always wins over them.
+        self.server_ips = {str(h).strip() for h in ((settings or {}).get("server_hosts") or []) if self._IP.match(str(h).strip())}
+        self.server_ips |= {"127.0.0.1", "::1"}
         self.enabled = bool(self.path)
         self._events = None                                 # sorted [(epoch, ip)] of lservlet POSTs, parsed lazily
 
@@ -211,9 +217,14 @@ class _WebLogicLog:
         self._events.sort()
 
     def pc_for(self, at, window=None):
-        """The client PC name for an event time `at` (ISO string), matched to the nearest lservlet request within
-        +-window seconds (default from [edits].log_match_window_seconds). Returns a name (via ip_names, else the
-        bare IP) or None."""
+        """The client PC name for an event time `at` (ISO string), from the lservlet requests within +-window
+        seconds (default from [edits].log_match_window_seconds).
+
+        The Forms server posts a keep-alive heartbeat from loopback ~30x/hour around the clock, so a naive
+        nearest-request match would attribute everything to the server. Instead: gather every request in the window,
+        drop the server/loopback IPs whenever a real client IP also has hits there, and pick the client IP with the
+        most hits (tie-break: the request nearest in time). Only when the window holds server IPs alone is the
+        server returned. Returns a name (via ip_names, else the bare IP) or None."""
         if window is None:
             window = self.window
         if not self.enabled:
@@ -228,16 +239,25 @@ class _WebLogicLog:
         except (ValueError, TypeError):
             return None
         import bisect
-        times = [e[0] for e in self._events] if not hasattr(self, "_times") else self._times
+        times = self._times if hasattr(self, "_times") else [e[0] for e in self._events]
         self._times = times
         i = bisect.bisect_left(times, t)
-        best, bestd = None, window + 1
-        for j in range(max(0, i - 50), min(len(self._events), i + 50)):
-            d = abs(self._events[j][0] - t)
-            if d <= window and d < bestd:
-                bestd, best = d, self._events[j][1]
-        if best is None:
+        stats = {}                                          # ip -> [hits, nearest_distance]
+        for j in range(i, len(self._events)):               # forward within the window
+            d = self._events[j][0] - t
+            if d > window:
+                break
+            s = stats.setdefault(self._events[j][1], [0, d]); s[0] += 1; s[1] = min(s[1], d)
+        for j in range(i - 1, -1, -1):                      # backward within the window
+            d = t - self._events[j][0]
+            if d > window:
+                break
+            s = stats.setdefault(self._events[j][1], [0, d]); s[0] += 1; s[1] = min(s[1], d)
+        if not stats:
             return None
+        clients = {ip: v for ip, v in stats.items() if ip not in self.server_ips}
+        pool = clients or stats                             # ignore the server heartbeat unless it is all there is
+        best = min(pool, key=lambda ip: (-pool[ip][0], pool[ip][1]))   # most hits, then nearest in time
         return self.ip_names.get(best, best)
 
 
