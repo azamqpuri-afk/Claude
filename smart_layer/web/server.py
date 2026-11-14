@@ -135,6 +135,40 @@ class App:
         finally:
             con.close()
 
+    def contracts_all(self):
+        from ..textile import contract_report as cr
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return {"contracts": cr.contract_list(con)}
+        finally:
+            con.close()
+
+    def contract_report(self, contract):
+        from ..textile import contract_report as cr
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return cr.contract_report(con, self.cfg, contract)
+        finally:
+            con.close()
+
+    def contract_report_file(self, contract, fmt):
+        """The whole-contract report as a downloadable PDF or Excel (one sheet per section)."""
+        import tempfile
+        from .. import PRODUCT
+        from ..textile import contract_report as cr
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                if fmt in ("xlsx", "excel"):
+                    p = cr.write_xlsx(con, self.cfg, contract, tmp, f"contract_{contract}.xlsx")
+                    ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                else:
+                    p = cr.write_pdf(con, self.cfg, contract, tmp, f"contract_{contract}.pdf", product=PRODUCT)
+                    ctype = "application/pdf"
+                return Path(p).read_bytes(), ctype, Path(p).name
+        finally:
+            con.close()
+
     def fabric_history(self, d0=None, d1=None):
         """Fabric-in-stock history drill (#24): produced / dispatched / returned / rejection / stock per contract."""
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -822,6 +856,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/manual", "/api/manual/history", "/api/closing/contracts", "/api/closing/sheet",
                 "/api/closing/count-review", "/api/closing/counts-saved",
                 "/api/gully", "/api/gully/sets", "/api/gully/lines", "/api/gully/quality",
+                "/api/contracts-all", "/api/contract-report",
                 "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
                 "/api/edits", "/api/edits/detail",
                 "/api/looms/efficiency", "/api/looms/days",
@@ -888,6 +923,17 @@ def get_response(app, path, query, check_licence=True):
             if path == "/api/gully/quality":
                 return 200, app.gully_quality(gday), "application/json", {}
             return 200, app.gully_balance(gday), "application/json", {}
+        if path == "/api/contracts-all":                  # every contract (open + closed) for the contract-report picker
+            return 200, app.contracts_all(), "application/json", {}
+        if path == "/api/contract-report":                # the whole-contract report (json, or a pdf / xlsx download)
+            contract = params.get("contract", "")
+            if not contract:
+                return 400, {"error": "contract required"}, "application/json", {}
+            fmt = params.get("fmt", "json")
+            if fmt in ("pdf", "xlsx", "excel"):
+                body, ctype, fname = app.contract_report_file(contract, fmt)
+                return 200, body, ctype, {"Content-Disposition": f'attachment; filename="{fname}"'}
+            return 200, app.contract_report(contract), "application/json", {}
         if path == "/api/closing/contracts":             # contracts for the closing picker (optional party filter)
             return 200, app.closing_contracts(params.get("party", "")), "application/json", {}
         if path == "/api/closing/sheet":                 # IGP yarn + OGP fabric date-wise for a party/contract

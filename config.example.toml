@@ -69,6 +69,10 @@ attach_pdf = true                  # attach the report PDF to its ntfy push (the
 [audit]
 large_payment = 500000
 duplicate_payment_min = 5000
+# Idle-loom alert: after a new beam / quality change, allow this long to mount it (quality_change_days) plus this
+# long to key the first production (entry_lag_days) before alerting that a loom has had nothing entered.
+# quality_change_days = 2
+# entry_lag_days = 4
 # Practices the owner confirms as normal are kept out of alerts, e.g.
 # dismiss = [{ match = "^big-", why = "advance payments to sizers are normal" }]
 

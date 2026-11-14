@@ -71,6 +71,8 @@ DEFAULTS = {
         "rejection_min_meters": 200,
         "idle_loom_min_days": 5,
         "loom_silent_days": 10,           # a loom silent this many days is an urgent (send-once) phone alert
+        "quality_change_days": 2,         # after a new beam / quality, allow this long to mount it ...
+        "entry_lag_days": 4,              # ... plus this long to key the first production, before an idle-loom alert
         "trial_balance_tolerance": 10,    # rounding differences below this are not an error
         "dismiss": [],                    # [{match = "regex", why = "normal practice ..."}]
     },

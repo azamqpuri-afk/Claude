@@ -81,6 +81,18 @@ the mapping/config, never the core).
 | Gully/Rewind | Tracks the gully (yarn left on the returned sizing cones) the ERP records but never follows: the mill rewinds and re-uses it — back to **sizing** for some yarns, as **weft** for others (a per-yarn route in config). Keeps a per-yarn book balance = opening + gully returned (net of the empty cones/tubes) − rewound re-used − waste, against a later physical count. The owner enters an **opening and an opening date** per yarn; only gully and re-use after that date are counted on top. Gully-cone count comes from the set record (bags × cones/bag + loose); the gate-app count is a cross-check. A per-set slip-vs-gate view, rewound/fresh line ticks keyed by date+doc+yarn (a to-sizing line matching a fresh receipt is auto-fresh; owner tick wins), an Overview "Gully book" tile, and PDF/Excel | Yarn & Fabric → **Gully / Rewind** · `api/gully`, `api/gully/sets`, `api/gully/lines`, POST `api/gully/set`,`/yarn`,`/line` · `[gully]` |
 | Yarn weight check | Flags yarn-ledger lines with bags but a missing or implausible weight (checked on the ERP's **raw** entered weight `raw_kg`, before the mapping substitutes bags × a standard bag weight, so the bad rows are not hidden) — these throw the gully and yarn balances off | Yarn & Fabric → Gully / Rewind · `api/gully/quality` · `[gully] weight_ratio_low`/`weight_ratio_high` |
 
+## New in 0.17.5
+
+| # | What it does | Where |
+|---|--------------|-------|
+| 1 | The trial-balance finding names the out-of-balance voucher(s) (e.g. "SRN 771 Rs 24,407"), not just the total | Audit → Finance · `audit/finance.py` |
+| 2 | Empty beams at a sizer are judged by **quantity** per sizer (sent vs empties + sized back), not by beam number — so a beam returned under a different number is no longer a false WATCH (INFO "all back by count"); only a real net shortfall alerts, oldest first | Audit → Beams · `audit/beams.py` |
+| 3 | Idle-loom alert first checks for a **quality change** (a new beam mounted after the last entry) and gives it a grace period (INFO); otherwise it uses the scoreboard to word it as an entry problem ("ran … but nothing entered") vs a loom problem ("stopped") | Audit → Weaving · `audit/weaving.py` · `[audit] quality_change_days`/`entry_lag_days` |
+| 4 | Over/under-production checks the loom's **quality** — a changed quality moves the picks/inch and so the meters, reported as INFO with the ppi change, not a false WATCH | Audit → Weaving · `audit/weaving.py` |
+| 5 | Live feed shows the latest entries; when the newest isn't today it labels the panel with the last-entry date and time | Overview · `api/feed` |
+| 6-9 | Weaving: ERP-vs-scoreboard shown as equal side-by-side boxes with the difference; both ERP and scoreboard lines always drawn; the monthly chart is **meters + A-grade %** (current month "to date"); the loom-by-loom table is in numeric loom order with ERP/scoreboard efficiency and meters for the last 30 days **and** this month, a shed TOTAL row, and a sticky loom column | Weaving tab · `web/data.py`, `web/dashboard.html` |
+| 10 | **Contract report**: pick a contract (open or closed) and get the whole contract on one page and as PDF + Excel (one sheet per section) — header, yarn in (IGP), yarn returned/sold, sizing per sizer, sets, beams, production, a picks check (same quality at a different ppi), weft, fabric out and the balances. Also `report contract --contract <no>` on the CLI. "Contract closing" is removed from the Reports menu (the code is kept) | Reports → Contract report · `textile/contract_report.py` · `api/contracts-all`, `api/contract-report` · CLI `report contract` |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |

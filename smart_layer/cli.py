@@ -151,6 +151,36 @@ def cmd_report(cfg, args):
     day = date.fromisoformat(args.date) if args.date else None
     d0 = date.fromisoformat(args.from_) if getattr(args, "from_", None) else None
     d1 = date.fromisoformat(args.to) if getattr(args, "to", None) else None
+    if args.name == "contract":                          # the whole-contract report (own module, not a day report)
+        from .textile import contract_report as cr
+        contract = getattr(args, "contract", None)
+        if not contract:
+            print("Give a contract: report contract --contract <no>")
+            return 2
+        rep = cr.contract_report(con, cfg, contract)
+        if not rep.get("found"):
+            print(f"No contract {contract}.")
+            return 1
+        h = rep["header"]
+        print(f"Contract {h.get('contract')} - {h.get('party')} - {h.get('quality') or ''}")
+        for s in rep["sections"]:
+            print(f"\n== {s['title']} ==")
+            if s["rows"]:
+                print("  " + " | ".join(str(c) for c in s["columns"]))
+                for row in s["rows"][:200]:
+                    print("  " + " | ".join(str(v) for v in row))
+                if s.get("totals"):
+                    print("  " + " | ".join(str(v) for v in s["totals"]))
+            else:
+                print("  (none)")
+            if s.get("note"):
+                print("  ! " + s["note"])
+        out_dir = cfg.output_dir()
+        if getattr(args, "xlsx", False):
+            print("\nSaved", cr.write_xlsx(con, cfg, contract, out_dir, f"contract_{contract}.xlsx"))
+        if args.pdf:
+            print("Saved", cr.write_pdf(con, cfg, contract, out_dir, f"contract_{contract}.pdf", product="Smart Layer"))
+        return 0
     if args.name == "zero":                              # only the daily push moves the "newly at zero" baseline
         rep = stock.new_zero(con, cfg, day, remember=bool(args.push))
     else:
@@ -519,7 +549,8 @@ def main(argv=None):
     s.add_argument("--live", action="store_true", help="quick refresh: all modules, last few days only (for the 5-minute task)")
     from . import report_registry
     r = sub.add_parser("report")
-    r.add_argument("name", choices=report_registry.NAMES)
+    r.add_argument("name", choices=report_registry.NAMES + ["contract"])
+    r.add_argument("--contract", help="for 'report contract': the contract number")
     r.add_argument("--date")
     r.add_argument("--from", dest="from_", metavar="YYYY-MM-DD", help="range start (for period reports)")
     r.add_argument("--to", metavar="YYYY-MM-DD", help="range end / as-of date")

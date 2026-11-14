@@ -799,7 +799,11 @@ def test_beam_audit_and_sizer_ledger(env):
         cfg.data["beams"] = {}
     titles = " | ".join(f"{f.severity} {f.title}" for f in found)
     assert "ACTION LOOM-05: beam BM-05A finishes" in titles and "LOOM-12" not in titles
-    assert "CONFIRMED Beam BM-20A on LOOM-20" in titles and "WATCH Empty beam BM-X9" in titles
+    assert "CONFIRMED Beam BM-20A on LOOM-20" in titles
+    # Rehman is square by COUNT (BM-X9 came back under a different number), so it is no longer a false WATCH - it is
+    # an INFO instead (item 2: judge empty beams by quantity per sizer, not by beam number).
+    assert "WATCH Empty beam BM-X9" not in titles
+    assert any(f.severity == "INFO" and "all back by count" in f.title for f in found)
     led = {r[0]: r for r in beams_mod.sizer_ledger(con, cfg, END).rows}
     # columns: Sizer, Empty sent, Back, Net out (qty), Number mismatch, Out over N days (by number)
     assert led["Rehman Sizing"][4] == 1 and led["Ali Sizing"][4] == ""   # Rehman has 1 beam back under a different number
@@ -2179,3 +2183,129 @@ def test_v0174_routine_rerate_downgrades_action_to_info(env):
         con.execute("DELETE FROM erp_change_values WHERE event_id = 99990201")
         con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
         con.commit()
+
+
+# ---- 0.17.5 ------------------------------------------------------------------------------------
+
+class _AuditStub:
+    """A minimal Audit for calling one module's run() in isolation on a hand-built store."""
+    def __init__(self, con, cfg, d0, d1):
+        self.con, self.cfg, self.t = con, cfg, cfg["audit"]
+        self._win = (d0, d1)
+        self.profile, self.findings, self.summary = {}, [], []
+
+    @property
+    def window(self):
+        return self._win
+
+    def q(self, sql, *params):
+        return self.con.execute(sql, params).fetchall()
+
+    def add(self, severity, section, key, title, detail=""):
+        self.findings.append(SimpleNamespace(severity=severity, section=section, key=key, title=title, detail=detail))
+
+
+def _weaving_store():
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE loom_production (prod_date TEXT, loom_code TEXT, shift TEXT, contract_no TEXT, quality TEXT,
+            beam_no TEXT, meters REAL, first_quality_m REAL, second_quality_m REAL, rejected_m REAL,
+            efficiency_pct REAL, meters_at_100 REAL);
+        CREATE TABLE looms (loom_code TEXT, loom_name TEXT);
+        CREATE TABLE beams (beam_no TEXT, contract_no TEXT, loom_code TEXT, mounted_date TEXT, set_length_m REAL, woven_m REAL);
+        CREATE TABLE contracts (contract_no TEXT, quality TEXT, picks_per_inch REAL);
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, efficiency_pct REAL, rpm REAL, stops REAL, shift_sec REAL);
+    """)
+    return con
+
+
+def test_v0175_idle_loom_quality_change_is_info(env):
+    from datetime import date as _d, timedelta as _td
+    from smart_layer.audit import weaving as wv
+    cfg, _ = env
+    con = _weaving_store()
+    end = _d(2026, 10, 2)
+    con.execute("INSERT INTO looms VALUES ('L1','LOOM-01')")
+    # last production 20 days ago -> idle; a new beam mounted 3 days ago -> within the quality-change grace window
+    con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                ((end - _td(days=20)).isoformat(), "L1", "A", "C1", "Q1", "B1", 300, 300, 0, 0, 75, None))
+    con.execute("INSERT INTO beams VALUES ('B2','C1','L1',?,?,?)", ((end - _td(days=3)).isoformat(), 2000, 0))
+    a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    wv.run(a)
+    idle = [f for f in a.findings if f.key == "idle-L1-" + (end - _td(days=20)).isoformat()]
+    assert idle and idle[0].severity == "INFO" and "quality change" in idle[0].detail
+
+
+def test_v0175_over_production_quality_change_is_info(env):
+    from datetime import date as _d, timedelta as _td
+    from smart_layer.audit import weaving as wv
+    cfg, _ = env
+    con = _weaving_store()
+    end = _d(2026, 10, 2)
+    con.execute("INSERT INTO looms VALUES ('L1','LOOM-01')")
+    con.execute("INSERT INTO contracts VALUES ('C-OLD','Q-SAME',60),('C-NEW','Q-SAME',80)")
+    # 'before' window (14..74 days ago): the loom ran contract C-OLD at a high rate (usual ~100 m/day)
+    for k in range(20, 60):
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-OLD", "Q-SAME", "B1", 200, 200, 0, 0, 75, None))
+    # 'recent' 14 days: a different contract C-NEW, far fewer m/day (quality changed, ppi 60 -> 80)
+    for k in range(0, 13):
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-SAME", "B2", 30, 30, 0, 0, 75, None))
+    a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    wv.run(a)
+    lh = [f for f in a.findings if f.key.startswith("lhist-L1")]
+    assert lh and lh[0].severity == "INFO" and "quality changed" in lh[0].title and "60" in lh[0].title and "80" in lh[0].title
+
+
+def test_v0175_empty_beam_by_quantity(env):
+    cfg, con = env
+    ins = "INSERT INTO beam_movements (move_date, beam_no, move_type, party_name) VALUES (?,?,?,?)"
+    mk = []
+    try:
+        # NET OUT: a sizer owes 2 beams by count (3 out, 1 back) -> 2 WATCH, oldest first
+        for i, bno in enumerate(("Z1", "Z2", "Z3")):
+            con.execute(ins, (f"2026-08-0{i+1}", bno, "empty_to_sizer", "ZZ-NET-OUT"))
+        con.execute(ins, ("2026-08-10", "Z9", "sized_received", "ZZ-NET-OUT"))
+        # SQUARE: 2 out, 2 back but under different numbers -> net 0 -> INFO, no WATCH
+        con.execute(ins, ("2026-08-01", "A1", "empty_to_sizer", "ZZ-SQUARE"))
+        con.execute(ins, ("2026-08-02", "A2", "empty_to_sizer", "ZZ-SQUARE"))
+        con.execute(ins, ("2026-08-05", "B7", "empty_from_sizer", "ZZ-SQUARE"))
+        con.execute(ins, ("2026-08-06", "B8", "sized_received", "ZZ-SQUARE"))
+        con.commit()
+        found = [f for f in audit.run(con, cfg, END).findings if f.section == "Beams"]
+        watch = [f for f in found if f.severity == "WATCH" and "ZZ-NET-OUT" in f.title]
+        assert len(watch) == 2
+        assert any(f.severity == "INFO" and "ZZ-SQUARE" in f.title and "all back by count" in f.title for f in found)
+        assert not any("ZZ-SQUARE" in f.title and f.severity == "WATCH" for f in found)
+    finally:
+        con.execute("DELETE FROM beam_movements WHERE party_name IN ('ZZ-NET-OUT','ZZ-SQUARE')")
+        con.commit()
+
+
+def test_v0175_loom_numeric_order_field(env):
+    from smart_layer.web import data as web_data
+    cfg, con = env
+    assert web_data._loom_num("L10") == 10 and web_data._loom_num("L2") == 2 and web_data._loom_num("9") == 9
+    w = web_data.build(con, cfg, END)["weaving"]
+    assert all("loom_no" in l for l in w["looms"])
+    # the month-to-date fields the loom-by-loom table needs are present
+    assert all(k in w["looms"][0] for k in ("erp_eff_month", "meters_month", "scb_eff_month", "scb_meters_month"))
+    assert "erp_meters_month" in w["shed"] and all("meters" in m for m in w["monthly"])
+
+
+def test_v0175_contract_report(env, tmp_path):
+    from smart_layer.textile import contract_report as cr
+    from smart_layer import report_registry
+    cfg, con = env
+    assert "closing" not in report_registry.REPORTS            # removed from the Reports menu (code kept)
+    lst = cr.contract_list(con)
+    assert lst and any(c["contract"] == "CON-41" for c in lst)
+    rep = cr.contract_report(con, cfg, "CON-41")
+    assert rep["found"]
+    keys = {s["key"] for s in rep["sections"]}
+    assert {"yarn_in", "sizing", "sets", "beams", "production", "picks_check", "weft", "fabric_out", "balances"} <= keys
+    assert cr.contract_report(con, cfg, "NOPE")["found"] is False
+    px = cr.write_xlsx(con, cfg, "CON-41", tmp_path, "c.xlsx")
+    pp = cr.write_pdf(con, cfg, "CON-41", tmp_path, "c.pdf", product="SL")
+    assert px.exists() and px.stat().st_size > 2000 and pp.exists() and pp.stat().st_size > 2000

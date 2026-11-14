@@ -126,6 +126,12 @@
   .cmpbox{background:var(--teal-soft);border-radius:12px;padding:12px 14px}
   .cmpbox .t{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700}
   .cmpbox .v{font-size:24px;font-weight:800;margin-top:3px}
+  .cmpgrp .t{font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-weight:700;margin-bottom:6px}
+  .cmpgrp .cmp2{padding:0}
+  .cmpbox .lab{font-size:11px;color:var(--muted);font-weight:700}
+  .cmpgrp .dif{font-size:12px;color:var(--muted);margin-top:6px}
+  @media(max-width:620px){ .cmp2{grid-template-columns:1fr} }
+  table.stickyloom th:first-child,table.stickyloom td:first-child{position:sticky;left:0;background:var(--panel);z-index:1}
   /* finance master-detail */
   .ledger{display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start}
   .plist{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);overflow:hidden}
@@ -321,7 +327,7 @@
     <div class="grid g5" id="ov-money" style="margin-bottom:22px"></div>
     <div class="sec">The mill today</div>
     <div class="grid g5" id="ov-mill" style="margin-bottom:22px"></div>
-    <div class="sec">Live feed · today</div>
+    <div class="sec" id="ov-feed-head">Live feed · today</div>
     <div class="card" id="ov-feed-card" style="margin-bottom:22px"><div class="pad" id="ov-feed"><p class="muted" style="margin:4px 2px">Loading…</p></div></div>
     <div class="sec">Trends</div>
     <div class="card" style="margin-bottom:14px"><div class="hd"><h3>Sales — dispatched &amp; billed</h3><span class="count">last 12 months · meters + Rs lac</span></div><div class="cwrap"><canvas id="ovSales"></canvas></div></div>
@@ -350,7 +356,7 @@
       <div class="pad"><div class="cmp2" id="wv-cmp"></div></div></div>
     <div class="cols">
       <div class="card" id="wv-trend-card"><div class="hd"><h3>Scoreboard vs ERP efficiency</h3><span class="count">last 30 days</span></div><div class="cwrap"><canvas id="wv1"></canvas></div></div>
-      <div class="card"><div class="hd"><h3>Monthly efficiency &amp; A-grade</h3><span class="count">ERP · last 12 months</span></div><div class="cwrap"><canvas id="wv2"></canvas></div></div>
+      <div class="card"><div class="hd"><h3>Monthly meters &amp; A-grade</h3><span class="count">ERP · last 12 months</span></div><div class="cwrap"><canvas id="wv2"></canvas></div></div>
     </div>
     <div class="card"><div class="hd"><h3>Loom by loom</h3><span class="count" id="wv-loomcount"></span></div><div class="tscroll"><table id="wv-looms"></table></div></div>
 
@@ -692,15 +698,22 @@ function buildCharts(tab){
   if(tab==="weaving"){
     var w=D.weaving||{};
     var tr=w.trend||[];
+    // both lines are drawn whenever the scoreboard is connected (not only on the toggle), so ERP vs scoreboard is
+    // always comparable; the toggle only changes the floor/table source.
     var ds=[{label:"ERP",data:tr.map(x=>x.erp),borderColor:c.blue,tension:.3,pointRadius:0,borderWidth:2.6,spanGaps:true}];
-    if(w.scoreboard_available && wvSrc==="scb") ds.unshift({label:"Scoreboard",data:tr.map(x=>x.scb),borderColor:c.amber,tension:.3,pointRadius:0,borderWidth:2.6,spanGaps:true});
+    if(w.scoreboard_available) ds.unshift({label:"Scoreboard",data:tr.map(x=>x.scb),borderColor:c.amber,tension:.3,pointRadius:0,borderWidth:2.6,spanGaps:true});
     mk("wv1",{type:"line",data:{labels:tr.map(x=>dshort(x.date)),datasets:ds},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({min:50,max:100},grid(c))}}});
+    // monthly METERS (bars) with A-grade % on the right axis; the current (partial) month is shaded lighter and labelled "to date".
     var mo=w.monthly||[];
-    mk("wv2",{data:{labels:mo.map(x=>mlabel(x.month)),datasets:[
-      {type:"bar",label:"A-grade %",data:mo.map(x=>x.a_grade),backgroundColor:c.green,borderRadius:3,maxBarThickness:18},
-      {type:"line",label:"Efficiency %",data:mo.map(x=>x.eff),borderColor:c.blue,tension:.3,pointRadius:2,borderWidth:2.6}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({min:50,max:100},grid(c))}}});
+    var barcol=mo.map(x=>x.current?c.tealSoft||"rgba(45,169,164,.45)":c.blue);
+    mk("wv2",{data:{labels:mo.map(x=>mlabel(x.month)+(x.current?" (to date)":"")),datasets:[
+      {type:"bar",label:"Meters",data:mo.map(x=>x.meters),backgroundColor:barcol,borderRadius:3,maxBarThickness:22,yAxisID:"y"},
+      {type:"line",label:"A-grade %",data:mo.map(x=>x.a_grade),borderColor:c.green,tension:.3,pointRadius:2,borderWidth:2.6,yAxisID:"y1"}]},
+      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},
+        scales:{x:grid(c),
+          y:Object.assign({beginAtZero:true,position:"left",title:{display:true,text:"meters",color:c.muted}},grid(c)),
+          y1:{beginAtZero:true,max:100,position:"right",grid:{drawOnChartArea:false},ticks:{color:c.muted},title:{display:true,text:"A-grade %",color:c.muted}}}}});
   }
   builtTabs[tab]=true;
 }
@@ -813,10 +826,19 @@ var FEED_ICON={store:"📦",cash:"💵",woven:"🧵",out:"🚚",in:"↙",alert:"
 async function renderFeed(){
   var el=$("#ov-feed"); if(!el) return;
   if(STATIC_DATA){ el.innerHTML='<p class="muted" style="margin:4px 2px">Open the dashboard from the mill server to see the live feed.</p>'; return; }
+  // with no date picked we ask for the LATEST day that has entries; the server tells us which date that was, so the
+  // header can say "today" or, when the newest entry is older, name the day and time it was from.
+  var picked = ($("#day")&&$("#day").value) || "";
+  var head=$("#ov-feed-head");
   try{
-    var j=await (await fetch("api/feed"+(($("#day")&&$("#day").value)?("?date="+$("#day").value):""))).json();
+    var j=await (await fetch("api/feed"+(picked?("?date="+picked):""))).json();
     var rows=j.rows||[];
-    if(!rows.length){ el.innerHTML='<p class="muted" style="margin:4px 2px">Nothing yet today. New production, dispatches, store issues and cash show here as each sync brings them in.</p>'; return; }
+    if(head){
+      if(j.is_today){ head.textContent="Live feed · today"; }
+      else if(j.date){ head.innerHTML='Live feed · <span style="color:var(--amber)">last entries '+esc(dshort(j.date))+(j.latest_at?(" "+esc(String(j.latest_at).slice(11,16))):"")+'</span>'; }
+      else { head.textContent="Live feed"; }
+    }
+    if(!rows.length){ el.innerHTML='<p class="muted" style="margin:4px 2px">No new entries'+(j.is_today?" yet today":"")+'. New production, dispatches, store issues and cash show here as each sync brings them in.</p>'; return; }
     el.innerHTML='<div class="feed">'+rows.map(r=>`<div class="row"><span class="tm">${esc(r.time||"")}</span><span class="ic">${FEED_ICON[r.kind]||"•"}</span><span class="tx">${esc(r.line||"")}</span></div>`).join("")+'</div>';
   }catch(e){ el.innerHTML='<p class="muted" style="margin:4px 2px">Could not load the live feed.</p>'; }
 }
@@ -1071,22 +1093,36 @@ function renderWeaving(){
   $("#wv-cmp-card").hidden = !hasScb;
   $("#wv-trend-card").querySelector(".count").textContent = useScb? "scoreboard vs ERP · 30-day avg" : "ERP · last 30 days";
   if(hasScb){
-    $("#wv-cmp").innerHTML =
-      `<div class="cmpbox"><div class="t">Efficiency (30-day avg)</div><div class="v" style="color:var(--amber)">${s.scb_eff!=null?s.scb_eff+"%":"–"}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${s.erp_eff!=null?s.erp_eff+"%":"–"}</b></div></div>`+
-      `<div class="cmpbox"><div class="t">Meters (30 days)</div><div class="v" style="color:var(--amber)">${num(s.scb_meters_total)}</div><div class="t" style="margin-top:6px">scoreboard · ERP <b style="color:var(--blue)">${num(s.erp_meters_total)}</b></div></div>`;
+    // two EQUAL boxes per metric (Scoreboard | ERP), same size/font, with the difference below; they stack on a phone.
+    var pair=(label,unit,scb,erp,pct)=>{
+      var d=(scb!=null&&erp!=null)?(scb-erp):null;
+      var diff=(d==null)?"":((d>=0?"+":"")+(pct?Math.round(d)+"%":num(d))+" scoreboard vs ERP");
+      return `<div class="cmpgrp"><div class="t">${label}</div><div class="cmp2">`+
+        `<div class="cmpbox"><div class="lab">Scoreboard</div><div class="v" style="color:var(--amber)">${scb!=null?(pct?scb+"%":num(scb)):"–"}</div></div>`+
+        `<div class="cmpbox"><div class="lab">ERP</div><div class="v" style="color:var(--blue)">${erp!=null?(pct?erp+"%":num(erp)):"–"}</div></div>`+
+        `</div><div class="dif">${esc(diff)}</div></div>`;
+    };
+    $("#wv-cmp").innerHTML = pair("Efficiency (30-day avg)","%",s.scb_eff,s.erp_eff,true)+
+                             pair("Meters (30 days)","m",s.scb_meters_total,s.erp_meters_total,false);
   }
-  // loom table - 30-day efficiency; scoreboard columns only in scoreboard mode. No status.
-  var cols = useScb ? ["Loom","Scb % (30d)","ERP % (30d)","Scb m (30d)","ERP m (30d)"] : ["Loom","Efficiency % (30d)","Meters (30d)"];
-  var numc = useScb ? [1,2,3,4] : [1,2];
-  var rows = (w.looms||[]).map(function(l){
-    if(useScb){
-      return [`<b>${esc(l.loom)}</b>`, l.scb_eff!=null?Math.round(l.scb_eff):"–", l.erp_eff!=null?Math.round(l.erp_eff):"–",
-              num(l.scb_meters_30d), num(l.meters_30d)];
-    }
-    return [`<b>${esc(l.loom)}</b>`, l.erp_eff!=null?Math.round(l.erp_eff):"–", num(l.meters_30d)];
-  });
-  $("#wv-loomcount").textContent = (w.looms||[]).length + " looms";
-  $("#wv-looms").outerHTML = table(cols, rows, numc).replace("<table", '<table id="wv-looms"');
+  // loom by loom - numeric loom order; ERP & scoreboard, efficiency and meters, for the last 30 days AND this month;
+  // a shed TOTAL row; always shown when the scoreboard is connected (not just on the toggle).
+  var looms = (w.looms||[]).slice().sort(function(a,b){ return (a.loom_no||0)-(b.loom_no||0) || String(a.loom).localeCompare(String(b.loom)); });
+  var e=v=>v!=null?Math.round(v):"–";
+  var cols, rows;
+  if(hasScb){
+    cols = ["Loom","ERP% 30d","Scb% 30d","ERP m 30d","Scb m 30d","ERP% mth","Scb% mth","ERP m mth","Scb m mth"];
+    rows = looms.map(l=>[`<b>${esc(l.loom)}</b>`, e(l.erp_eff), e(l.scb_eff), num(l.meters_30d), num(l.scb_meters_30d),
+                         e(l.erp_eff_month), e(l.scb_eff_month), num(l.meters_month), num(l.scb_meters_month)]);
+    rows.push([`<b>TOTAL</b>`, e(s.erp_eff), e(s.scb_eff), num(s.erp_meters_total), num(s.scb_meters_total),
+               e(s.erp_eff_month), e(s.scb_eff_month), num(s.erp_meters_month), num(s.scb_meters_month)]);
+  } else {
+    cols = ["Loom","ERP% 30d","ERP m 30d","ERP% mth","ERP m mth"];
+    rows = looms.map(l=>[`<b>${esc(l.loom)}</b>`, e(l.erp_eff), num(l.meters_30d), e(l.erp_eff_month), num(l.meters_month)]);
+    rows.push([`<b>TOTAL</b>`, e(s.erp_eff), num(s.erp_meters_total), e(s.erp_eff_month), num(s.erp_meters_month)]);
+  }
+  $("#wv-loomcount").textContent = looms.length + " looms · 30-day & this month";
+  $("#wv-looms").outerHTML = table(cols, rows, cols.map((_,i)=>i).slice(1)).replace("<table", '<table id="wv-looms" class="stickyloom"');
   renderBeams();
 }
 function renderBeams(){
@@ -2060,7 +2096,8 @@ var repRange={};   // report name -> does it use the From/To window (only these 
 async function initReports(){
   if(STATIC_DATA) return;
   try{ var j=await (await fetch("api/reports")).json(); repRange={}; j.reports.forEach(r=>repRange[r.name]=!!r.range);
-       $("#rep-name").innerHTML=j.reports.map(r=>`<option value="${esc(r.name)}">${esc(r.label)}</option>`).join(""); }catch(e){}
+       $("#rep-name").innerHTML=j.reports.map(r=>`<option value="${esc(r.name)}">${esc(r.label)}</option>`).join("")
+         + '<option value="contract">Contract report (full — one contract)</option>'; }catch(e){}
   syncFromBox();
 }
 function syncFromBox(){   // From only applies to range reports; disable it otherwise so it is not silently ignored
@@ -2073,6 +2110,7 @@ $("#rep-name").onchange=()=>{ syncFromBox(); if($("#rep-name").value!=="closing"
 ["#rep-from","#rep-to"].forEach(s=>{ var el=$(s); if(el) el.onchange=()=>{ var n=$("#rep-name").value; if(n) loadReportNamed(n); }; });
 async function loadReportNamed(name){
   if(name==="closing"){ CLOSING=true; return openClosingPicker(); }
+  if(name==="contract"){ CLOSING=false; return openContractReport(); }
   CLOSING=false; $("#rep-edit").innerHTML="";
   $("#rep-msg").textContent="Loading…"; $("#rep-out").innerHTML="";
   try{ var r=await fetch(repUrl("json")); if(!r.ok){$("#rep-msg").textContent="Could not build this report.";return;} var j=await r.json();
@@ -2109,6 +2147,58 @@ function closingBar(withQuality){
     (withQuality?`<label class="fld">Quality <select id="cc-quality" style="min-width:140px">${qopts}</select></label>`:"")+
     `<button class="btn" id="cc-view">View</button>`;
 }
+/* ---------- contract report (item 10): one contract, every section, PDF + Excel ---------- */
+var _contracts=null;
+async function openContractReport(){
+  $("#rep-msg").textContent=""; $("#rep-out").innerHTML="";
+  if(STATIC_DATA){ $("#rep-edit").innerHTML='<div class="cnote">Open from the server to run the contract report.</div>'; return; }
+  if(_contracts===null){ try{ _contracts=(await (await fetch("api/contracts-all")).json()).contracts||[]; }catch(e){ _contracts=[]; } }
+  var opts=_contracts.map(c=>`<option value="${esc(c.contract)}">${esc(c.label)}</option>`).join("");
+  $("#rep-edit").innerHTML=`<div class="card" style="margin:8px 0;padding:12px 16px"><div class="tools" style="margin:0;align-items:center;gap:10px;flex-wrap:wrap">
+      <b>Contract report</b>
+      <label class="fld">Contract <input id="cr-pick" list="cr-list" placeholder="search contract / party…" style="min-width:240px"><datalist id="cr-list">${opts}</datalist></label>
+      <button class="btn" id="cr-go">View</button>
+      <span class="spacer" style="flex:1"></span>
+      <a class="btn ghost" id="cr-pdf">⤓ PDF</a><a class="btn ghost" id="cr-xlsx">⤓ Excel</a>
+      <span class="muted" id="cr-msg" style="font-size:12px"></span>
+    </div></div>`;
+  $("#rep-out").innerHTML='<div class="cnote">Pick a contract and press View — the report covers yarn, sizing, sets, beams, production, picks, dispatch and balances.</div>';
+  var curId=()=>{
+    var v=$("#cr-pick").value.trim();
+    var m=_contracts.find(c=>c.contract===v) || _contracts.find(c=>c.label===v) ||
+          _contracts.find(c=>v && c.label.toLowerCase().indexOf(v.toLowerCase())>=0);
+    return m?m.contract:v;
+  };
+  var go=()=>{ var id=curId(); if(!id){ $("#cr-msg").textContent="Pick a contract."; return; } renderContractReport(id); };
+  $("#cr-go").onclick=go;
+  $("#cr-pick").addEventListener("keydown",ev=>{ if(ev.key==="Enter") go(); });
+  var dl=(fmt)=>{ var id=curId(); if(!id){ $("#cr-msg").textContent="Pick a contract first."; return; } location.href="api/contract-report?contract="+encodeURIComponent(id)+"&fmt="+fmt; };
+  $("#cr-pdf").onclick=()=>dl("pdf"); $("#cr-xlsx").onclick=()=>dl("xlsx");
+}
+async function renderContractReport(id){
+  $("#rep-msg").textContent="Loading…"; $("#rep-out").innerHTML="";
+  try{
+    var j=await (await fetch("api/contract-report?contract="+encodeURIComponent(id))).json();
+    if(!j.found){ $("#rep-msg").textContent="No contract "+id+"."; $("#rep-out").innerHTML=""; return; }
+    var h=j.header;
+    $("#rep-msg").textContent=`Contract ${esc(h.contract)} — ${esc(h.party||"")}` + (h.quality?` · ${esc(h.quality)}`:"");
+    var head=`<div class="grid g4" style="margin:4px 0 14px">`+
+      tile("Party", esc(h.party||"—"), esc(h.quality||""),"accent")+
+      tile("Counts", esc((h.warp_count||"?")+" / "+(h.weft_count||"?")), (h.ends_per_inch||"?")+" epi · "+(h.picks_per_inch||"?")+" ppi")+
+      tile("Ordered", num(h.ordered_meters)+' <span class="cur">m</span>', "rate "+esc(h.rate_per_meter||"—"))+
+      tile("Contract date", esc(h.contract_date?dshort(h.contract_date):"—"), "")+`</div>`;
+    var body=(j.sections||[]).map(function(s){
+      var nums=(s.num_cols||[]);
+      var rows=(s.rows||[]).slice();
+      if(s.totals) rows=rows.concat([s.totals]);
+      var tbl = rows.length? table(s.columns, rows.map(r=>r.map(c=>esc(c))), nums) : '<p class="cnote">None.</p>';
+      var note = s.note? `<p class="muted" style="font-size:12px;margin:6px 16px 0;color:var(--amber)">⚠ ${esc(s.note)}</p>`:"";
+      return `<div class="card" style="margin:0 0 14px"><div class="hd"><h3>${esc(s.title)}</h3><span class="count">${(s.rows||[]).length} row(s)</span></div><div class="tscroll">${tbl}</div>${note}</div>`;
+    }).join("");
+    $("#rep-out").innerHTML=head+body;
+  }catch(e){ $("#rep-msg").textContent="Could not build the contract report."; }
+}
+
 function openClosingPicker(){
   closingQualities=[]; closingThirdParty=[];
   $("#rep-edit").innerHTML=`<div class="card" style="margin:8px 0;padding:12px 16px"><div class="tools" style="margin:0;align-items:center;gap:10px;flex-wrap:wrap"><b>Contract closing</b>${closingBar(false)}<span class="muted" style="font-size:12px">Pick a party (optional quality after) and press View.</span></div></div>`;

@@ -30,16 +30,37 @@ def run(a):
     # is almost always one the sizer returned under a different number (they swap physical beams). Only alert on
     # beams sent recently enough to still act on (within 4x the return window).
     floor = (d1.toordinal() - 4 * int(t["sizer_return_days"]))
-    out = {}
+    # Sizers swap physical beams, so matching by beam NUMBER alone raises false alerts (a beam comes back under a
+    # different number). Judge by QUANTITY per sizer first: empties sent vs empties + sized beams returned. If the
+    # count is square (or they owe us nothing), it is just number-swapping - INFO, not a WATCH. Only when more went
+    # out than came back do we alert, and only that many, the oldest still-open-by-number beams.
+    per = {}
     for sizer, beam, mt, d in a.q("""SELECT party_name, beam_no, move_type, move_date FROM beam_movements
             WHERE move_type IN ('empty_to_sizer', 'empty_from_sizer', 'sized_received') AND move_date <= ? ORDER BY move_date""", a.window[1]):
         if is_own_sizer(sizer, own):
             continue
+        p = per.setdefault(sizer, {"sent": 0, "returned": 0, "open": {}})
         if mt == "empty_to_sizer":
-            out[(sizer, beam)] = d
+            p["sent"] += 1
+            p["open"].setdefault(beam, []).append(d)
         else:
-            out.pop((sizer, beam), None)
-    for (sizer, beam), d in out.items():
-        if floor <= date.fromisoformat(d).toordinal() < limit:
-            a.add("WATCH", "Beams", f"beamout-{sizer}-{beam}-{d}", f"Empty beam {beam} sent to {sizer} on {d} has not come back",
-                  "ask the sizer, or check the return was entered under another party / beam number")
+            p["returned"] += 1
+            if p["open"].get(beam):                        # a return that matches an outstanding number
+                p["open"][beam].pop()
+    for sizer, p in per.items():
+        net = p["sent"] - p["returned"]                    # physical beams still out, by count
+        unmatched = sorted((d, beam) for beam, ds in p["open"].items() for d in ds)   # oldest open-by-number first
+        if net <= 0:
+            if unmatched:
+                a.add("INFO", "Beams", f"beamqty-{sizer}", f"{p['sent']} empty beams sent to {sizer} are all back by count",
+                      "some were returned under a different beam number - nothing outstanding")
+            continue
+        alerted = 0
+        for d, beam in unmatched:                          # alert only `net` beams, the oldest still in the window
+            if alerted >= net:
+                break
+            if floor <= date.fromisoformat(d).toordinal() < limit:
+                a.add("WATCH", "Beams", f"beamout-{sizer}-{beam}-{d}", f"Empty beam {beam} sent to {sizer} on {d} has not come back",
+                      f"{net} of {p['sent']} beams sent to {sizer} are still out by count - "
+                      f"ask the sizer, or check the return was entered under another beam number")
+                alerted += 1

@@ -75,9 +75,13 @@ def _weaving(con, cfg, as_of):
     excl_codes = [c for (c,) in con.execute("SELECT DISTINCT loom_code FROM loom_monitor") if _loom_num(c) in excl]
     ex_clause = (" AND loom_code NOT IN (%s)" % ",".join("?" * len(excl_codes))) if excl_codes else ""
     names = dict(con.execute("SELECT loom_code, loom_name FROM looms"))
+    mstart = as_of.replace(day=1).isoformat()                 # this month (month to date)
     erp = {r[0]: r for r in con.execute(f"""
         SELECT p.loom_code, {EFF_AGG} AS eff, SUM(p.meters) AS m, MAX(p.prod_date) AS last
         FROM loom_production p WHERE p.prod_date BETWEEN ? AND ? GROUP BY p.loom_code""", (start, d))}
+    erp_m = {r[0]: r for r in con.execute(f"""
+        SELECT p.loom_code, {EFF_AGG} AS eff, SUM(p.meters) AS m
+        FROM loom_production p WHERE p.prod_date BETWEEN ? AND ? GROUP BY p.loom_code""", (mstart, d))}
     today_m = dict(con.execute("SELECT loom_code, SUM(meters) FROM loom_production WHERE prod_date = ? GROUP BY loom_code", (d,)))
     # scoreboard efficiency is weighted by SHIFT TIME (shift_sec), not meters - a loom running slow cloth still has
     # a full shift; weighting by meters would understate it. Falls back to meters only if shift_sec is absent.
@@ -85,6 +89,10 @@ def _weaving(con, cfg, as_of):
         SELECT loom_code, SUM(efficiency_pct * COALESCE(shift_sec, meters)) / NULLIF(SUM(COALESCE(shift_sec, meters)), 0) AS eff,
                SUM(meters) AS m, AVG(rpm) AS rpm
         FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (start, d))}
+    scb_m = {r[0]: r for r in con.execute("""
+        SELECT loom_code, SUM(efficiency_pct * COALESCE(shift_sec, meters)) / NULLIF(SUM(COALESCE(shift_sec, meters)), 0) AS eff,
+               SUM(meters) AS m
+        FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (mstart, d))}
     scb_avail = bool(scb)
     # The real looms are the ones that have ever had ERP production - NOT the LOOMS master (full of unused rows) and
     # NOT the scoreboard (which has sensor channels for looms that do not physically exist). Scoreboard data is
@@ -95,11 +103,16 @@ def _weaving(con, cfg, as_of):
         e, s = erp.get(code), scb.get(code)
         # the floor shows 30-day average efficiency only (no running/idle/stopped - the ERP posts production in
         # ~3-day batches, so "running today" is not a reliable signal; the 30-day average is).
-        looms.append({"loom": names.get(code, code), "code": code,
+        em, sm = erp_m.get(code), scb_m.get(code)
+        looms.append({"loom": names.get(code, code), "code": code, "loom_no": _loom_num(code),
                       "erp_eff": round(e[1], 1) if e and e[1] is not None else None,
                       "scb_eff": round(s[1], 1) if s and s[1] is not None else None,
                       "meters_30d": round(e[2] or 0) if e else 0,
                       "scb_meters_30d": round(s[2] or 0) if s else 0,
+                      "erp_eff_month": round(em[1], 1) if em and em[1] is not None else None,
+                      "scb_eff_month": round(sm[1], 1) if sm and sm[1] is not None else None,
+                      "meters_month": round(em[2] or 0) if em else 0,
+                      "scb_meters_month": round(sm[2] or 0) if sm else 0,
                       "last_date": e[3] if e else None})
     # shed-wide 30-day averages
     shed_erp = _one(con, f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d)
@@ -111,12 +124,21 @@ def _weaving(con, cfg, as_of):
     ag = con.execute("SELECT SUM(COALESCE(first_quality_m,0)), SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", (start, d)).fetchone()
     erp_tot = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d) or 0
     scb_tot = (con.execute(f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", [start, d, *excl_codes]).fetchone()[0] or 0) if scb_avail else None
+    shed_erp_m = _one(con, f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ?", mstart, d)
+    shed_scb_m = (con.execute(f"""SELECT SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0)
+                            FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", [mstart, d, *excl_codes]).fetchone()[0]) if scb_avail else None
+    erp_tot_m = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", mstart, d) or 0
+    scb_tot_m = (con.execute(f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", [mstart, d, *excl_codes]).fetchone()[0] or 0) if scb_avail else None
     shed = {"erp_eff": round(shed_erp, 1) if shed_erp else None,
             "scb_eff": round(shed_scb, 1) if shed_scb else None,
             "a_grade": round(100.0 * ag[0] / ag[1], 1) if ag and ag[1] else None,
             "erp_meters_day": round(erp_tot / ndays), "erp_meters_total": round(erp_tot),
             "scb_meters_day": round(scb_tot / ndays) if scb_avail else None,
-            "scb_meters_total": round(scb_tot) if scb_avail else None}
+            "scb_meters_total": round(scb_tot) if scb_avail else None,
+            "erp_eff_month": round(shed_erp_m, 1) if shed_erp_m else None,
+            "scb_eff_month": round(shed_scb_m, 1) if shed_scb_m else None,
+            "erp_meters_month": round(erp_tot_m), "scb_meters_month": round(scb_tot_m) if scb_avail else None,
+            "month": as_of.strftime("%Y-%m")}
     # 30-day efficiency trend, ERP vs scoreboard
     erp_day = dict(con.execute(f"SELECT prod_date, {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ? GROUP BY prod_date", (start, d)))
     scb_day = dict(con.execute(f"""SELECT read_date, SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0)
@@ -124,9 +146,11 @@ def _weaving(con, cfg, as_of):
     trend = [{"date": (as_of - timedelta(days=29 - i)).isoformat(),
               "erp": round(erp_day[x], 1) if (x := (as_of - timedelta(days=29 - i)).isoformat()) in erp_day and erp_day[x] is not None else None,
               "scb": round(scb_day[x], 1) if x in scb_day and scb_day[x] is not None else None} for i in range(30)]
-    # monthly efficiency & A-grade (ERP), last 12 months
+    # monthly meters & A-grade (ERP), last 12 months. The current month is partial ("to date").
+    this_month = as_of.strftime("%Y-%m")
     monthly = [{"month": m, "eff": round(e, 1) if e is not None else None,
-                "a_grade": round(100.0 * (a or 0) / t, 1) if t else None}
+                "meters": round(t or 0), "a_grade": round(100.0 * (a or 0) / t, 1) if t else None,
+                "current": m == this_month}
                for m, e, a, t in con.execute(f"""
         SELECT strftime('%Y-%m', prod_date), {EFF_AGG}, SUM(COALESCE(first_quality_m, 0)), SUM(meters)
         FROM loom_production WHERE prod_date >= ? GROUP BY 1 ORDER BY 1""", (_month_ends(as_of, 12)[0].replace(day=1).isoformat(),))]
@@ -430,12 +454,19 @@ def changes(con, cfg, since):
 
 
 def feed_day(con, cfg, day=None):
-    """The whole day's change_log for the Overview live-feed panel: each row with its own time, a line and the
-    payload for a tap-detail. Newest first. Store issues are grouped per sync by who they went to."""
+    """The live-feed panel's change_log rows: each with its time, a line and the tap-detail payload, newest first.
+    With no explicit day it shows the LATEST day that has entries (which may be before today when the ERP has not
+    synced new data yet); the caller labels it with that date. Store issues are grouped per sync by destination."""
     import json
-    day = (day or date.today()).isoformat()
+    today = date.today().isoformat()
+    if day is not None:
+        day = day.isoformat() if hasattr(day, "isoformat") else str(day)
+    else:                                                 # no date picked: show the most recent day that has entries
+        r = con.execute("SELECT MAX(substr(synced_at,1,10)) FROM change_log WHERE substr(synced_at,1,10) <= ?", (today,)).fetchone()
+        day = (r[0] if r and r[0] else today)
     rows = con.execute("""SELECT id, synced_at, kind, payload FROM change_log WHERE substr(synced_at,1,10) = ?
                           ORDER BY id DESC LIMIT 400""", (day,)).fetchall()
+    latest_at = str(rows[0][1]) if rows else None         # full timestamp of the newest entry, for "from <date> HH:MM"
     grouped, out = {}, []
     for _id, at, kind, payload in rows:
         try:
@@ -471,7 +502,8 @@ def feed_day(con, cfg, day=None):
         if r["kind"] == "alert":
             return "Alert: " + str(e.get("title", ""))
         return r["kind"]
-    return {"rows": [{"time": r["time"], "kind": r["kind"], "line": line(r)} for r in out]}
+    return {"rows": [{"time": r["time"], "kind": r["kind"], "line": line(r)} for r in out],
+            "date": day, "is_today": day == today, "latest_at": latest_at}
 
 
 def fabric_history(con, cfg, d0=None, d1=None):

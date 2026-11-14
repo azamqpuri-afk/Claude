@@ -24,7 +24,6 @@ REPORTS = {
     "loom-consumption": (store_extra.loom_consumption, "Store: consumption by loom (monthly)", False),
     "production":   (production.daily_production,   "Production on the day (per loom)", True),
     "value":        (production.production_value,   "Production value (earnings per loom / contract)", True),
-    "closing":      (closing.contract_closing,      "Contract closing (party yarn balance)", False),
     "trial-balance": (finance.trial_balance,         "Finance: trial balance check (as of the To date)", False),
     "unbalanced":   (finance.unbalanced,             "Finance: unbalanced entries (debit ≠ credit)", False),
     "pilferage":    (pilferage.pilferage,           "Yarn: pilferage check", True),

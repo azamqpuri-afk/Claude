@@ -9,8 +9,10 @@ def run(a):
     in_window = "(voucher_date BETWEEN ? AND ? OR date(entered_at) BETWEEN ? AND ?)"
 
     # vouchers whose debits and credits differ
+    unbalanced = []
     for vid, vt, vno, vd, gap in a.q(f"""SELECT voucher_id, voucher_type, voucher_no, voucher_date, SUM(amount)
             FROM ledger_entries WHERE {in_window} GROUP BY voucher_id HAVING ABS(SUM(amount)) > 1""", d0, d1, d0, d1):
+        unbalanced.append((vt, vno, vd, gap))
         a.add("CONFIRMED", "Finance", f"unbal-{vid}", f"{vt} {vno} of {vd} does not balance by {cur} {abs(gap):,.0f}",
               "debits and credits differ - a line or account is missing")
 
@@ -46,8 +48,14 @@ def run(a):
     # trial balance and cash
     tb = a.q("SELECT SUM(balance) FROM account_balances")[0][0]
     if tb is not None and abs(tb) > float(t.get("trial_balance_tolerance", 10)):
-        a.add("CONFIRMED", "Finance", f"tb-{round(tb)}", f"Trial balance is out by {cur} {tb:,.0f}",
-              "total debits differ from total credits - see the unbalanced vouchers")
+        # name the voucher(s) most likely behind it (biggest out-of-balance first), so the finding is actionable and
+        # the dashboard can open them, instead of just "see the unbalanced vouchers"
+        worst = sorted(unbalanced, key=lambda u: -abs(u[3]))[:2]
+        named = "; ".join(f"{vt} {vno} ({vd}) {cur} {abs(gap):,.0f}" for vt, vno, vd, gap in worst)
+        title = f"Trial balance is out by {cur} {tb:,.0f}" + (f" - {named}" if named else "")
+        a.add("CONFIRMED", "Finance", f"tb-{round(tb)}", title,
+              ("the listed voucher(s) do not balance - a line or account is missing" if named
+               else "total debits differ from total credits - see the unbalanced vouchers report"))
     for acc, name, bal in a.q("""SELECT b.account_code, ac.account_name, b.balance FROM account_balances b
             JOIN accounts ac ON ac.account_code = b.account_code WHERE ac.account_group = 'cash' AND b.balance < -1"""):
         a.add("CONFIRMED", "Finance", f"cashneg-{acc}-{round(bal)}", f"Cash account {name} is negative: {cur} {bal:,.0f}",
