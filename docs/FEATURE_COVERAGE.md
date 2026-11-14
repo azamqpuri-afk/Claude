@@ -114,6 +114,13 @@ the mapping/config, never the core).
 | 5 | Production grades tie to the total: when the ERP's rejection already includes B (Dost B + C + CP) the report shows A, B, C/CP and total Rejection with "Total = A + Rejection". `[weaving] rejection_includes_second` ("auto" by default) keeps it generic | Contract report → Production · `[weaving]` |
 | 6 | Shrinkage is shown on **finished beams only**; while beams are still running it says "n/a — beams still running" | Contract report → Balances |
 
+## New in 0.17.8 (third retest)
+
+| # | What it does | Where |
+|---|--------------|-------|
+| 1 | Output-change audit: a quality change that leaves the **picks/inch the same** stays a WATCH ("quality changed but picks/inch the same, so it does not explain the Nx"); the soft "not enough same-quality history" INFO is only used when the ppi actually changed | Audit → Weaving · `audit/weaving.py` |
+| 2 | Thaan shows "—" when the ERP recorded none (NULL), not a false 0, and the total is blank when every gate pass is NULL (mapping no longer `NVL`s thaan to 0) | Contract report → Fabric out · `mappings/dost_textiles_oracle.toml` |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |

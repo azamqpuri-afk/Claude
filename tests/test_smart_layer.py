@@ -2372,6 +2372,53 @@ def test_v0176_quality_change_date_is_first_new_contract_date(env):
     assert (end - _td(days=13)).isoformat() not in text       # NOT the first date inside the recent window
 
 
+def test_v0176_same_ppi_quality_change_stays_watch(env):
+    # Second retest item 1: a quality change that leaves the picks/inch the SAME cannot explain a meters swing,
+    # so it stays WATCH (not a soft "not enough history" INFO). Loom 21: 238 -> ~114 m/day at ppi 82 -> 82.
+    from datetime import date as _d, timedelta as _td
+    from smart_layer.audit import weaving as wv
+    cfg, _ = env
+    con = _weaving_store()
+    end = _d(2026, 10, 2)
+    con.execute("INSERT INTO looms VALUES ('L1','LOOM-01')")
+    con.execute("INSERT INTO contracts VALUES ('C-OLD','Q-OLD',82),('C-NEW','Q-NEW',82)")
+    for k in range(15, 74):   # old quality across the 'before' window at 238 m/day
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-OLD", "Q-OLD", "B1", 238, 238, 0, 0, 75, None))
+    for k in range(0, 14):    # new quality, same ppi, at 100 m/day (a real 0.4x drop)
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-NEW", "B2", 100, 100, 0, 0, 75, None))
+    a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    wv.run(a)
+    lh = [f for f in a.findings if f.key.startswith("lhist-L1")]
+    assert lh and lh[0].severity == "WATCH"
+    assert "does not explain" in lh[0].detail and "picks/inch is the same" in lh[0].detail
+
+
+def test_v0176_fabric_thaan_null_shows_blank(env):
+    # Second retest item 2: a NULL thaan shows "—" (not a false 0); the total is blank when every gate pass is NULL.
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE contracts (contract_no TEXT, party_code TEXT, party_name TEXT, contract_date TEXT, quality TEXT,
+            ends_per_inch REAL, picks_per_inch REAL, width_in REAL, warp_yarn TEXT, warp_count REAL, weft_yarn TEXT,
+            weft_count REAL, ordered_meters REAL, rate_per_meter REAL, rate_per_pick REAL, yarn_owner TEXT);
+        CREATE TABLE fabric_dispatches (dispatch_date TEXT, doc_no TEXT, contract_no TEXT, quality TEXT, party_code TEXT,
+            deliver_to TEXT, direction TEXT, fresh_m REAL, rejected_m REAL, meters REAL, thaan REAL, amount REAL);
+    """)
+    con.execute("INSERT INTO contracts (contract_no) VALUES ('K2')")
+    ins = ("INSERT INTO fabric_dispatches (dispatch_date, doc_no, contract_no, direction, meters, fresh_m, rejected_m, thaan) "
+           "VALUES (?,?,?,?,?,?,?,?)")
+    con.execute(ins, ("2026-10-01", "5", "K2", "out", 1000, 900, 100, None))
+    con.execute(ins, ("2026-10-02", "6", "K2", "out", 500, 500, 0, None))
+    fo = next(s for s in cr.contract_report(con, cfg, "K2")["sections"] if s["key"] == "fabric_out")
+    assert all(r[6] == "—" for r in fo["rows"]) and fo["totals"][6] == "—"   # all NULL -> blank
+    con.execute("UPDATE fabric_dispatches SET thaan = 12 WHERE doc_no = '5'")
+    fo2 = next(s for s in cr.contract_report(con, cfg, "K2")["sections"] if s["key"] == "fabric_out")
+    assert fo2["totals"][6] == 12                                              # a real value totals up
+
+
 def _mini_contract_store():
     con = sqlite3.connect(":memory:")
     con.executescript("""

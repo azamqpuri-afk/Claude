@@ -139,8 +139,12 @@ def run(a):
                       f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
                       f"even allowing for the quality change on {qcd} (ppi {op:g} -> {np_:g}, so about {expected:,.0f} m expected) the output is {ratio:.1f}x - check it")
         else:
-            a.add("INFO", "Weaving", key, f"{loom}: quality changed on {qcd} (now contract {rc})",
-                  f"output {now:,.0f} m a day over 14 days - not enough same-quality history yet to judge it, and the picks/inch did not change")
+            # the picks/inch did NOT change, so the meters are directly comparable to the loom's usual - a quality
+            # change that leaves the ppi the same does not explain a big swing. Stays a WATCH (not a soft INFO).
+            ppic = (f"the picks/inch is the same ({op:g})" if (op and np_) else "the picks/inch is not recorded")
+            a.add("WATCH", "Weaving", f"{key}-{round(now / usual, 1)}",
+                  f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
+                  f"the quality changed on {qcd} but {ppic}, so the quality change does not explain the {now / usual:.1f}x - check it")
 
     looms, m, rej = a.q("""SELECT COUNT(DISTINCT loom_code), SUM(meters), SUM(COALESCE(rejected_m, 0))
                            FROM loom_production WHERE prod_date BETWEEN ? AND ?""", d0, d1)[0]

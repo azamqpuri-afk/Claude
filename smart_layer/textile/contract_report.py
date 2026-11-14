@@ -246,17 +246,21 @@ def contract_report(con, cfg, contract):
     # ---- fabric dispatched (OGP fabric) ----
     fd = _q(con, """SELECT dispatch_date, doc_no, COALESCE(meters,0), COALESCE(fresh_m,0), COALESCE(rejected_m,0),
                     direction, thaan FROM fabric_dispatches WHERE contract_no = ? ORDER BY dispatch_date""", (contract,))
-    rows, out_m, in_m, t_th = [], 0.0, 0.0, 0.0
+    rows, out_m, in_m, t_th, any_th = [], 0.0, 0.0, 0.0, False
     for dd, doc, m, fresh, rej, direction, thaan in fd:
+        # a NULL thaan means the ERP simply did not record it on that gate pass - show "—", not a false 0. Keep a
+        # real 0 as 0, and leave the total blank if every gate pass had no thaan.
         rows.append([dd, doc, ("out" if direction == "out" else "in"), round(m), round(fresh), round(rej),
                      (round(thaan) if thaan is not None else "—")])
         if direction == "out":
             out_m += m or 0
         else:
             in_m += m or 0
-        t_th += thaan or 0
+        if thaan is not None:
+            any_th = True
+            t_th += thaan or 0
     sec("fabric_out", "Fabric dispatched (OGP)", ["Date", "OGP no", "Dir", "Meters", "Fresh m", "Rejection m", "Thaan"], rows,
-        totals=["", "", "net out", round(out_m - in_m), "", "", (round(t_th) if t_th else "—")], num_cols=[3, 4, 5, 6])
+        totals=["", "", "net out", round(out_m - in_m), "", "", (round(t_th) if any_th else "—")], num_cols=[3, 4, 5, 6])
 
     # ---- balances ----
     woven = _q(con, "SELECT SUM(meters) FROM loom_production WHERE contract_no = ?", (contract,))
