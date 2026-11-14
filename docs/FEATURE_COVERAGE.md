@@ -121,6 +121,15 @@ the mapping/config, never the core).
 | 1 | Output-change audit: a quality change that leaves the **picks/inch the same** stays a WATCH ("quality changed but picks/inch the same, so it does not explain the Nx"); the soft "not enough same-quality history" INFO is only used when the ppi actually changed | Audit → Weaving · `audit/weaving.py` |
 | 2 | Thaan shows "—" when the ERP recorded none (NULL), not a false 0, and the total is blank when every gate pass is NULL (mapping no longer `NVL`s thaan to 0) | Contract report → Fabric out · `mappings/dost_textiles_oracle.toml` |
 
+## New in 0.17.9 (installer upgrade fix)
+
+| # | What it does | Where |
+|---|--------------|-------|
+| 1 | Upgrades no longer fail with "DeleteFile failed; code 5. Access is denied". Before copying files the installer drops a stop-flag the dashboard keep-alive loop watches, ends **and disables** all four tasks (Dashboard, Live, Daily, Morning), kills any orphaned `cmd.exe`/`wscript.exe` loop shell by its command line (the case Task Scheduler's "End" misses), kills `SmartLayer.exe`, then waits until it is really gone | `installer/SmartLayer.iss` (`PrepareToInstall`) |
+| 2 | `run_dashboard.cmd`'s loop exits as soon as the `upgrading.flag` appears, instead of relaunching `SmartLayer.exe` 5 s later and re-locking the files | `installer/run_dashboard.cmd` |
+| 3 | After the copy the installer re-enables the tasks, removes the flag, and (on an already-configured install) restarts the Dashboard and Live tasks — the existing Interactive/`run_hidden.vbs` logon is preserved, never reset to password logon | `installer/SmartLayer.iss` (`CurStepChanged`) |
+| 4 | `CloseApplications=force` + `RestartApplications=no` as an extra Restart-Manager safety net | `installer/SmartLayer.iss` |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |

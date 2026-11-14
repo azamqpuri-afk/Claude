@@ -4,6 +4,9 @@ cd /d "%~dp0"
 if not exist output mkdir output
 set FAILS=0
 :loop
+rem The installer drops this flag before an upgrade so this loop stops instead of relaunching SmartLayer.exe (which
+rem would lock the files). The installer removes the flag and restarts this task once the new files are in place.
+if exist upgrading.flag (echo %date% %time% upgrade in progress - dashboard loop exiting >> output\dashboard_log.txt & exit /b 0)
 if not exist config.toml (echo %date% %time% waiting for setup to write config.toml ... >> output\dashboard_log.txt & timeout /t 30 /nobreak > nul & goto loop)
 rem trim here, before serve opens the log: serve holds the file for its whole run, so this is the one free moment
 SmartLayer.exe logtrim "output\dashboard_log.txt" --max-mb 5 --keep-mb 1
