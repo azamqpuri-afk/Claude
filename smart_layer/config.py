@@ -90,6 +90,13 @@ DEFAULTS = {
         "ip_names": {},                   # optional: IP -> friendly PC name (e.g. "192.168.18.177" = "STORE-PC")
         "server_hosts": ["DESKTOP-KUMU41H", "127.0.0.1", "localhost"],   # PCs that really mean "the Forms server"
     },
+    "weaving": {
+        # How the ERP's production grades relate to total meters, for the contract report. "auto" works it out per
+        # contract (Total = A + Rejection means Rejection already includes B/2nd quality, e.g. Dost's B + C + CP);
+        # set true/false to force it. grade_labels renames the columns if a mill uses other names.
+        "rejection_includes_second": "auto",
+        "grade_labels": {},               # e.g. {a = "First", b = "Second", reject = "Rejection"}
+    },
     "closing": {},                        # the mill's closing method - see smart_layer/textile/method.py
     "pilferage": {},                      # thresholds - see smart_layer/textile/pilferage.py
     "beams": {},                          # see smart_layer/textile/beams.py

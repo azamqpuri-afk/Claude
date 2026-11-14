@@ -15,6 +15,10 @@ def run(a):
         r = a.q("SELECT picks_per_inch FROM contracts WHERE contract_no = ?", cno)
         return r[0][0] if r and r[0][0] is not None else None
 
+    def _quality(cno):
+        r = a.q("SELECT quality FROM contracts WHERE contract_no = ?", cno)
+        return r[0][0] if r and r[0][0] is not None else None
+
     def _dom_contract(code, d_from, d_to):               # the loom's main contract in a window (most meters)
         r = a.q("""SELECT contract_no, SUM(meters) FROM loom_production WHERE loom_code = ? AND prod_date > ?
                    AND prod_date <= ? AND contract_no IS NOT NULL GROUP BY contract_no ORDER BY 2 DESC LIMIT 1""",
@@ -93,31 +97,50 @@ def run(a):
         if not (usual and usual >= 50 and now and (now < 0.5 * usual or now > 1.8 * usual)):
             continue
         rc, bc = _dom_contract(code, recent_from, d1), _dom_contract(code, before_from, before_to)
-        op, np_ = (_ppi(bc), _ppi(rc)) if (rc and bc) else (None, None)
-        # a quality change only explains the meters when the PICKS/INCH actually changed, and only by about as much
-        # as the ppi ratio predicts: expected = usual x old_ppi/new_ppi. If the real output is within +-25% of that,
-        # the quality change explains it (INFO); otherwise it is still a WATCH, noting the quality change.
-        ppi_changed = bool(op and np_ and abs(op - np_) > 0.01)
+        rq = _quality(rc)
+        changed = bool(rc and bc and rc != bc)
+        # the quality-change date is the FIRST production date of the new contract on this loom - not the first date
+        # inside the recent window (which is wrong when the change happened before the 14-day window opened).
         qcd = None
-        if rc and bc and rc != bc:
-            qcr = a.q("SELECT MIN(prod_date) FROM loom_production WHERE loom_code = ? AND contract_no = ? AND prod_date > ?",
-                      code, rc, before_to)
+        if changed:
+            qcr = a.q("SELECT MIN(prod_date) FROM loom_production WHERE loom_code = ? AND contract_no = ?", code, rc)
             qcd = qcr[0][0] if qcr and qcr[0][0] else recent_from
-        if ppi_changed and qcd:
+        op, np_ = (_ppi(bc), _ppi(rc)) if (rc and bc) else (None, None)
+        ppi_changed = bool(op and np_ and abs(op - np_) > 0.01)
+        key = f"lhist-{code}-{d1}"
+        if not changed:
+            # same contract throughout the comparison - a real swing in the loom's own output
+            a.add("WATCH", "Weaving", f"{key}-{round(now / usual, 1)}",
+                  f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
+                  "a big change in the loom's output - stoppage, or entries booked to the wrong loom")
+            continue
+        # the quality changed, so the 'usual' baseline is the OLD quality and cannot judge the new one. Prefer a
+        # like-for-like baseline: earlier days of the SAME quality on this loom. If there are none, we cannot say the
+        # output is off from history alone - fall back to the picks/inch ratio, and if the ppi did not change either,
+        # report it as INFO ("not enough same-quality history") rather than a false WATCH.
+        sq = a.q("""SELECT SUM(meters) FROM loom_production WHERE loom_code = ? AND quality = ?
+                    AND prod_date > date(?, '-74 days') AND prod_date <= date(?, '-14 days')""", code, rq, d1, d1)
+        sq_usual = ((sq[0][0] or 0) / 60.0) if sq else 0
+        if sq_usual >= 50:
+            if now < 0.5 * sq_usual or now > 1.8 * sq_usual:
+                a.add("WATCH", "Weaving", f"{key}-{round(now / sq_usual, 1)}",
+                      f"{loom}: {now:,.0f} m a day over 14 days vs its usual {sq_usual:,.0f} for the same quality ({now / sq_usual:.1f}x)",
+                      f"compared only against earlier days of quality '{rq}', so the quality change is not the reason - check it")
+            continue
+        if ppi_changed:
+            # expected = usual x old_ppi/new_ppi; within +-25% the picks/inch change explains the meters (INFO)
             expected = usual * op / np_
             ratio = (now / expected) if expected else 0
             if 0.75 <= ratio <= 1.25:
-                a.add("INFO", "Weaving", f"lhist-{code}-{d1}", f"{loom}: output changed because the quality changed on {qcd} (ppi {op:g} -> {np_:g})",
+                a.add("INFO", "Weaving", key, f"{loom}: output changed because the quality changed on {qcd} (ppi {op:g} -> {np_:g})",
                       f"{now:,.0f} m a day over 14 days vs its usual {usual:,.0f} - about the {expected:,.0f} expected from the picks/inch change")
             else:
-                a.add("WATCH", "Weaving", f"lhist-{code}-{d1}-{round(now / usual, 1)}",
+                a.add("WATCH", "Weaving", f"{key}-{round(now / usual, 1)}",
                       f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
                       f"even allowing for the quality change on {qcd} (ppi {op:g} -> {np_:g}, so about {expected:,.0f} m expected) the output is {ratio:.1f}x - check it")
         else:
-            note = f"; the quality changed on {qcd} but the picks/inch did not, so it does not explain the meters" if (qcd and not ppi_changed) else ""
-            a.add("WATCH", "Weaving", f"lhist-{code}-{d1}-{round(now / usual, 1)}",
-                  f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
-                  "a big change in the loom's output - quality change, stoppage, or entries booked to the wrong loom" + note)
+            a.add("INFO", "Weaving", key, f"{loom}: quality changed on {qcd} (now contract {rc})",
+                  f"output {now:,.0f} m a day over 14 days - not enough same-quality history yet to judge it, and the picks/inch did not change")
 
     looms, m, rej = a.q("""SELECT COUNT(DISTINCT loom_code), SUM(meters), SUM(COALESCE(rejected_m, 0))
                            FROM loom_production WHERE prod_date BETWEEN ? AND ?""", d0, d1)[0]

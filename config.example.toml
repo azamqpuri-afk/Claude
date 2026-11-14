@@ -76,6 +76,14 @@ duplicate_payment_min = 5000
 # Practices the owner confirms as normal are kept out of alerts, e.g.
 # dismiss = [{ match = "^big-", why = "advance payments to sizers are normal" }]
 
+# Weaving / contract-report settings.
+[weaving]
+# How the ERP's production grades relate to total meters, in the contract report. Some ERPs count rejection as
+# B + C + CP, so the rejection total ALREADY includes the B/2nd-quality meters and Total = A + Rejection; others
+# keep the three separate (Total = A + B + Rejection). "auto" works it out per contract; set true or false to force.
+# rejection_includes_second = "auto"
+# grade_labels = { a = "A-grade", b = "B-grade", reject = "Rejection" }   # rename the columns if the mill uses other names
+
 # The mill's own contract-closing method - set these with the owner.
 [closing]
 divisor = 840                      # many mills use 800

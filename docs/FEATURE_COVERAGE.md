@@ -103,6 +103,17 @@ the mapping/config, never the core).
 | d | Production columns relabelled ("Total m") with a note saying how A / B / Rejection relate to the total, so the grades read correctly | Contract report → Production |
 | e | Fabric dispatched shows a **Thaan** column (when the ERP records it); the picks check also flags **different picks/inch within the same contract** across the ERP's own entries | Contract report → Fabric out / Picks check |
 
+## New in 0.17.7 (second retest)
+
+| # | What it does | Where |
+|---|--------------|-------|
+| 1 | Dost fabric gate-pass thaan column is `THAN` (not `THAAN`) — mapping fixed so the fabric dispatch sync no longer fails | `mappings/dost_textiles_oracle.toml` |
+| 2 | A new sync test runs every demo-mapping entity through `fetch`, so a mapping that references a column the source does not have is caught in CI | `tests` |
+| 3 | The quality-change date in the output-change audit is the **first production date of the new contract** on the loom (not the first date inside the recent window); when the change predates the window it compares only against earlier days of the **same quality**, and says "not enough same-quality history" rather than a false alert | Audit → Weaving · `audit/weaving.py` |
+| 4 | Contract-report beams resolve to the **real painted beam number and set length** from beam movements (never the ERP's internal production id); running vs finished is kept | Contract report → Beams |
+| 5 | Production grades tie to the total: when the ERP's rejection already includes B (Dost B + C + CP) the report shows A, B, C/CP and total Rejection with "Total = A + Rejection". `[weaving] rejection_includes_second` ("auto" by default) keeps it generic | Contract report → Production · `[weaving]` |
+| 6 | Shrinkage is shown on **finished beams only**; while beams are still running it says "n/a — beams still running" | Contract report → Balances |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |

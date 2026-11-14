@@ -66,6 +66,21 @@ def test_sync_fills_every_entity(env):
         assert con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > 0, table
 
 
+def test_demo_mapping_every_entity_column_exists(env):
+    # Every entity SQL in the demo mapping must execute and alias only real schema columns. This catches a mapping
+    # that references a column the source does not have (the 0.17.6 Oracle 'thaan' vs 'than' blocker) for any ERP
+    # we can run in CI. erp.fetch raises MappingError on an unknown/missing-required column and the DB driver raises
+    # on a non-existent source column, so a clean pass over all mapped entities means none are broken.
+    cfg, _ = env
+    mapping = erp.Mapping(cfg.path(cfg["erp"]["mapping"]))
+    e = erp.ERP(*erp.connect(cfg["erp"], cfg.base_dir), mapping, cfg["sources"], cfg.base_dir)
+    for name in mapping.entities:
+        if name not in schema.BY_NAME:
+            continue
+        # pulling the first row forces the query to execute and the column check in fetch() to run
+        next(iter(e.fetch(name, date(1900, 1, 1))), None)
+
+
 def test_audit_finds_every_planted_mistake(env):
     cfg, con = env
     found = audit.run(con, cfg, END).findings
@@ -2328,3 +2343,75 @@ def test_v0175_contract_report(env, tmp_path):
     px = cr.write_xlsx(con, cfg, "CON-41", tmp_path, "c.xlsx")
     pp = cr.write_pdf(con, cfg, "CON-41", tmp_path, "c.pdf", product="SL")
     assert px.exists() and px.stat().st_size > 2000 and pp.exists() and pp.stat().st_size > 2000
+
+
+def test_v0176_quality_change_date_is_first_new_contract_date(env):
+    # Fix 2: the quality-change date is the first production date of the NEW contract on the loom - not the first
+    # date inside the recent window. Regression guard: the new contract ran once well before the 14-day window.
+    from datetime import date as _d, timedelta as _td
+    from smart_layer.audit import weaving as wv
+    cfg, _ = env
+    con = _weaving_store()
+    end = _d(2026, 10, 2)
+    con.execute("INSERT INTO looms VALUES ('L1','LOOM-01')")
+    con.execute("INSERT INTO contracts VALUES ('C-OLD','Q-OLD',40),('C-NEW','Q-NEW',90)")
+    for k in range(15, 60):   # old quality fills the 'before' window
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-OLD", "Q-OLD", "B1", 200, 200, 0, 0, 75, None))
+    con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",   # new quality's FIRST run, 30 days ago
+                ((end - _td(days=30)).isoformat(), "L1", "A", "C-NEW", "Q-NEW", "B2", 200, 200, 0, 0, 75, None))
+    for k in range(0, 14):    # new quality dominates the recent window
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-NEW", "B2", 60, 60, 0, 0, 75, None))
+    a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    wv.run(a)
+    lh = [f for f in a.findings if f.key.startswith("lhist-L1")]
+    assert lh, "expected an output-change finding"
+    text = lh[0].title + " " + (lh[0].detail or "")
+    assert (end - _td(days=30)).isoformat() in text          # the real first date of the new contract
+    assert (end - _td(days=13)).isoformat() not in text       # NOT the first date inside the recent window
+
+
+def _mini_contract_store():
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE contracts (contract_no TEXT, party_code TEXT, party_name TEXT, contract_date TEXT, quality TEXT,
+            ends_per_inch REAL, picks_per_inch REAL, width_in REAL, warp_yarn TEXT, warp_count REAL, weft_yarn TEXT,
+            weft_count REAL, ordered_meters REAL, rate_per_meter REAL, rate_per_pick REAL, yarn_owner TEXT);
+        CREATE TABLE looms (loom_code TEXT, loom_name TEXT);
+        CREATE TABLE loom_production (loom_code TEXT, contract_no TEXT, quality TEXT, beam_no TEXT, meters REAL,
+            first_quality_m REAL, second_quality_m REAL, rejected_m REAL, picks_per_inch REAL, prod_date TEXT);
+        CREATE TABLE beams (beam_no TEXT, status TEXT, set_no TEXT, contract_no TEXT, loom_code TEXT, sizer_name TEXT,
+            ends REAL, set_length_m REAL, woven_m REAL, length_left_m REAL, mounted_date TEXT, received_date TEXT, bwidth REAL);
+        CREATE TABLE beam_movements (move_date TEXT, doc_no TEXT, beam_no TEXT, move_type TEXT, party_name TEXT,
+            set_no TEXT, contract_no TEXT, loom_code TEXT, length_m REAL, woven_m REAL);
+    """)
+    return con
+
+
+def test_v0176_production_grades_include_b_and_shrinkage_finished_only(env):
+    # Fix 4: rejection that already includes B (Dost B+C+CP) -> Total = A + Rejection ties; a C/CP column is shown.
+    # Fix 3: a finished beam is pulled from beam_movements with its REAL number (not an internal production id).
+    # Fix 5: shrinkage is computed on finished beams only.
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.execute("INSERT INTO contracts (contract_no, picks_per_inch) VALUES ('K1', 66)")
+    con.execute("INSERT INTO looms VALUES ('L29','LOOM-29')")
+    # Dost-style grades: Total 11,290 = A 9,261 + Rejection 2,029 (= B 1,818 + C/CP 211)
+    con.execute("INSERT INTO loom_production VALUES ('L29','K1','Q','2561',11290,9261,1818,2029,66,'2026-10-01')")
+    # a running beam (snapshot) and a FINISHED beam known only to beam_movements, with its painted number 00019
+    con.execute("INSERT INTO beams VALUES ('00020','on_loom','S1','K1','L29',NULL,0,13092,8382,4710,'2026-09-01',NULL,1)")
+    con.execute("INSERT INTO beam_movements VALUES ('2026-09-20','GP1','00019','from_loom_finished',NULL,'S2','K1','L29',3273,3100)")
+    rep = cr.contract_report(con, cfg, "K1")
+    secs = {s["key"]: s for s in rep["sections"]}
+    prod = secs["production"]
+    assert "C/CP m" in prod["columns"] and "already includes" in (prod["note"] or "")
+    assert prod["totals"][1] == 11290 and prod["totals"][1] == prod["totals"][2] + prod["totals"][5]   # Total = A + Rejection
+    beams = secs["beams"]
+    by_beam = {r[0]: r for r in beams["rows"]}
+    assert "00019" in by_beam and by_beam["00019"][5] == "finished"      # real number, resolved from movements
+    assert "2561" not in by_beam                                          # the internal production id is never shown
+    assert any("running" in str(r[5]) for r in beams["rows"])            # the on-loom beam is marked running
+    shrink = [r for r in secs["balances"]["rows"] if "Shrinkage" in r[0]][0]
+    assert "finished beams only" in shrink[0]                             # computed on the one finished beam

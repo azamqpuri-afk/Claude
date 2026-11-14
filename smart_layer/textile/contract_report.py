@@ -134,28 +134,41 @@ def contract_report(con, cfg, contract):
     bm = _q(con, """SELECT beam_no, status, loom_code, mounted_date, COALESCE(set_length_m,0),
                     COALESCE(woven_m,0), length_left_m FROM beams WHERE contract_no = ? ORDER BY mounted_date, beam_no""", (contract,))
     seen = set()
-    rows, fin_set, fin_woven, running = [], 0.0, 0.0, 0
+    rows, fin_set, fin_woven, running, finished = [], 0.0, 0.0, 0, 0
     for beam, status, loom, md, length, woven, left in bm:
         seen.add(_norm(beam))
-        is_running = (_norm(status) == "ON_LOOM") or (left is not None and (left or 0) > 0.5)
+        st = _norm(status)
+        is_running = (st == "ON_LOOM") or (left is not None and (left or 0) > 0.5)
         if is_running:
             running += 1
             to_come = round(left) if left is not None else (round(length - woven) if length else 0)
             state = f"running, {to_come:,} m to come" if to_come > 0 else "running"
-            pct = "—"
+        elif st == "SIZED_WAITING":
+            state = "sized, waiting"
         else:
-            fin_set += length or 0; fin_woven += woven or 0
-            pct = (f"{100.0 * (woven - length) / length:+.1f}%" if length else "—")
-            state = "finished"
-        rows.append([beam, nm.get(loom, loom), md, round(length), round(woven), state, pct])
-    # beams that only loom_production knows about
-    lp_beams = _q(con, """SELECT beam_no, loom_code, SUM(COALESCE(meters,0)) FROM loom_production
-                          WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> '' GROUP BY beam_no, loom_code""", (contract,))
-    for beam, loom, woven in lp_beams:
+            state = status or "—"
+        rows.append([beam, nm.get(loom, loom), md, round(length), round(woven), state, "—"])
+    # Finished / historical beams: the current snapshot only holds beams still on a loom or waiting, so a beam that
+    # has come off the loom has left it. beam_movements keeps the REAL beam number (painted), its set length and
+    # woven meters - pull in any not already shown. We never source beam numbers from loom_production.beam_no: on
+    # some ERPs that is an internal transaction id, not the beam number. Short/extra % and shrinkage are finished-only.
+    mv = _q(con, """SELECT beam_no, MAX(loom_code), MAX(COALESCE(length_m,0)), MAX(COALESCE(woven_m,0)),
+                    MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN 1 ELSE 0 END)
+                    FROM beam_movements WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> ''
+                    GROUP BY beam_no ORDER BY beam_no""", (contract,))
+    for beam, loom, length, woven, came_off in mv:
         if _norm(beam) in seen:
             continue
         seen.add(_norm(beam))
-        rows.append([beam, nm.get(loom, loom), "—", 0, round(woven or 0), "from production", "—"])
+        if came_off:
+            finished += 1
+            fin_set += length or 0; fin_woven += woven or 0
+            pct = (f"{100.0 * (woven - length) / length:+.1f}%" if length else "—")
+            state = "finished"
+        else:
+            state = "on record"
+            pct = "—"
+        rows.append([beam, nm.get(loom, loom), "—", round(length), round(woven), state, pct])
     bnote = None
     if running:
         bnote = f"{running} beam(s) still running - their 'to come' meters are warp not yet woven, not a shortfall."
@@ -165,26 +178,35 @@ def contract_report(con, cfg, contract):
     # ---- production by loom, with ppi ----
     pr = _q(con, """SELECT loom_code, SUM(meters), SUM(COALESCE(first_quality_m,0)), SUM(COALESCE(second_quality_m,0)),
                     SUM(COALESCE(rejected_m,0)) FROM loom_production WHERE contract_no = ? GROUP BY loom_code""", (contract,))
-    rows, tM, tA, tB, tR = [], 0.0, 0.0, 0.0, 0.0
+    praw, tM, tA, tB, tR = [], 0.0, 0.0, 0.0, 0.0
     for loom, m, a, b, rej in pr:
-        rows.append([nm.get(loom, loom), round(m or 0), round(a or 0), round(b or 0), round(rej or 0),
-                     (f"{ppi:g}" if ppi else "—")])
+        praw.append((loom, m or 0, a or 0, b or 0, rej or 0))
         tM += m or 0; tA += a or 0; tB += b or 0; tR += rej or 0
-    # Work out how the grades relate to total meters so the columns are not read as three things that must sum to meters.
-    # If A + B ≈ total, rejection is already inside B (B incl. rejection); if A + B + rejection ≈ total, they are separate.
-    pnote = None
-    if tM:
-        if abs((tA + tB) - tM) <= max(1.0, 0.01 * tM):
-            pnote = "A + B = total meters. Rejection m is the part of B that is rejection (already inside B-grade), not an extra."
-        elif abs((tA + tB + tR) - tM) <= max(1.0, 0.01 * tM):
-            pnote = "A + B + Rejection = total meters (the three are separate grades)."
-        else:
-            pnote = (f"A {tA:,.0f} + B {tB:,.0f} + Rej {tR:,.0f} does not tie to total {tM:,.0f} m - "
-                     "the ERP grades don't fully reconcile; check the grade entries.")
-    sec("production", "Production by loom",
-        ["Loom", "Total m", "A-grade m", "B-grade m", "Rejection m", "PPI (ERP)"],
-        rows, totals=[f"TOTAL ({len(rows)} looms)", round(tM), round(tA), round(tB), round(tR), ""],
-        note=pnote, num_cols=[1, 2, 3, 4])
+    # Make the grade columns tie to the total. Some ERPs (e.g. Dost) count rejection as B + C + CP, so the rejection
+    # total ALREADY includes the B/2nd-quality meters and Total = A + Rejection. Others keep the three separate
+    # (Total = A + B + Rejection). [weaving] rejection_includes_second picks which; "auto" detects it per contract.
+    wv = cfg["weaving"]
+    gl = wv.get("grade_labels") or {}
+    la, lb, lr = gl.get("a", "A-grade"), gl.get("b", "B-grade"), gl.get("reject", "Rejection")
+    mode = wv.get("rejection_includes_second", "auto")
+    tol = max(1.0, 0.01 * tM) if tM else 1.0
+    incl_b = (bool(tM and abs((tA + tR) - tM) <= tol and tR + tol >= tB) if mode == "auto" else bool(mode))
+    ppi_cell = (f"{ppi:g}" if ppi else "—")
+    if incl_b:
+        rows = [[nm.get(l, l), round(m), round(a), round(b), round(max(0.0, rej - b)), round(rej), ppi_cell]
+                for l, m, a, b, rej in praw]
+        cols = ["Loom", "Total m", f"{la} m", f"{lb} m", "C/CP m", f"{lr} m", "PPI (ERP)"]
+        totals = [f"TOTAL ({len(rows)} looms)", round(tM), round(tA), round(tB), round(max(0.0, tR - tB)), round(tR), ""]
+        pnote = f"Total m = {la} + {lr}. {lr} m already includes {lb} ({lr} = {lb} + C/CP), so do not add {lb} again."
+        numc = [1, 2, 3, 4, 5]
+    else:
+        rows = [[nm.get(l, l), round(m), round(a), round(b), round(rej), ppi_cell] for l, m, a, b, rej in praw]
+        cols = ["Loom", "Total m", f"{la} m", f"{lb} m", f"{lr} m", "PPI (ERP)"]
+        totals = [f"TOTAL ({len(rows)} looms)", round(tM), round(tA), round(tB), round(tR), ""]
+        pnote = (f"{la} + {lb} + {lr} = total meters (separate grades)."
+                 if (tM and abs((tA + tB + tR) - tM) <= tol) else None)
+        numc = [1, 2, 3, 4]
+    sec("production", "Production by loom", cols, rows, totals=totals, note=pnote, num_cols=numc)
 
     # ---- picks check ----
     # Two flags: (a) WITHIN this contract - the ERP recorded different picks/inch on different looms/dates for the same
@@ -246,10 +268,17 @@ def contract_report(con, cfg, contract):
     weft_issued = (weft_issued[0][0] or 0) if weft_issued else 0
     weft_ret = _q(con, "SELECT SUM(COALESCE(kg,0)) FROM yarn_movements WHERE contract_no=? AND move_type='from_looms'", (contract,))
     weft_ret = (weft_ret[0][0] or 0) if weft_ret else 0
-    # warp length = the sized sets' lengths (what went on the beams); shrinkage = how much shorter the fabric is
-    set_len_total = _q(con, "SELECT SUM(COALESCE(set_length_m,0)) FROM sized_sets WHERE contract_no=?", (contract,))
-    set_len_total = (set_len_total[0][0] or 0) if set_len_total else 0
-    shrink = (100.0 * (set_len_total - woven) / set_len_total) if set_len_total else 0
+    # Shrinkage = how much shorter the fabric is than the warp it was woven from. It only means anything on a beam
+    # that is FINISHED (fully woven off the loom) - on a running beam the warp is partly unwoven, so set-length vs
+    # woven would read as a huge false "shrinkage". So compute it on finished beams only; while none are finished say
+    # so, rather than print a meaningless number.
+    if finished and fin_set:
+        shrink_item = f"Shrinkage % (finished beams only: {finished})"
+        shrink_val = f"{100.0 * (fin_set - fin_woven) / fin_set:.1f}%"
+    elif running:
+        shrink_item, shrink_val = "Shrinkage %", f"n/a - all {running} beam(s) still running"
+    else:
+        shrink_item, shrink_val = "Shrinkage %", "n/a - no finished beams yet"
     brows = [
         ["Warp yarn received kg", round(warp_k)],
         ["Warp yarn sent to sizing kg", round(to_sizing)],
@@ -261,7 +290,7 @@ def contract_report(con, cfg, contract):
         ["Fabric dispatched (net) m", round(out_m - in_m)],
         ["Fabric balance in stock m", round(woven - (out_m - in_m))],
         ["Gully returned kg", round(gully_total, 1)],
-        ["Shrinkage % (warp length vs woven)" + (" - to date, beams still running" if running else ""), f"{shrink:.1f}%"],
+        [shrink_item, shrink_val],
     ]
     sec("balances", "Balances", ["Item", "Value"], brows)
 
