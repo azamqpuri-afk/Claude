@@ -2243,19 +2243,29 @@ def test_v0175_over_production_quality_change_is_info(env):
     con = _weaving_store()
     end = _d(2026, 10, 2)
     con.execute("INSERT INTO looms VALUES ('L1','LOOM-01')")
-    con.execute("INSERT INTO contracts VALUES ('C-OLD','Q-SAME',60),('C-NEW','Q-SAME',80)")
-    # 'before' window (14..74 days ago): the loom ran contract C-OLD at a high rate (usual ~100 m/day)
+    # ppi 40 -> 90, so the meters are expected to drop to ~40/90 of usual; the actual drop matches that (INFO)
+    con.execute("INSERT INTO contracts VALUES ('C-OLD','Q-OLD',40),('C-NEW','Q-NEW',90)")
+    # 'before' window (14..74 days ago): contract C-OLD at 200 m/day -> usual ~133 m/day
     for k in range(20, 60):
         con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-OLD", "Q-SAME", "B1", 200, 200, 0, 0, 75, None))
-    # 'recent' 14 days: a different contract C-NEW, far fewer m/day (quality changed, ppi 60 -> 80)
-    for k in range(0, 13):
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-OLD", "Q-OLD", "B1", 200, 200, 0, 0, 75, None))
+    # 'recent' 14 days: contract C-NEW at 60 m/day -> about the 59 expected from the ppi change
+    for k in range(0, 14):
         con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-SAME", "B2", 30, 30, 0, 0, 75, None))
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-NEW", "B2", 60, 60, 0, 0, 75, None))
     a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
     wv.run(a)
     lh = [f for f in a.findings if f.key.startswith("lhist-L1")]
-    assert lh and lh[0].severity == "INFO" and "quality changed" in lh[0].title and "60" in lh[0].title and "80" in lh[0].title
+    assert lh and lh[0].severity == "INFO" and "quality changed" in lh[0].title and "40" in lh[0].title and "90" in lh[0].title
+    # a ppi change that does NOT explain the size of the drop stays a WATCH
+    con.execute("DELETE FROM loom_production WHERE loom_code='L1' AND prod_date > ?", ((end - _td(days=14)).isoformat(),))
+    for k in range(0, 14):
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-NEW", "B2", 12, 12, 0, 0, 75, None))
+    a2 = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    wv.run(a2)
+    lh2 = [f for f in a2.findings if f.key.startswith("lhist-L1")]
+    assert lh2 and lh2[0].severity == "WATCH" and "even allowing for the quality change" in lh2[0].detail
 
 
 def test_v0175_empty_beam_by_quantity(env):
@@ -2303,8 +2313,17 @@ def test_v0175_contract_report(env, tmp_path):
     assert lst and any(c["contract"] == "CON-41" for c in lst)
     rep = cr.contract_report(con, cfg, "CON-41")
     assert rep["found"]
-    keys = {s["key"] for s in rep["sections"]}
-    assert {"yarn_in", "sizing", "sets", "beams", "production", "picks_check", "weft", "fabric_out", "balances"} <= keys
+    secs = {s["key"]: s for s in rep["sections"]}
+    assert {"yarn_in", "sizing", "sets", "beams", "production", "picks_check", "weft", "fabric_out", "balances"} <= set(secs)
+    # 0.17.6 retest fixes:
+    # bug 4 - sizing shows the sized-beam yarn back plus gully and waste separately (real loss %)
+    assert secs["sizing"]["columns"] == ["Sizer", "Yarn sent kg", "Sized-beam yarn kg", "Gully kg", "Waste kg", "Loss %"]
+    # bug 5 - beams carry a running/finished State column
+    assert "State" in secs["beams"]["columns"]
+    # bug 6 - production total column relabelled and a reconciliation note added
+    assert secs["production"]["columns"][1] == "Total m"
+    # bug 7 - fabric_out has a Thaan column
+    assert "Thaan" in secs["fabric_out"]["columns"]
     assert cr.contract_report(con, cfg, "NOPE")["found"] is False
     px = cr.write_xlsx(con, cfg, "CON-41", tmp_path, "c.xlsx")
     pp = cr.write_pdf(con, cfg, "CON-41", tmp_path, "c.pdf", product="SL")

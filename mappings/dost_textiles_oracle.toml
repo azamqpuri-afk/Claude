@@ -225,7 +225,7 @@ SELECT TO_CHAR(NVL(v.gp_no, v.trans_no)) AS doc_no, TRUNC(v.trans_date) AS dispa
        s.quality AS quality, v.ac AS party_code, v.deliver_to AS deliver_to,
        CASE v.trans_type WHEN 'GPOUT' THEN 'out' ELSE 'in' END AS direction,
        SUM(NVL(v.a,0) + NVL(v.a2,0)) AS fresh_m, SUM(NVL(v.b,0) + NVL(v.c,0) + NVL(v.cp,0)) AS rejected_m,
-       SUM(v.total_mtr) AS meters, SUM(v.amt) AS amount
+       SUM(v.total_mtr) AS meters, SUM(NVL(v.thaan,0)) AS thaan, SUM(v.amt) AS amount
 FROM dostex.fab_gp_v v JOIN dostex.wc_cont_sub_v s ON s.cont_sub_id = v.cont_sub_id JOIN dostex.contm c ON c.cont_id = s.cont_id
 WHERE v.trans_type IN ('GPOUT', 'GPIN') AND v.trans_date >= :since
 GROUP BY NVL(v.gp_no, v.trans_no), TRUNC(v.trans_date), c.cont_no, s.quality, v.ac, v.deliver_to, v.trans_type
@@ -361,7 +361,8 @@ SELECT PDATE AS read_date, PMACH AS loom_code,
        IIF(PSHIFT = 1, 'day', IIF(PSHIFT = 2, 'night', CStr(PSHIFT))) AS shift,
        SUM(IIF(PPINCH > 0, PPROD * PDELV / (PPINCH * 39.37), 0)) AS meters,
        IIF(SUM(PSHFTDUR) > 0, 100 * (SUM(PSHFTDUR) - SUM(PTSTPDUR)) / SUM(PSHFTDUR), NULL) AS efficiency_pct,
-       AVG(IIF(PRPM > 0, PRPM, NULL)) AS rpm, SUM(PWRP + PUD) AS stops, SUM(PSHFTDUR) AS shift_sec
+       AVG(IIF(PRPM > 0, PRPM, NULL)) AS rpm, SUM(PWRP + PUD) AS stops, SUM(PSHFTDUR) AS shift_sec,
+       AVG(IIF(PPINCH > 0, PPINCH, NULL)) AS picks_per_inch
 FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH, PSHIFT
 """
 

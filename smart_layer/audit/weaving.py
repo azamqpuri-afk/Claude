@@ -93,18 +93,28 @@ def run(a):
         if not (usual and usual >= 50 and now and (now < 0.5 * usual or now > 1.8 * usual)):
             continue
         rc, bc = _dom_contract(code, recent_from, d1), _dom_contract(code, before_from, before_to)
-        if rc and bc and rc != bc:                         # the loom's main quality changed - meters changed with the ppi
-            op, np_ = _ppi(bc), _ppi(rc)
+        op, np_ = (_ppi(bc), _ppi(rc)) if (rc and bc) else (None, None)
+        # a quality change only explains the meters when the PICKS/INCH actually changed, and only by about as much
+        # as the ppi ratio predicts: expected = usual x old_ppi/new_ppi. If the real output is within +-25% of that,
+        # the quality change explains it (INFO); otherwise it is still a WATCH, noting the quality change.
+        ppi_changed = bool(op and np_ and abs(op - np_) > 0.01)
+        qcd = None
+        if rc and bc and rc != bc:
             qcr = a.q("SELECT MIN(prod_date) FROM loom_production WHERE loom_code = ? AND contract_no = ? AND prod_date > ?",
                       code, rc, before_to)
             qcd = qcr[0][0] if qcr and qcr[0][0] else recent_from
-            ppitxt = f" (ppi {op:g} -> {np_:g})" if (op and np_) else ""
-            a.add("INFO", "Weaving", f"lhist-{code}-{d1}", f"{loom}: output changed because the quality changed on {qcd}{ppitxt}",
-                  f"{now:,.0f} m a day over 14 days vs its usual {usual:,.0f} - the picks/inch changed with the quality, so the meters changed")
+        if ppi_changed and qcd:
+            expected = usual * op / np_
+            ratio = (now / expected) if expected else 0
+            if 0.75 <= ratio <= 1.25:
+                a.add("INFO", "Weaving", f"lhist-{code}-{d1}", f"{loom}: output changed because the quality changed on {qcd} (ppi {op:g} -> {np_:g})",
+                      f"{now:,.0f} m a day over 14 days vs its usual {usual:,.0f} - about the {expected:,.0f} expected from the picks/inch change")
+            else:
+                a.add("WATCH", "Weaving", f"lhist-{code}-{d1}-{round(now / usual, 1)}",
+                      f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
+                      f"even allowing for the quality change on {qcd} (ppi {op:g} -> {np_:g}, so about {expected:,.0f} m expected) the output is {ratio:.1f}x - check it")
         else:
-            rq = a.q("SELECT MAX(mounted_date) FROM beams WHERE loom_code = ? AND mounted_date > ?",
-                     code, (end - timedelta(days=qc_days + lag_days + 14)).isoformat())
-            note = f"; possibly the quality change on {rq[0][0]}" if (rq and rq[0][0]) else ""
+            note = f"; the quality changed on {qcd} but the picks/inch did not, so it does not explain the meters" if (qcd and not ppi_changed) else ""
             a.add("WATCH", "Weaving", f"lhist-{code}-{d1}-{round(now / usual, 1)}",
                   f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
                   "a big change in the loom's output - quality change, stoppage, or entries booked to the wrong loom" + note)

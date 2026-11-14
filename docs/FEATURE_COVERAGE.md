@@ -93,6 +93,16 @@ the mapping/config, never the core).
 | 6-9 | Weaving: ERP-vs-scoreboard shown as equal side-by-side boxes with the difference; both ERP and scoreboard lines always drawn; the monthly chart is **meters + A-grade %** (current month "to date"); the loom-by-loom table is in numeric loom order with ERP/scoreboard efficiency and meters for the last 30 days **and** this month, a shed TOTAL row, and a sticky loom column | Weaving tab · `web/data.py`, `web/dashboard.html` |
 | 10 | **Contract report**: pick a contract (open or closed) and get the whole contract on one page and as PDF + Excel (one sheet per section) — header, yarn in (IGP), yarn returned/sold, sizing per sizer, sets, beams, production, a picks check (same quality at a different ppi), weft, fabric out and the balances. Also `report contract --contract <no>` on the CLI. "Contract closing" is removed from the Reports menu (the code is kept) | Reports → Contract report · `textile/contract_report.py` · `api/contracts-all`, `api/contract-report` · CLI `report contract` |
 
+## New in 0.17.6 (retest fixes)
+
+| # | What it does | Where |
+|---|--------------|-------|
+| a | Yarn received now tags warp/weft by the contract's warp yarn/count and defaults the rest to weft, so the weft balance is never left at zero | `textile/contract_report.py` `_side` |
+| b | Sizing per sizer shows the **sized-beam yarn back** (from the sets), with gully and waste in their own columns and the loss % from the actual sized weight — no more false 0% | Contract report → Sizing |
+| c | Beams are marked **running** ("running, X m to come") vs **finished**; short/extra % and shrinkage are finished-only (shrinkage labelled "to date" while beams still run); beams the ERP recorded only against a loom are pulled in too | Contract report → Beams |
+| d | Production columns relabelled ("Total m") with a note saying how A / B / Rejection relate to the total, so the grades read correctly | Contract report → Production |
+| e | Fabric dispatched shows a **Thaan** column (when the ERP records it); the picks check also flags **different picks/inch within the same contract** across the ERP's own entries | Contract report → Fabric out / Picks check |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |

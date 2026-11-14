@@ -168,7 +168,8 @@ ENTITIES = (
          C("second_quality_m", "REAL", "Meters of second (B) grade"),
          C("rejected_m", "REAL", "Meters counted as rejection, as the mill's ERP defines it (e.g. C + cut pieces, or B + C + CP)"),
          C("efficiency_pct", "REAL", "Efficiency as calculated by the ERP, if it has one"),
-         C("meters_at_100", "REAL", "Meters the loom would weave at 100% efficiency")),
+         C("meters_at_100", "REAL", "Meters the loom would weave at 100% efficiency"),
+         C("picks_per_inch", "REAL", "Picks/inch the ERP recorded on this entry, if any (optional; else the contract's ppi)")),
         date_column="prod_date",
     ),
     Entity(
@@ -228,6 +229,7 @@ ENTITIES = (
          C("fresh_m", "REAL", "Fresh (first quality) meters"),
          C("rejected_m", "REAL", "Rejected / second quality meters"),
          C("meters", "REAL", "Total meters", True),
+         C("thaan", "REAL", "Number of thaan (fabric rolls/pieces) on the gate pass, if the ERP records it (optional)"),
          C("amount", "REAL", "Invoice value")),
         date_column="dispatch_date",
     ),
@@ -308,7 +310,8 @@ ENTITIES += (
          C("efficiency_pct", "REAL", "Efficiency by the monitor"),
          C("rpm", "REAL", "Average speed"),
          C("stops", "REAL", "Number of stops"),
-         C("shift_sec", "REAL", "Total shift time in this reading (seconds) - the weight for a time-based efficiency")),
+         C("shift_sec", "REAL", "Total shift time in this reading (seconds) - the weight for a time-based efficiency"),
+         C("picks_per_inch", "REAL", "Picks/inch the monitor measured, if it reports it (optional)")),
         date_column="read_date",
     ),
     Entity(

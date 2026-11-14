@@ -76,6 +76,10 @@ def _weaving(con, cfg, as_of):
     ex_clause = (" AND loom_code NOT IN (%s)" % ",".join("?" * len(excl_codes))) if excl_codes else ""
     names = dict(con.execute("SELECT loom_code, loom_name FROM looms"))
     mstart = as_of.replace(day=1).isoformat()                 # this month (month to date)
+    # the ERP posts production a day or two behind, but the scoreboard is live - so cap every scoreboard figure at
+    # the ERP's latest production date, so "30 days" and "this month" cover the SAME span for both (item 8).
+    _ea = con.execute("SELECT MAX(prod_date) FROM loom_production WHERE prod_date <= ?", (d,)).fetchone()[0]
+    scb_hi = _ea or d
     erp = {r[0]: r for r in con.execute(f"""
         SELECT p.loom_code, {EFF_AGG} AS eff, SUM(p.meters) AS m, MAX(p.prod_date) AS last
         FROM loom_production p WHERE p.prod_date BETWEEN ? AND ? GROUP BY p.loom_code""", (start, d))}
@@ -88,11 +92,11 @@ def _weaving(con, cfg, as_of):
     scb = {r[0]: r for r in con.execute("""
         SELECT loom_code, SUM(efficiency_pct * COALESCE(shift_sec, meters)) / NULLIF(SUM(COALESCE(shift_sec, meters)), 0) AS eff,
                SUM(meters) AS m, AVG(rpm) AS rpm
-        FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (start, d))}
+        FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (start, scb_hi))}
     scb_m = {r[0]: r for r in con.execute("""
         SELECT loom_code, SUM(efficiency_pct * COALESCE(shift_sec, meters)) / NULLIF(SUM(COALESCE(shift_sec, meters)), 0) AS eff,
                SUM(meters) AS m
-        FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (mstart, d))}
+        FROM loom_monitor WHERE read_date BETWEEN ? AND ? GROUP BY loom_code""", (mstart, scb_hi))}
     scb_avail = bool(scb)
     # The real looms are the ones that have ever had ERP production - NOT the LOOMS master (full of unused rows) and
     # NOT the scoreboard (which has sensor channels for looms that do not physically exist). Scoreboard data is
@@ -119,16 +123,16 @@ def _weaving(con, cfg, as_of):
     # drop phantom scoreboard-only looms AND the configured exclude_looms from the shed scoreboard average
     real_only = "AND loom_code IN (SELECT DISTINCT loom_code FROM loom_production)" + ex_clause
     shed_scb = (con.execute(f"""SELECT SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0)
-                            FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", [start, d, *excl_codes]).fetchone()[0]) if scb_avail else None
+                            FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", [start, scb_hi, *excl_codes]).fetchone()[0]) if scb_avail else None
     ndays = max((as_of - date.fromisoformat(start)).days + 1, 1)
     ag = con.execute("SELECT SUM(COALESCE(first_quality_m,0)), SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", (start, d)).fetchone()
     erp_tot = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", start, d) or 0
-    scb_tot = (con.execute(f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", [start, d, *excl_codes]).fetchone()[0] or 0) if scb_avail else None
+    scb_tot = (con.execute(f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", [start, scb_hi, *excl_codes]).fetchone()[0] or 0) if scb_avail else None
     shed_erp_m = _one(con, f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date BETWEEN ? AND ?", mstart, d)
     shed_scb_m = (con.execute(f"""SELECT SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0)
-                            FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", [mstart, d, *excl_codes]).fetchone()[0]) if scb_avail else None
+                            FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}""", [mstart, scb_hi, *excl_codes]).fetchone()[0]) if scb_avail else None
     erp_tot_m = _one(con, "SELECT SUM(meters) FROM loom_production WHERE prod_date BETWEEN ? AND ?", mstart, d) or 0
-    scb_tot_m = (con.execute(f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", [mstart, d, *excl_codes]).fetchone()[0] or 0) if scb_avail else None
+    scb_tot_m = (con.execute(f"SELECT SUM(meters) FROM loom_monitor WHERE read_date BETWEEN ? AND ? {real_only}", [mstart, scb_hi, *excl_codes]).fetchone()[0] or 0) if scb_avail else None
     shed = {"erp_eff": round(shed_erp, 1) if shed_erp else None,
             "scb_eff": round(shed_scb, 1) if shed_scb else None,
             "a_grade": round(100.0 * ag[0] / ag[1], 1) if ag and ag[1] else None,

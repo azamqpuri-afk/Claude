@@ -135,7 +135,7 @@ WHERE t.txn_dt >= :since
 sql = """
 SELECT g.gp_no AS doc_no, g.gp_dt AS dispatch_date, g.order_ref AS contract_no, o.bp_id AS party_code,
        CASE g.io WHEN 'O' THEN 'out' ELSE 'in' END AS direction, g.fresh_mtr AS fresh_m, g.sec_mtr AS rejected_m,
-       g.fresh_mtr + g.sec_mtr AS meters, (g.fresh_mtr + g.sec_mtr) * g.rate AS amount
+       g.fresh_mtr + g.sec_mtr AS meters, NULL AS thaan, (g.fresh_mtr + g.sec_mtr) * g.rate AS amount
 FROM fab_gatepass g LEFT JOIN so_order o ON o.order_ref = g.order_ref
 WHERE g.gp_dt >= :since
 """

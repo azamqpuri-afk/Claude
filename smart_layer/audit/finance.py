@@ -48,9 +48,13 @@ def run(a):
     # trial balance and cash
     tb = a.q("SELECT SUM(balance) FROM account_balances")[0][0]
     if tb is not None and abs(tb) > float(t.get("trial_balance_tolerance", 10)):
-        # name the voucher(s) most likely behind it (biggest out-of-balance first), so the finding is actionable and
-        # the dashboard can open them, instead of just "see the unbalanced vouchers"
-        worst = sorted(unbalanced, key=lambda u: -abs(u[3]))[:2]
+        # name the voucher(s) most likely behind it (biggest out-of-balance first), so the finding is actionable.
+        # The trial balance is an AS-OF figure, so look for unbalanced vouchers as of d1 (voucher_date <= d1) - not
+        # only inside the audit day window, which is usually empty on the day the imbalance is noticed.
+        asof_unbal = a.q("""SELECT voucher_type, voucher_no, voucher_date, SUM(amount) FROM ledger_entries
+                WHERE voucher_date <= ? GROUP BY voucher_id HAVING ABS(SUM(amount)) > 1
+                ORDER BY ABS(SUM(amount)) DESC LIMIT 2""", d1)
+        worst = asof_unbal or sorted(unbalanced, key=lambda u: -abs(u[3]))[:2]
         named = "; ".join(f"{vt} {vno} ({vd}) {cur} {abs(gap):,.0f}" for vt, vno, vd, gap in worst)
         title = f"Trial balance is out by {cur} {tb:,.0f}" + (f" - {named}" if named else "")
         a.add("CONFIRMED", "Finance", f"tb-{round(tb)}", title,
