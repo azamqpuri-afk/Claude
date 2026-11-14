@@ -5,17 +5,52 @@ issue-value check in 70_erp_audit).
 Each daily audit keeps a snapshot of recent issue slips (quantity and value per slip and item) and production
 entries (meters per day, loom, shift, quality). The next day every change is reported:
   - an issue quantity changed on an old slip                 CONFIRMED (someone edited the slip)
-  - an issue value changed and no receipt of that item was
-    keyed since that could explain it (re-rating at the
-    store's average rate after a late GRN is normal)       ACTION, or WATCH when a late receipt explains it
+  - an issue value changed, explained by a late receipt      WATCH (the ERP re-rated at the new average)
+  - an issue value changed, line was saved unrated (0)       INFO  (the ERP filled in the rate - normal)
+  - an issue value changed, the edit history shows only the
+    average-rate ROUTINE (system module) touched rates       INFO  (re-rated by the routine - normal)
+  - an issue value changed, a person edited a rate, or no
+    history explains it and the old value was non-zero       ACTION (rate edited by hand? check)
   - a slip or production entry disappeared                   WATCH
   - production meters changed for a day older than 3 days    WATCH
-The first run only takes the snapshot.
+Only ACTION / CONFIRMED are phone-pushed, so the benign ERP re-ratings (INFO) no longer wake the owner. The
+system-module names are generic ([edits].system_modules). The first run only takes the snapshot.
 """
 
 from datetime import date, datetime, timedelta
 
 from ..store import get_state, set_state
+
+
+def _rerate_signals(a, since, now):
+    """Read the ERP edit history (when the optional change-history entities are mapped) for the window since the last
+    snapshot and report, for amount/rate columns only, whether the ERP's own average-rate ROUTINE re-rated lines and
+    whether a PERSON edited a rate/amount. Returns (system_rerate, human_rate_edit); (False, False) when there is no
+    history to read. Generic: the routine's module names and the 'system column' come from [edits] config."""
+    from .. import erp_edits
+    try:
+        if not erp_edits.installed(a.con):
+            return (False, False)
+        s = erp_edits._settings(a.cfg)
+        money = s["money"]
+        events = {}                                      # event_id -> {"module", "action", "cols"[]}
+        for eid, mod, act, col in a.q(
+                "SELECT e.event_id, e.module, e.action, v.column_name FROM erp_change_events e "
+                "JOIN erp_change_values v ON v.event_id = e.event_id WHERE e.changed_at > ? AND e.changed_at <= ?",
+                since, now):
+            ev = events.setdefault(eid, {"module": mod, "action": act, "cols": []})
+            ev["cols"].append(col)
+        system_rerate = human_rate_edit = False
+        for ev in events.values():
+            if not any(erp_edits._col_is(c, money) for c in ev["cols"]):
+                continue                                 # this edit did not touch a rate / amount column
+            if erp_edits._is_system(ev["module"], ev["action"], ev["cols"], s):
+                system_rerate = True
+            else:
+                human_rate_edit = True
+        return (system_rerate, human_rate_edit)
+    except Exception:
+        return (False, False)                            # never let the audit fall over on a history-read problem
 
 
 def run(a):
@@ -42,6 +77,7 @@ def run(a):
     if not old:
         return
     since = old.get("taken", now)
+    system_rerate, human_rate_edit = _rerate_signals(a, since, now)   # read once for the whole window
     old_from = min((v[0] for v in old.get("issues", {}).values()), default=None)
     for key, (d, name, qty, amt) in old.get("issues", {}).items():
         doc, item = key.split("|", 1)
@@ -62,7 +98,22 @@ def run(a):
                     a.add("WATCH", "Edits", f"isrerate-{key}-{round(new[3])}", f"Issue slip {doc} ({d}): {name} re-valued "
                           f"{cur} {amt:,.0f} -> {cur} {new[3]:,.0f}", f"receipt {late[0][0]} dated {late[0][1]} was keyed late - "
                           f"the ERP re-rated earlier issues at the new average rate (normal)")
+            elif amt <= 0.01:
+                # the line was saved unrated (rate 0) and the ERP's average-rate routine filled it in later - normal,
+                # not a hand edit. INFO is listed in the report but never phone-pushed.
+                a.add("INFO", "Edits", f"isfill-{key}-{round(new[3])}", f"Issue slip {doc} ({d}): {name} rate filled in "
+                      f"{cur} 0 -> {cur} {new[3]:,.0f}", "saved unrated; the ERP filled in the average rate (normal)")
+            elif human_rate_edit:
+                # a person edited a rate/amount somewhere in this window - stay cautious
+                a.add("ACTION", "Edits", f"isval-{key}-{round(new[3])}", f"Issue slip {doc} ({d}): {name} value changed "
+                      f"{cur} {amt:,.0f} -> {cur} {new[3]:,.0f} with no late receipt to explain it",
+                      "rate edited by hand? check with the store / accountant")
+            elif system_rerate:
+                # the edit history shows only the ERP's average-rate routine touched rates in this window
+                a.add("INFO", "Edits", f"isrerate2-{key}-{round(new[3])}", f"Issue slip {doc} ({d}): {name} re-valued "
+                      f"{cur} {amt:,.0f} -> {cur} {new[3]:,.0f}", "re-rated by the ERP's average-rate routine (normal)")
             else:
+                # no history to explain it and the old value was non-zero - worth a look
                 a.add("ACTION", "Edits", f"isval-{key}-{round(new[3])}", f"Issue slip {doc} ({d}): {name} value changed "
                       f"{cur} {amt:,.0f} -> {cur} {new[3]:,.0f} with no late receipt to explain it",
                       "rate edited by hand? check with the store / accountant")

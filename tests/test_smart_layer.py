@@ -2098,3 +2098,84 @@ def test_v0171_line_tick_keyed_by_date_doc_yarn(env):
             assert o["owner_set"] is None
     finally:
         cfg.data["gully"] = saved
+
+
+# ---- 0.17.4: issue-value audit - no false ACTION for ERP average-rate re-rating ----------------
+
+def test_v0174_rerate_signals(env):
+    cfg, con = env
+    from smart_layer.audit import edits as ae
+    a = audit.Audit(con, cfg, END, END)
+    since, now = "2026-11-01 00:00:00", "2026-11-30 00:00:00"
+    ids = [(99990001,), (99990002,), (99990003,)]
+    try:
+        con.executemany("INSERT INTO erp_change_events (event_id, changed_at, table_name, action, row_key, module) "
+                        "VALUES (?,?,?,?,?,?)",
+                        [(99990001, "2026-11-07 15:24:00", "DDT", "U", "TRANS_NO=2606;SR_NO=1", "UPDATE_AVG_RATE"),
+                         (99990002, "2026-11-07 15:24:10", "DDT", "U", "TRANS_NO=2606;SR_NO=2", "UPDATE_AVG_RATE")])
+        con.executemany("INSERT INTO erp_change_values (event_id, column_name, old_value, new_value) VALUES (?,?,?,?)",
+                        [(99990001, "AVG_RATE", "0", "12.5"), (99990002, "AVG_RATE", "0", "13.0")])
+        con.commit()
+        assert ae._rerate_signals(a, since, now) == (True, False)       # only the routine touched rates
+        con.execute("INSERT INTO erp_change_events (event_id, changed_at, table_name, action, row_key, module) "
+                    "VALUES (?,?,?,?,?,?)", (99990003, "2026-11-08 10:00:00", "DMN", "U", "TRANS_NO=9;SR_NO=1", "DMN_ENTRY"))
+        con.execute("INSERT INTO erp_change_values (event_id, column_name, old_value, new_value) VALUES (?,?,?,?)",
+                    (99990003, "AMOUNT", "100", "200"))
+        con.commit()
+        assert ae._rerate_signals(a, since, now) == (True, True)        # a person also edited an amount
+        assert ae._rerate_signals(a, "2027-01-01 00:00:00", "2027-02-01 00:00:00") == (False, False)  # window empty
+    finally:
+        con.executemany("DELETE FROM erp_change_events WHERE event_id = ?", ids)
+        con.executemany("DELETE FROM erp_change_values WHERE event_id = ?", ids)
+        con.commit()
+
+
+def _one_issue_line(con, lo, hi):
+    return con.execute("SELECT doc_no, item_code FROM store_issues WHERE doc_date BETWEEN '2026-07-01' AND '2026-09-01' "
+                       "GROUP BY doc_no, item_code HAVING COUNT(*) = 1 AND SUM(qty) > 0 AND SUM(amount) BETWEEN ? AND ? "
+                       "LIMIT 1", (lo, hi)).fetchone()
+
+
+def test_v0174_rate_fill_is_info_not_pushed(env):
+    cfg, con = env
+    con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
+    doc, item = _one_issue_line(con, 2000, 100000)
+    orig = con.execute("SELECT amount FROM store_issues WHERE doc_no=? AND item_code=?", (doc, item)).fetchone()[0]
+    try:
+        con.execute("UPDATE store_issues SET amount = 0 WHERE doc_no=? AND item_code=?", (doc, item))  # saved unrated
+        audit.run(con, cfg, END, persist=True)                         # snapshot with the line at 0
+        con.execute("UPDATE store_issues SET amount = 6000 WHERE doc_no=? AND item_code=?", (doc, item))  # routine fills the rate
+        found = [f for f in audit.run(con, cfg, END, persist=True).findings if f.section == "Edits" and doc in f.title]
+        fill = [f for f in found if "rate filled in" in f.title]
+        assert fill and fill[0].severity == "INFO"                     # INFO is reported but never phone-pushed
+        assert not any(f.severity == "ACTION" and doc in f.title for f in found)
+    finally:
+        con.execute("UPDATE store_issues SET amount = ? WHERE doc_no=? AND item_code=?", (orig, doc, item))
+        con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
+
+
+def test_v0174_routine_rerate_downgrades_action_to_info(env):
+    cfg, con = env
+    con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
+    doc, item = _one_issue_line(con, 3000, 100000)
+    orig = con.execute("SELECT amount FROM store_issues WHERE doc_no=? AND item_code=?", (doc, item)).fetchone()[0]
+    try:
+        audit.run(con, cfg, END, persist=True)                         # snapshot with the real (non-zero) amount
+        snap = store.get_state(con, "edit_snapshot")
+        snap["taken"] = "2026-11-01 00:00:00"                          # widen the window so the routine event falls in it
+        store.set_state(con, "edit_snapshot", snap)
+        con.execute("INSERT INTO erp_change_events (event_id, changed_at, table_name, action, row_key, module) "
+                    "VALUES (?,?,?,?,?,?)", (99990201, "2026-11-07 15:24:00", "DDT", "U", "TRANS_NO=1;SR_NO=1", "UPDATE_AVG_RATE"))
+        con.execute("INSERT INTO erp_change_values (event_id, column_name, old_value, new_value) VALUES (?,?,?,?)",
+                    (99990201, "AVG_RATE", "0", "12.5"))
+        con.execute("UPDATE store_issues SET amount = amount + 5000 WHERE doc_no=? AND item_code=?", (doc, item))
+        con.commit()
+        found = [f for f in audit.run(con, cfg, END, persist=False).findings if f.section == "Edits" and doc in f.title]
+        assert any(f.severity == "INFO" and "average-rate routine" in f.detail for f in found)
+        assert not any(f.severity == "ACTION" for f in found)
+    finally:
+        con.execute("UPDATE store_issues SET amount = ? WHERE doc_no=? AND item_code=?", (orig, doc, item))
+        con.execute("DELETE FROM erp_change_events WHERE event_id = 99990201")
+        con.execute("DELETE FROM erp_change_values WHERE event_id = 99990201")
+        con.execute("DELETE FROM state WHERE key = 'edit_snapshot'")
+        con.commit()
