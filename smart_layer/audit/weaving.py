@@ -100,31 +100,43 @@ def run(a):
         pass
 
     def run_avg(code, contract, d_from, d_to):
-        # meters per RUNNING day for this loom on this contract in (d_from, d_to], dropping stoppage/knotting days
-        tot, days = 0.0, 0
-        for pd_, m, pe in a.q("""SELECT prod_date, SUM(meters), MAX(efficiency_pct) FROM loom_production
+        # Meters per RUNNING day. ERP production is booked in lumps - one entry per roll cut, every 3-5 days - so the
+        # number of ENTRIES is not the number of days worked. Spread the meters over the contract's active CALENDAR
+        # span in the window and drop stoppage / beam-change / knotting days (monitor efficiency below the floor).
+        rows = a.q("""SELECT prod_date, SUM(meters) FROM loom_production
                 WHERE loom_code = ? AND contract_no = ? AND prod_date > ? AND prod_date <= ? GROUP BY prod_date""",
-                code, contract, d_from, d_to):
-            eff = eff_by.get(f"{code}|{pd_}")
-            if eff is None:
-                eff = pe                                   # fall back to the ERP's own efficiency for the day
+                code, contract, d_from, d_to)
+        if not rows:
+            return 0.0
+        tot = sum((m or 0) for _, m in rows)
+        pds = sorted(date.fromisoformat(str(pd_)[:10]) for pd_, _ in rows if pd_)
+        if not pds:
+            return 0.0
+        first, last = pds[0], pds[-1]
+        stoppage, d = 0, first
+        while d <= last:
+            eff = eff_by.get(f"{code}|{d.isoformat()}")
             if eff is not None and eff < floor:
-                continue                                   # stoppage / beam-change / knotting day - leave it out
-            tot += m or 0
-            days += 1
-        return (tot / days) if days else 0
+                stoppage += 1
+            d += timedelta(days=1)
+        days = max(1, ((last - first).days + 1) - stoppage)
+        return tot / days
 
     def pieces_for(code, contract, d_from, d_to):
-        # panels across: the scoreboard's pieces (its meters already count all pieces), else the beam's bwidth, else 1
+        # Panels across: the scoreboard's DOMINANT pieces (its meters already count all pieces). Use the mode, not the
+        # mean, so the few transition days just after a style change - still tagged with the old piece count - do not
+        # skew it (2.6 -> 3). Else the beam's bwidth, else 1.
         try:
-            r = a.q("""SELECT AVG(pieces) FROM loom_monitor WHERE loom_code = ? AND pieces IS NOT NULL
-                       AND read_date > ? AND read_date <= ?""", code, d_from, d_to)
+            r = a.q("""SELECT pieces FROM loom_monitor WHERE loom_code = ? AND pieces IS NOT NULL
+                       AND read_date > ? AND read_date <= ? GROUP BY pieces ORDER BY COUNT(*) DESC, pieces DESC LIMIT 1""",
+                    code, d_from, d_to)
             if r and r[0][0]:
                 return r[0][0]
         except Exception:
             pass
         try:
-            r = a.q("SELECT AVG(bwidth) FROM beams WHERE contract_no = ? AND bwidth IS NOT NULL", contract)
+            r = a.q("""SELECT bwidth FROM beams WHERE contract_no = ? AND bwidth IS NOT NULL
+                       GROUP BY bwidth ORDER BY COUNT(*) DESC LIMIT 1""", contract)
             if r and r[0][0]:
                 return r[0][0]
         except Exception:

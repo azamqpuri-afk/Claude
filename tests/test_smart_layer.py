@@ -2207,6 +2207,7 @@ class _AuditStub:
     def __init__(self, con, cfg, d0, d1):
         self.con, self.cfg, self.t = con, cfg, cfg["audit"]
         self._win = (d0, d1)
+        self.d0, self.d1 = d0, d1
         self.profile, self.findings, self.summary = {}, [], []
 
     @property
@@ -2216,8 +2217,9 @@ class _AuditStub:
     def q(self, sql, *params):
         return self.con.execute(sql, params).fetchall()
 
-    def add(self, severity, section, key, title, detail=""):
-        self.findings.append(SimpleNamespace(severity=severity, section=section, key=key, title=title, detail=detail))
+    def add(self, severity, section, key, title, detail="", meta=None):
+        self.findings.append(SimpleNamespace(severity=severity, section=section, key=key, title=title,
+                                             detail=detail, meta=meta or {}))
 
 
 def _weaving_store():
@@ -2229,7 +2231,10 @@ def _weaving_store():
         CREATE TABLE looms (loom_code TEXT, loom_name TEXT);
         CREATE TABLE beams (beam_no TEXT, contract_no TEXT, loom_code TEXT, mounted_date TEXT, set_length_m REAL, woven_m REAL);
         CREATE TABLE contracts (contract_no TEXT, quality TEXT, picks_per_inch REAL);
-        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, efficiency_pct REAL, rpm REAL, stops REAL, shift_sec REAL);
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, efficiency_pct REAL,
+            rpm REAL, stops REAL, shift_sec REAL, picks_per_inch REAL, pieces REAL, style TEXT);
+        CREATE TABLE beam_movements (move_date TEXT, doc_no TEXT, beam_no TEXT, move_type TEXT, party_name TEXT,
+            set_no TEXT, contract_no TEXT, loom_code TEXT, length_m REAL, woven_m REAL);
     """)
     return con
 
@@ -2485,6 +2490,80 @@ def test_v0180_ack_persists_until_escalation(env):
         assert any(x["id"] == f["id"] for x in d3["findings"])            # escalated -> back in the active list
     finally:
         _store.set_state(con, "acked", {})
+
+
+def test_v0180_over_production_pieces_and_running_days(env):
+    # harness bug 2: "now" is meters per RUNNING day over the window (ERP cuts spread over the active span), not per
+    # ERP entry; pieces uses the dominant (mode) scoreboard value. Loom-4 case: 453 × 42/66 × 1/3 ≈ 96 vs ~104 → INFO.
+    from datetime import date as _d, timedelta as _td
+    from smart_layer.audit import weaving as wv
+    cfg, _ = env
+    con = _weaving_store()
+    end = _d(2026, 11, 17)
+    con.execute("INSERT INTO looms VALUES ('L4','LOOM # 4')")
+    con.execute("INSERT INTO contracts VALUES ('67','50x42',42),('74','76x66',66)")
+    for k in range(16, 70):                               # OLD quality daily ~453 m/running-day, scoreboard pieces 3
+        d = (end - _td(days=k)).isoformat()
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (d, "L4", "A", "67", "50x42", "B1", 453, 453, 0, 0, 80, None))
+        con.execute("INSERT INTO loom_monitor (read_date,loom_code,meters,efficiency_pct,picks_per_inch,pieces,style) "
+                    "VALUES (?,?,?,?,?,?,?)", (d, "L4", 453, 80, 42, 3, "VA"))
+    for k in range(0, 14):                                # NEW quality: scoreboard every day, pieces 1, 66 ppi
+        d = (end - _td(days=k)).isoformat()
+        con.execute("INSERT INTO loom_monitor (read_date,loom_code,meters,efficiency_pct,picks_per_inch,pieces,style) "
+                    "VALUES (?,?,?,?,?,?,?)", (d, "L4", 104, 90, 66, 1, "MHK"))
+    for k, m in {1: 215, 4: 387, 7: 306, 10: 222, 13: 227}.items():   # ERP booked in lumpy cuts, ~104/running-day
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "L4", "A", "74", "76x66", "B2", m, m, 0, 0, 90, None))
+    a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    wv.run(a)
+    lh = [f for f in a.findings if f.key == "lhist-L4"]
+    assert lh and lh[0].severity == "INFO"               # fully explained by ppi + pieces -> INFO, not Needs Attention
+    assert "pieces 3->1" in (lh[0].title + lh[0].detail)
+
+
+def test_v0180_alert_c_uses_ppi_not_style(env):
+    # harness bug 1: "quality change not entered" compares PICKS/INCH, not style text, and needs an ERP beam/recent
+    # production. L18: scoreboard 82 ppi, ERP still 42 ppi, no new beam -> fires. L2: ERP already 82 ppi -> no alert.
+    from datetime import date as _d, timedelta as _td
+    from smart_layer.audit import monitor as mon
+    cfg, _ = env
+    con = _weaving_store()
+    end = _d(2026, 11, 17)
+    con.execute("INSERT INTO looms VALUES ('L18','LOOM # 18'),('L2','LOOM # 2')")
+    con.execute("INSERT INTO contracts VALUES ('67','50x42',42),('70','90x82',82)")
+    mins = ("INSERT INTO loom_monitor (read_date,loom_code,meters,efficiency_pct,picks_per_inch,style) "
+            "VALUES (?,?,?,?,?,?)")
+    for k in range(10, 20):
+        con.execute(mins, ((end - _td(days=k)).isoformat(), "L18", 200, 85, 42, "VA"))
+    for k in range(0, 9):
+        con.execute(mins, ((end - _td(days=k)).isoformat(), "L18", 210, 90, 82, "Mehak Cotton"))
+    con.execute("INSERT INTO loom_production VALUES ('2026-11-08','L18','A','67','50x42','00035',200,200,0,0,85,NULL)")
+    con.execute("INSERT INTO beam_movements VALUES ('2026-09-01','GP','00035','to_loom',NULL,'S','67','L18',NULL,NULL)")
+    for k in range(10, 16):
+        con.execute(mins, ((end - _td(days=k)).isoformat(), "L2", 200, 85, 66, "Other"))
+    for k in range(0, 9):
+        con.execute(mins, ((end - _td(days=k)).isoformat(), "L2", 210, 90, 82, "Mehak Cotton"))
+    con.execute("INSERT INTO loom_production VALUES ('2026-11-15','L2','A','70','90x82','B9',210,210,0,0,90,NULL)")
+    a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    mon.run(a)
+    c = [f for f in a.findings if f.key.startswith("qcnotentered-")]
+    assert any("L18" in f.key for f in c)                # ERP still 42 ppi, no new beam -> fires
+    assert not any("qcnotentered-L2-" in f.key for f in c)   # ERP contract 70 already 82 ppi -> entered, no alert
+
+
+def test_v0180_sensor_twin_counts_no_restart():
+    # harness bug 3 + item E: same-second stops with NO restart time are still twins (both blank -> twin).
+    from datetime import datetime as _dt, timedelta as _td
+    from smart_layer.audit import sensor
+    t = dict(sensor.DEFAULTS)
+    base = _dt(2026, 11, 16, 2, 49, 54)
+    rows = []
+    for s in (0, 112, 912, 1017, 1246, 1596, 1897):      # seven same-second stops for looms 5 and 7, restart = None
+        tms = (base + _td(seconds=s)).isoformat(sep=" ")
+        rows += [("5", tms, None), ("7", tms, None)]
+    eps = sensor.episodes(rows, t)
+    assert eps and eps[0]["twins"] >= 7 and eps[0]["share"] >= 0.9 and eps[0]["confirmed"]
 
 
 def test_v0180_ack_migration_maps_old_keys():

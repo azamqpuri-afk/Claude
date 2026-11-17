@@ -69,45 +69,63 @@ def run(a):
                   f"{names.get(k, k)} {lo_label} to {last_cut} (cut to cut): ERP {e:,.0f} m, loom monitor {m:,.0f} m ({100 * (e - m) / m:+.0f}%)",
                   "ERP lower than the loom's own count = rolls not entered; higher = production over-entered or booked to this loom")
 
-    # Quality change not entered in the ERP (alert C): the scoreboard shows a NEW style/ppi on a loom, but after a
-    # grace period the ERP still has the old beam/contract and no new beam issue - so production on the new quality is
-    # never entered. Needs scoreboard style/ppi; skipped when the monitor does not report them (then style/ppi NULL).
+    # Quality change not entered in the ERP (alert C): the scoreboard shows a new PICKS/INCH on a loom, but the ERP's
+    # current contract/beam on that loom still has the OLD ppi and no new beam was issued - so production on the new
+    # quality is not being entered. We compare PICKS/INCH (and pieces where known), NEVER the style text: the same
+    # cloth has different names in the scoreboard and the ERP ("Mehak Cotton" vs "90x82 ... MHK"), so a text compare
+    # gives false alarms. Only looms with a recent ERP beam/production are considered, and only changes in the last
+    # lookback days, so looms the mill removed (no ERP data, an old change) never fire.
     grace = int(a.t.get("quality_change_erp_grace_days", 3))
+    look = (d1 - timedelta(days=30)).isoformat()
     for k, codes in mon_codes.items():
         ph = ",".join("?" for _ in codes)
-        cur = a.q(f"""SELECT read_date, style, picks_per_inch FROM loom_monitor
-                      WHERE loom_code IN ({ph}) AND (style IS NOT NULL OR picks_per_inch IS NOT NULL)
+        cur = a.q(f"""SELECT read_date, picks_per_inch, pieces, style FROM loom_monitor
+                      WHERE loom_code IN ({ph}) AND picks_per_inch IS NOT NULL
                       ORDER BY read_date DESC LIMIT 1""", *codes)
-        if not cur:
+        if not cur or cur[0][1] is None:
             continue
-        cur_date, cur_style, cur_ppi = cur[0]
-        # the most recent scoreboard day whose style or ppi differs from the current one = last day of the old quality
+        cur_date, cur_ppi, cur_pieces, cur_style = cur[0]
+        # last scoreboard day whose ppi differed from now = last day of the old quality; the change is the next day
         prev = a.q(f"""SELECT MAX(read_date) FROM loom_monitor WHERE loom_code IN ({ph}) AND read_date <= ?
-                       AND ( (style IS NOT NULL AND ? IS NOT NULL AND style <> ?)
-                          OR (picks_per_inch IS NOT NULL AND ? IS NOT NULL AND ABS(picks_per_inch - ?) > 0.5) )""",
-                   *codes, cur_date, cur_style, cur_style, cur_ppi, cur_ppi)
+                       AND picks_per_inch IS NOT NULL AND ABS(picks_per_inch - ?) > 0.5""", *codes, cur_date, cur_ppi)
         prev_diff = prev[0][0] if prev and prev[0][0] else None
         if not prev_diff:
-            continue                                     # the scoreboard shows no quality change in the window
-        cd = a.q(f"SELECT MIN(read_date) FROM loom_monitor WHERE loom_code IN ({ph}) AND read_date > ?", *codes, prev_diff)
+            continue                                     # the scoreboard shows no picks/inch change for this loom
+        cd = a.q(f"SELECT MIN(read_date) FROM loom_monitor WHERE loom_code IN ({ph}) AND read_date > ? AND ABS(picks_per_inch - ?) <= 0.5",
+                 *codes, prev_diff, cur_ppi)
         change_date = cd[0][0] if cd and cd[0][0] else None
-        if not change_date or (d1 - date.fromisoformat(change_date)).days < grace:
-            continue                                     # not changed, or still inside the grace period
+        if not change_date or change_date < look or (d1 - date.fromisoformat(change_date)).days < grace:
+            continue                                     # no change, too old, or still inside the grace period
+        # only consider a loom the ERP still tracks (recent production or a beam on it) - not one the mill removed
+        lastp = a.q("SELECT MAX(prod_date) FROM loom_production WHERE loom_code = ?", k)
+        last_prod = lastp[0][0] if lastp and lastp[0][0] else None
+        onbeam = a.q("""SELECT beam_no, contract_no FROM beam_movements WHERE loom_code = ? AND move_type = 'to_loom'
+                        ORDER BY move_date DESC LIMIT 1""", k)
+        if not ((last_prod and last_prod >= look) or (onbeam and onbeam[0][0])):
+            continue
+        # "entered" = the ERP's current contract on the loom already has the new ppi, OR a beam was issued on/after the
+        # change. Current ERP contract = the loom's most recent production contract (falls back to the mounted beam's).
+        erp_cn = None
+        rc = a.q("""SELECT contract_no FROM loom_production WHERE loom_code = ? AND contract_no IS NOT NULL
+                    ORDER BY prod_date DESC LIMIT 1""", k)
+        erp_cn = (rc[0][0] if rc and rc[0][0] else (onbeam[0][1] if onbeam else None))
+        erp_ppi = None
+        if erp_cn:
+            pr = a.q("SELECT picks_per_inch FROM contracts WHERE contract_no = ?", erp_cn)
+            erp_ppi = pr[0][0] if pr and pr[0][0] is not None else None
+        if erp_ppi is not None and abs(erp_ppi - cur_ppi) <= 0.5:
+            continue                                     # the ERP's current contract already has the new ppi - entered
         issued = a.q("SELECT 1 FROM beam_movements WHERE loom_code = ? AND move_type = 'to_loom' AND move_date >= ? LIMIT 1",
                      k, change_date)
         if issued:
-            continue                                     # the ERP DID record a new beam for the loom - nothing missing
+            continue                                     # a new beam was recorded on/after the change - entered
         sb_m = a.q(f"SELECT SUM(meters) FROM loom_monitor WHERE loom_code IN ({ph}) AND read_date >= ?",
                    *codes, change_date)[0][0] or 0
-        if sb_m <= 0:
-            continue
-        last_prod = a.q("SELECT MAX(prod_date) FROM loom_production WHERE loom_code = ?", k)
-        last_prod = (last_prod[0][0] if last_prod else None) or "none"
-        oldbeam = a.q("""SELECT beam_no, contract_no FROM beam_movements WHERE loom_code = ? AND move_type = 'to_loom'
-                         ORDER BY move_date DESC LIMIT 1""", k)
-        ob = f"beam {oldbeam[0][0]} / contract {oldbeam[0][1]}" if oldbeam and oldbeam[0][0] else "the old beam/contract"
-        styletxt = (str(cur_style) if cur_style else "a new style") + (f", {cur_ppi:g} ppi" if cur_ppi else "")
+        ob = f"beam {onbeam[0][0]} / contract {erp_cn}" if (onbeam and onbeam[0][0]) else (f"contract {erp_cn}" if erp_cn else "the old beam/contract")
+        styletxt = (str(cur_style) + ", " if cur_style else "") + f"{cur_ppi:g} ppi"
         a.add("ACTION", "Looms", f"qcnotentered-{k}-{change_date}",
               f"{names.get(k, k)}: quality changed on {change_date} (scoreboard: {styletxt}) - not entered in the ERP after {grace} days",
-              f"the ERP still has {ob}; last ERP production {last_prod}; about {sb_m:,.0f} m run on the scoreboard "
-              f"since the change are not in the ERP")
+              f"the ERP still has {ob} ({erp_ppi:g} ppi); last ERP production {last_prod or 'none'}; about {sb_m:,.0f} m "
+              f"run on the scoreboard since the change are not in the ERP" if erp_ppi is not None else
+              f"the ERP still has {ob}; last ERP production {last_prod or 'none'}; about {sb_m:,.0f} m run on the "
+              f"scoreboard since the change are not in the ERP")

@@ -25,13 +25,55 @@ def _has(con, table):
 
 def contract_list(con, include_closed=True):
     """Contracts for the picker: open and closed, newest first, with party and quality."""
-    rows = _q(con, """SELECT contract_no, COALESCE(party_name, party_code), quality, contract_date
+    rows = _q(con, """SELECT contract_no, COALESCE(party_name, party_code), quality, contract_date, party_code
                       FROM contracts ORDER BY contract_date DESC, contract_no DESC""")
     out = []
-    for cno, party, quality, cdate in rows:
-        out.append({"contract": str(cno), "party": party or "", "quality": quality or "", "date": cdate,
-                    "label": f"{cno} · {party or ''}" + (f" · {quality}" if quality else "")})
+    for cno, party, quality, cdate, pcode in rows:
+        out.append({"contract": str(cno), "party": party or "", "party_code": str(pcode or ""), "quality": quality or "",
+                    "date": cdate, "label": f"{cno} · {party or ''}" + (f" · {quality}" if quality else "")})
     return out
+
+
+def party_list(con):
+    """Parties that have contracts, for the party-first picker: code, name, and how many contracts each has."""
+    rows = _q(con, """SELECT party_code, COALESCE(MAX(party_name), party_code) AS name, COUNT(*) AS n
+                      FROM contracts GROUP BY party_code ORDER BY name""")
+    return [{"party_code": str(pc or ""), "party": nm or str(pc or ""), "contracts": int(n or 0),
+             "label": f"{nm or pc} ({int(n or 0)})"} for pc, nm, n in rows]
+
+
+def party_scope(con, party_code):
+    """One party's contracts and the distinct qualities among them - the contract + quality dropdowns are filled from
+    this when a party is picked, so only that party's contracts and qualities ever show."""
+    pc = str(party_code)
+    contracts = [c for c in contract_list(con) if c["party_code"] == pc]
+    quals, seen = [], set()
+    for c in contracts:
+        q = c["quality"]
+        if q and q not in seen:
+            seen.add(q)
+            quals.append(q)
+    party = contracts[0]["party"] if contracts else pc
+    return {"party_code": pc, "party": party, "contracts": contracts, "qualities": sorted(quals)}
+
+
+def _party_of(con, contract):
+    r = _q(con, "SELECT party_code, COALESCE(party_name, party_code) FROM contracts WHERE contract_no = ?", (str(contract),))
+    return (str(r[0][0] or ""), r[0][1]) if r else ("", "")
+
+
+def _other_party(dp_code, contract_pcode, otherlist, samelist):
+    """Is this fabric OGP to ANOTHER party (rejection sale / sold elsewhere), by ACCOUNT CODE - not deliver_to text?
+    A deliver-to dyer/godown under the contract party's own code stays with the contract; a different account code is
+    'another party'. Config lists can pin a code either way."""
+    p = _norm(dp_code)
+    if not p:
+        return False
+    if p in samelist:
+        return False
+    if p in otherlist:
+        return True
+    return bool(contract_pcode and p != _norm(contract_pcode))
 
 
 def _norm(s):
@@ -62,6 +104,9 @@ def contract_report(con, cfg, contract):
     (cno, pcode, pname, cdate, quality, epi, ppi, width, warp_yarn, warp_count, weft_yarn, weft_count,
      omtr, rate_m, rate_pick, owner) = c[0]
     cur = cfg["company"]["currency"]
+    crcfg = cfg["contract_report"] or {}
+    otherlist = {_norm(x) for x in (crcfg.get("other_party_codes") or [])}
+    samelist = {_norm(x) for x in (crcfg.get("same_party_codes") or [])}
     header = {"contract": cno, "party": pname or pcode, "quality": quality, "warp_count": warp_count,
               "weft_count": weft_count, "ends_per_inch": epi, "picks_per_inch": ppi, "width_in": width,
               "ordered_meters": omtr, "rate_per_meter": rate_m, "contract_date": cdate, "yarn_owner": owner}
@@ -243,15 +288,23 @@ def contract_report(con, cfg, contract):
     rows = [[md, gp, ("issued" if mt == "to_looms" else "returned"), round(bags), round(kg)] for md, gp, mt, bags, kg in wf]
     sec("weft", "Weft yarn issued / returned", ["Date", "Doc", "Type", "Bags", "Kg"], rows, num_cols=[3, 4])
 
-    # ---- fabric dispatched (OGP fabric) ----
+    # ---- fabric dispatched (OGP fabric), split: to the contract party (counts) vs to ANOTHER party (memo only) ----
     fd = _q(con, """SELECT dispatch_date, doc_no, COALESCE(meters,0), COALESCE(fresh_m,0), COALESCE(rejected_m,0),
-                    direction, thaan FROM fabric_dispatches WHERE contract_no = ? ORDER BY dispatch_date""", (contract,))
+                    direction, thaan, party_code, deliver_to FROM fabric_dispatches
+                    WHERE contract_no = ? ORDER BY dispatch_date""", (contract,))
     rows, out_m, in_m, t_th, any_th = [], 0.0, 0.0, 0.0, False
-    for dd, doc, m, fresh, rej, direction, thaan in fd:
-        # a NULL thaan means the ERP simply did not record it on that gate pass - show "—", not a false 0. Keep a
-        # real 0 as 0, and leave the total blank if every gate pass had no thaan.
-        rows.append([dd, doc, ("out" if direction == "out" else "in"), round(m), round(fresh), round(rej),
-                     (round(thaan) if thaan is not None else "—")])
+    oth_rows, oth_m, oth_th, oth_any = [], 0.0, 0.0, False
+    for dd, doc, m, fresh, rej, direction, thaan, dpc, dto in fd:
+        th_cell = (round(thaan) if thaan is not None else "—")
+        if direction == "out" and _other_party(dpc, pcode, otherlist, samelist):
+            # a NULL thaan means the ERP simply did not record it - show "—", not a false 0.
+            oth_rows.append([dd, doc, f"{dpc or ''}", dto or "", round(fresh), round(rej), round(m), th_cell])
+            oth_m += m or 0
+            if thaan is not None:
+                oth_any = True
+                oth_th += thaan or 0
+            continue
+        rows.append([dd, doc, ("out" if direction == "out" else "in"), round(m), round(fresh), round(rej), th_cell])
         if direction == "out":
             out_m += m or 0
         else:
@@ -259,14 +312,24 @@ def contract_report(con, cfg, contract):
         if thaan is not None:
             any_th = True
             t_th += thaan or 0
-    sec("fabric_out", "Fabric dispatched (OGP)", ["Date", "OGP no", "Dir", "Meters", "Fresh m", "Rejection m", "Thaan"], rows,
+    sec("fabric_out", "Fabric dispatched to the party (OGP)", ["Date", "OGP no", "Dir", "Meters", "Fresh m", "Rejection m", "Thaan"], rows,
         totals=["", "", "net out", round(out_m - in_m), "", "", (round(t_th) if any_th else "—")], num_cols=[3, 4, 5, 6])
+    if oth_rows:
+        # a separate tab: fabric of this contract/quality that went to another account (rejection sale / sold
+        # elsewhere). NOT counted in the summary or the fabric-to-party balance - the memo line below the summary.
+        sec("fabric_other", "Fabric to other parties (not in the contract balance)",
+            ["Date", "OGP no", "Party code", "Deliver to", "Fresh m", "Rejection m", "Total m", "Thaan"], oth_rows,
+            totals=["", "", "", "TOTAL", "", "", round(oth_m), (round(oth_th) if oth_any else "—")],
+            note="These gate passes went to a different account than the contract party, so they are shown here only "
+                 "and are left out of the contract summary and the fabric-to-party balance.", num_cols=[4, 5, 6, 7])
 
     # ---- balances ----
     woven = _q(con, "SELECT SUM(meters) FROM loom_production WHERE contract_no = ?", (contract,))
     woven = (woven[0][0] or 0) if woven else 0
     gully_total = _q(con, "SELECT SUM(COALESCE(gullay_kg,0)) FROM sized_sets WHERE contract_no = ?", (contract,))
     gully_total = (gully_total[0][0] or 0) if gully_total else 0
+    sized_total = _q(con, "SELECT SUM(COALESCE(set_length_m,0)) FROM sized_sets WHERE contract_no = ?", (contract,))
+    sized_total = (sized_total[0][0] or 0) if sized_total else 0
     to_sizing = sum(s["to"] for s in siz.values())
     weft_issued = _q(con, "SELECT SUM(COALESCE(kg,0)) FROM yarn_movements WHERE contract_no=? AND move_type='to_looms'", (contract,))
     weft_issued = (weft_issued[0][0] or 0) if weft_issued else 0
@@ -291,15 +354,18 @@ def contract_report(con, cfg, contract):
         ["Weft yarn issued to looms kg", round(weft_issued - weft_ret)],
         ["Weft yarn balance kg", round(weft_k - (weft_issued - weft_ret))],
         ["Fabric woven m", round(woven)],
-        ["Fabric dispatched (net) m", round(out_m - in_m)],
+        ["Fabric dispatched to the party (net) m", round(out_m - in_m)],
         ["Fabric balance in stock m", round(woven - (out_m - in_m))],
         ["Gully returned kg", round(gully_total, 1)],
         [shrink_item, shrink_val],
     ]
-    sec("balances", "Balances", ["Item", "Value"], brows)
+    if oth_m:
+        brows.append(["Fabric to other parties (memo, not in the balance) m", round(oth_m)])
+    sec("balances", "Summary", ["Item", "Value"], brows)
 
-    return {"found": True, "contract": contract, "header": header, "currency": cur,
-            "quality": quality, "party": pname or pcode, "sections": sections}
+    sections.sort(key=lambda s: 0 if s["key"] == "balances" else 1)   # Summary on top (stable: keeps the rest in order)
+    return {"found": True, "contract": contract, "header": header, "currency": cur, "mode": "contract",
+            "quality": quality, "party": pname or pcode, "party_code": str(pcode or ""), "sections": sections}
 
 
 # ---- exports ---------------------------------------------------------------------------------
