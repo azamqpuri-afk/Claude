@@ -4,6 +4,7 @@ Works for any mill: it reads only the standard entities.
 """
 
 import calendar
+import re
 from datetime import date, datetime, timedelta
 
 from .. import PRODUCT, audit
@@ -18,6 +19,36 @@ from . import finance as fin_mod
 def _one(con, sql, *p):
     row = con.execute(sql, p).fetchone()
     return row[0] if row and row[0] is not None else 0
+
+
+_DATE = r"\d{4}-\d{2}-\d{2}"
+
+
+def _migrate_acks(acked):
+    """Map acks saved under the OLD volatile finding keys (which embedded a rolling date / window end / output ratio)
+    to the new STABLE keys, so a notification the owner already cleared does not pop back after the upgrade. Best
+    effort: an id that does not match a known pattern is kept unchanged."""
+    out = {}
+    for fid, v in (acked or {}).items():
+        if "|" not in str(fid):
+            out.setdefault(fid, v)
+            continue
+        sec, key = str(fid).split("|", 1)
+        nk = key
+        if key.startswith("lhist-"):                       # lhist-<code>-<date>[-<ratio>] -> lhist-<code>
+            nk = re.sub(rf"^(lhist-.+?)-{_DATE}.*$", r"\1", key)
+        elif key.startswith("monitor-"):                   # monitor-<k>-<window end> -> monitor-<k>
+            nk = re.sub(rf"^(monitor-.+?)-{_DATE}$", r"\1", key)
+        elif key.startswith("rej-"):                       # rej-<date>-<loom>-<cn> -> rej-<loom>-<cn>
+            m = re.match(rf"^rej-{_DATE}-(.+)$", key)
+            if m:
+                nk = f"rej-{m.group(1)}"
+        else:                                              # nobeam-/eff100-<date>-<loom> -> <type>-<loom>-<date>
+            m = re.match(rf"^(nobeam|eff100)-({_DATE})-(.+)$", key)
+            if m:
+                nk = f"{m.group(1)}-{m.group(3)}-{m.group(2)}"
+        out.setdefault(f"{sec}|{nk}", v)
+    return out
 
 
 def _month_ends(as_of, n=12):
@@ -278,24 +309,54 @@ def build(con, cfg, as_of=None):
     while len(finance) > 1 and not (finance[0]["sales"] or finance[0]["expenses"]):
         finance.pop(0)                                 # months before the data starts
 
-    # attention: the day's audit (nothing is pushed or remembered from here). The owner can mark an item "read" to
-    # clear it; acknowledged items (by their stable section|key fingerprint) are kept in the local store's state and
-    # hidden from the strip and the counts until the same item recurs.
+    # attention: the day's audit (nothing is pushed or remembered from here). The owner marks an item "read" to clear
+    # it. A read item STAYS read even when its figures change (keys are stable), and is only re-shown if it ESCALATES
+    # (severity goes up). If it disappears it is remembered for ack_keep_days before being forgotten, so a flicker
+    # does not make it pop back but a real recurrence later does. Read items stay viewable under "show all".
     from .. import store as _store
     a = audit.run(con, cfg, as_of)
     order = {"ACTION": 0, "CONFIRMED": 1, "WATCH": 2, "INFO": 3}
+    keep_days = int((cfg["reports"] or {}).get("ack_keep_days", 30))
+    ack_today = date.today().isoformat()
     acked = _store.get_state(con, "acked", {}) or {}
+    if not _store.get_state(con, "ack_keys_v2", False):    # one-time: map old volatile-key acks to the new stable keys
+        acked = _migrate_acks(acked)
+        try:
+            _store.set_state(con, "acked", acked)
+            _store.set_state(con, "ack_keys_v2", True)
+        except Exception:
+            pass
     all_findings = [{"id": f"{f.section}|{f.key}", "severity": f.severity, "section": f.section,
-                     "title": f.title, "detail": f.detail}
+                     "title": f.title, "detail": f.detail, **({"meta": f.meta} if f.meta else {})}
                     for f in sorted(a.findings, key=lambda f: (order[f.severity], f.section))]
-    findings = [f for f in all_findings if f["id"] not in acked]
     live_ids = {f["id"] for f in all_findings}
-    acknowledged = [{"id": fid, "title": (acked[fid] or {}).get("title", ""), "at": (acked[fid] or {}).get("at", "")}
-                    for fid in acked if fid in live_ids]   # only still-relevant acks (resolved ones just drop off)
-    stale = [fid for fid in acked if fid not in live_ids]  # the finding was fixed - forget the ack so a RECURRENCE shows again
-    if stale:
-        for fid in stale:
-            acked.pop(fid, None)
+    findings, acknowledged = [], []
+    dirty = False
+    for f in all_findings:
+        ack = acked.get(f["id"])
+        if not ack:
+            findings.append(f)
+            continue
+        if order[f["severity"]] < order.get(ack.get("severity", f["severity"]), 3):
+            acked.pop(f["id"], None)                        # escalated since it was read - show it again as unread
+            dirty = True
+            findings.append(f)
+        else:
+            if ack.get("last_seen") != ack_today:
+                ack["last_seen"] = ack_today                    # still present: reset the forget clock
+                dirty = True
+            acknowledged.append({**f, "read_at": ack.get("at", ""), "read": True})
+    for fid, ack in list(acked.items()):                   # forget an ack only after the finding has been gone a while
+        if fid in live_ids:
+            continue
+        last = str(ack.get("last_seen") or ack.get("at") or ack_today)[:10]
+        try:
+            if (date.fromisoformat(ack_today) - date.fromisoformat(last)).days > keep_days:
+                acked.pop(fid, None)
+                dirty = True
+        except Exception:
+            pass
+    if dirty:
         try:
             _store.set_state(con, "acked", acked)
         except Exception:

@@ -2258,25 +2258,24 @@ def test_v0175_over_production_quality_change_is_info(env):
     con = _weaving_store()
     end = _d(2026, 10, 2)
     con.execute("INSERT INTO looms VALUES ('L1','LOOM-01')")
-    # ppi 40 -> 90, so the meters are expected to drop to ~40/90 of usual; the actual drop matches that (INFO)
+    # ppi 40 -> 90, so the meters are expected to drop to ~40/90 of the loom's usual RUNNING-day output; the actual
+    # drop matches that (INFO). "usual" = running-day average of the old quality (200 m), expected = 200 x 40/90 ~ 89.
     con.execute("INSERT INTO contracts VALUES ('C-OLD','Q-OLD',40),('C-NEW','Q-NEW',90)")
-    # 'before' window (14..74 days ago): contract C-OLD at 200 m/day -> usual ~133 m/day
-    for k in range(20, 60):
+    for k in range(20, 60):   # 'before' window: contract C-OLD at 200 m/running-day
         con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     ((end - _td(days=k)).isoformat(), "L1", "A", "C-OLD", "Q-OLD", "B1", 200, 200, 0, 0, 75, None))
-    # 'recent' 14 days: contract C-NEW at 60 m/day -> about the 59 expected from the ppi change
-    for k in range(0, 14):
+    for k in range(0, 14):    # 'recent' 14 days: C-NEW at 89 m/day -> about the 89 expected from the ppi change
         con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-NEW", "B2", 60, 60, 0, 0, 75, None))
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-NEW", "B2", 89, 89, 0, 0, 75, None))
     a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
     wv.run(a)
     lh = [f for f in a.findings if f.key.startswith("lhist-L1")]
     assert lh and lh[0].severity == "INFO" and "quality changed" in lh[0].title and "40" in lh[0].title and "90" in lh[0].title
-    # a ppi change that does NOT explain the size of the drop stays a WATCH
+    # a ppi change that does NOT explain the size of the drop stays a WATCH (even after adjusting)
     con.execute("DELETE FROM loom_production WHERE loom_code='L1' AND prod_date > ?", ((end - _td(days=14)).isoformat(),))
     for k in range(0, 14):
         con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-NEW", "B2", 12, 12, 0, 0, 75, None))
+                    ((end - _td(days=k)).isoformat(), "L1", "A", "C-NEW", "Q-NEW", "B2", 30, 30, 0, 0, 75, None))
     a2 = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
     wv.run(a2)
     lh2 = [f for f in a2.findings if f.key.startswith("lhist-L1")]
@@ -2392,7 +2391,7 @@ def test_v0176_same_ppi_quality_change_stays_watch(env):
     wv.run(a)
     lh = [f for f in a.findings if f.key.startswith("lhist-L1")]
     assert lh and lh[0].severity == "WATCH"
-    assert "does not explain" in lh[0].detail and "picks/inch is the same" in lh[0].detail
+    assert "does not explain" in lh[0].detail and "picks/inch and pieces are the same" in lh[0].detail
 
 
 def test_v0176_fabric_thaan_null_shows_blank(env):
@@ -2462,3 +2461,37 @@ def test_v0176_production_grades_include_b_and_shrinkage_finished_only(env):
     assert any("running" in str(r[5]) for r in beams["rows"])            # the on-loom beam is marked running
     shrink = [r for r in secs["balances"]["rows"] if "Shrinkage" in r[0]][0]
     assert "finished beams only" in shrink[0]                             # computed on the one finished beam
+
+
+def test_v0180_ack_persists_until_escalation(env):
+    # Item I: a notification marked read stays read even when its figures change, is viewable under "all
+    # notifications", and only re-shows if it ESCALATES to a higher severity.
+    from smart_layer.web import data as web_data
+    from smart_layer import store as _store
+    cfg, con = env
+    try:
+        d = web_data.build(con, cfg, END)
+        f = next(x for x in d["findings"] if x["severity"] in ("ACTION", "CONFIRMED", "WATCH"))
+        # mark it read at its current severity
+        _store.set_state(con, "acked", {f["id"]: {"title": f["title"], "at": "2026-01-01 00:00",
+                                                   "severity": f["severity"], "last_seen": END.isoformat()}})
+        d2 = web_data.build(con, cfg, END)
+        assert all(x["id"] != f["id"] for x in d2["findings"])            # stays read, not in the active list
+        assert any(x["id"] == f["id"] for x in d2["acknowledged"])        # shown under "all notifications"
+        # had it been read at a LOWER severity, an escalation brings it back
+        _store.set_state(con, "acked", {f["id"]: {"title": f["title"], "at": "2026-01-01 00:00",
+                                                  "severity": "INFO", "last_seen": END.isoformat()}})
+        d3 = web_data.build(con, cfg, END)
+        assert any(x["id"] == f["id"] for x in d3["findings"])            # escalated -> back in the active list
+    finally:
+        _store.set_state(con, "acked", {})
+
+
+def test_v0180_ack_migration_maps_old_keys():
+    # Item I: acks saved under the old volatile keys migrate to the new stable keys so cleared items do not pop back.
+    from smart_layer.web.data import _migrate_acks
+    old = {"Weaving|lhist-L1-2026-10-02-0.4": {"at": "x"}, "Looms|monitor-L1-2026-11-15": {"at": "x"},
+           "Weaving|rej-2026-10-02-LOOM-15-CON-42": {"at": "x"}, "Weaving|nobeam-2026-10-02-LOOM-07": {"at": "x"}}
+    new = _migrate_acks(old)
+    assert "Weaving|lhist-L1" in new and "Looms|monitor-L1" in new
+    assert "Weaving|rej-LOOM-15-CON-42" in new and "Weaving|nobeam-LOOM-07-2026-10-02" in new

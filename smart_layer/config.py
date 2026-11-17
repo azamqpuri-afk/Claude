@@ -23,6 +23,9 @@ DEFAULTS = {
     "reports": {"tracked_issue_days": 90, "reorder_cover_months": 1, "output_dir": "",
                 "retention_weeks": 26,            # saved report files older than this are pruned (0 = keep all)
                 "unused_stock_months": 6,         # the Unused-stock tab flags items not issued for this many months
+                "ack_keep_days": 30,              # a notification marked read stays read; if it then disappears it is
+                                                  # remembered this many days before being forgotten (so a flicker
+                                                  # does not make it pop back, but a real recurrence later does)
                 "combine_counts": []},            # nominal counts that are the same yarn for shortage, e.g. [[52, 54]]
     "sizing": {"gullay_g": 55,                    # grams of yarn left on each returned baby cone (gullay)
                "pick_factor": 1.0936,             # metres-to-yards-ish factor in the closing-count formula
@@ -73,6 +76,10 @@ DEFAULTS = {
         "loom_silent_days": 10,           # a loom silent this many days is an urgent (send-once) phone alert
         "quality_change_days": 2,         # after a new beam / quality, allow this long to mount it ...
         "entry_lag_days": 4,              # ... plus this long to key the first production, before an idle-loom alert
+        "quality_change_erp_grace_days": 3,   # scoreboard shows a new quality but the ERP has not recorded the new
+                                              # beam/contract/production after this many days -> ACTION (alert C)
+        "stoppage_efficiency_floor_pct": 30,  # a day below this monitor efficiency is a stoppage / beam-change /
+                                              # knotting day - left out of the loom's running-days average
         "trial_balance_tolerance": 10,    # rounding differences below this are not an error
         "dismiss": [],                    # [{match = "regex", why = "normal practice ..."}]
     },
@@ -96,6 +103,13 @@ DEFAULTS = {
         # set true/false to force it. grade_labels renames the columns if a mill uses other names.
         "rejection_includes_second": "auto",
         "grade_labels": {},               # e.g. {a = "First", b = "Second", reject = "Rejection"}
+    },
+    "contract_report": {                  # the party-first contract report - see smart_layer/textile/contract_report.py
+        # A fabric OGP whose party_code differs from the contract's party_code is "to another party" (rejection sale
+        # or fabric sold/moved elsewhere): listed on its own tab and kept out of the contract summary and balance.
+        # These let a mill pin specific account codes either way when the party_code test alone is not enough.
+        "other_party_codes": [],          # account codes ALWAYS treated as another party (e.g. a rejection buyer)
+        "same_party_codes": [],           # account codes ALWAYS treated as the contract party (a dyer/godown account)
     },
     "closing": {},                        # the mill's closing method - see smart_layer/textile/method.py
     "pilferage": {},                      # thresholds - see smart_layer/textile/pilferage.py

@@ -29,7 +29,7 @@ def run(a):
     for pd, loom, eff, m in a.q(f"""SELECT p.prod_date, COALESCE(l.loom_name, p.loom_code), {EFF_SQL}, p.meters
             FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
             WHERE p.prod_date BETWEEN ? AND ? AND {EFF_SQL} > 100""", d0, d1):
-        a.add("CONFIRMED" if m >= 150 else "WATCH", "Weaving", f"eff100-{pd}-{loom}",
+        a.add("CONFIRMED" if m >= 150 else "WATCH", "Weaving", f"eff100-{loom}-{pd}",
               f"{loom} {pd}: efficiency {eff:.0f}% (over 100%) on {m:,.0f} m", "meters, shift length or RPM keyed wrong")
 
     # production without a beam - only for ERPs that record beams on production
@@ -38,14 +38,14 @@ def run(a):
         for pd, loom, cn, m in a.q("""SELECT p.prod_date, COALESCE(l.loom_name, p.loom_code), p.contract_no, p.meters
                 FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
                 WHERE p.prod_date BETWEEN ? AND ? AND p.beam_no IS NULL""", d0, d1):
-            a.add("CONFIRMED", "Weaving", f"nobeam-{pd}-{loom}", f"{loom} {pd}: {m:,.0f} m of contract {cn or '?'} entered without a beam")
+            a.add("CONFIRMED", "Weaving", f"nobeam-{loom}-{pd}", f"{loom} {pd}: {m:,.0f} m of contract {cn or '?'} entered without a beam")
 
     # high rejection per loom and contract
     for loom, cn, rej, tot in a.q("""SELECT COALESCE(l.loom_name, p.loom_code), p.contract_no, SUM(COALESCE(p.rejected_m, 0)), SUM(p.meters)
             FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code WHERE p.prod_date BETWEEN ? AND ?
             GROUP BY p.loom_code, p.contract_no HAVING SUM(p.meters) > ? AND SUM(COALESCE(p.rejected_m, 0)) > ? * SUM(p.meters) / 100.0""",
             d0, d1, float(t["rejection_min_meters"]), float(t["rejection_pct"])):
-        a.add("WATCH", "Weaving", f"rej-{d1}-{loom}-{cn}", f"{loom} (contract {cn or '?'}): rejection {100 * rej / tot:.0f}% of {tot:,.0f} m")
+        a.add("WATCH", "Weaving", f"rej-{loom}-{cn}", f"{loom} (contract {cn or '?'}): rejection {100 * rej / tot:.0f}% of {tot:,.0f} m")
 
     # looms that wove recently but have had nothing entered for longer than usual. A new beam / quality change is a
     # normal reason for a gap, so before alerting we check for one and give it a grace period; otherwise we use the
@@ -82,69 +82,104 @@ def run(a):
             detail = f"normally booked every {usual} days - loom stopped, or production not keyed"
         a.add(sev, "Weaving", f"idle-{code}-{last}", f"{loom}: no production entered for {idle} days (last {last})", detail)
 
-    # a loom's output far from its own usual (last 14 days vs the 60 days before). A quality change moves the picks
-    # per inch, which moves the meters at the same effort, so that is not an error - compare the loom's main quality
-    # and, when it changed, report it as INFO with the ppi change instead of a WATCH.
-    recent = dict(a.q("""SELECT loom_code, SUM(meters) / 14.0 FROM loom_production
-                         WHERE prod_date > date(?, '-14 days') AND prod_date <= ? GROUP BY loom_code""", d1, d1))
-    before = a.q("""SELECT p.loom_code, COALESCE(MAX(l.loom_name), p.loom_code), SUM(p.meters) / 60.0 FROM loom_production p
-                    LEFT JOIN looms l ON l.loom_code = p.loom_code
-                    WHERE p.prod_date > date(?, '-74 days') AND p.prod_date <= date(?, '-14 days') GROUP BY p.loom_code""", d1, d1)
+    # A loom's output vs its own usual, REBASED for a quality change. A new quality changes the picks/inch AND the
+    # pieces across the beam, so the meters change at the same effort - not an error. "usual" comes only from the
+    # loom's OLD-quality days and "now" only from its NEW-quality days, both over RUNNING days (a stoppage / beam-
+    # change / knotting day - monitor efficiency below the floor - is left out). expected = usual x old_ppi/new_ppi x
+    # new_pieces/old_pieces. Within tolerance the change fully explains the output -> INFO (out of Needs Attention);
+    # still off beyond tolerance -> WATCH, showing the adjusted expected figure.
+    floor = float(t.get("stoppage_efficiency_floor_pct", 30))
     recent_from = (end - timedelta(days=14)).isoformat()
     before_from, before_to = (end - timedelta(days=74)).isoformat(), (end - timedelta(days=14)).isoformat()
-    for code, loom, usual in before:
-        now = recent.get(code, 0) or 0
-        if not (usual and usual >= 50 and now and (now < 0.5 * usual or now > 1.8 * usual)):
+    eff_by = {}
+    try:
+        for lk, le in a.q("""SELECT loom_code || '|' || read_date, MAX(efficiency_pct) FROM loom_monitor
+                             WHERE read_date > ? GROUP BY loom_code, read_date""", before_from):
+            eff_by[lk] = le
+    except Exception:
+        pass
+
+    def run_avg(code, contract, d_from, d_to):
+        # meters per RUNNING day for this loom on this contract in (d_from, d_to], dropping stoppage/knotting days
+        tot, days = 0.0, 0
+        for pd_, m, pe in a.q("""SELECT prod_date, SUM(meters), MAX(efficiency_pct) FROM loom_production
+                WHERE loom_code = ? AND contract_no = ? AND prod_date > ? AND prod_date <= ? GROUP BY prod_date""",
+                code, contract, d_from, d_to):
+            eff = eff_by.get(f"{code}|{pd_}")
+            if eff is None:
+                eff = pe                                   # fall back to the ERP's own efficiency for the day
+            if eff is not None and eff < floor:
+                continue                                   # stoppage / beam-change / knotting day - leave it out
+            tot += m or 0
+            days += 1
+        return (tot / days) if days else 0
+
+    def pieces_for(code, contract, d_from, d_to):
+        # panels across: the scoreboard's pieces (its meters already count all pieces), else the beam's bwidth, else 1
+        try:
+            r = a.q("""SELECT AVG(pieces) FROM loom_monitor WHERE loom_code = ? AND pieces IS NOT NULL
+                       AND read_date > ? AND read_date <= ?""", code, d_from, d_to)
+            if r and r[0][0]:
+                return r[0][0]
+        except Exception:
+            pass
+        try:
+            r = a.q("SELECT AVG(bwidth) FROM beams WHERE contract_no = ? AND bwidth IS NOT NULL", contract)
+            if r and r[0][0]:
+                return r[0][0]
+        except Exception:
+            pass
+        return 1.0
+
+    names2 = dict(a.q("SELECT loom_code, loom_name FROM looms"))
+    for (code,) in a.q("SELECT DISTINCT loom_code FROM loom_production WHERE prod_date > ? AND prod_date <= ?", before_from, d1):
+        loom = names2.get(code, code)
+        rc = _dom_contract(code, recent_from, d1)          # the loom's current (new) contract
+        bc = _dom_contract(code, before_from, before_to)   # its previous (old) contract
+        if not (rc and bc):
             continue
-        rc, bc = _dom_contract(code, recent_from, d1), _dom_contract(code, before_from, before_to)
-        rq = _quality(rc)
-        changed = bool(rc and bc and rc != bc)
-        # the quality-change date is the FIRST production date of the new contract on this loom - not the first date
-        # inside the recent window (which is wrong when the change happened before the 14-day window opened).
-        qcd = None
-        if changed:
-            qcr = a.q("SELECT MIN(prod_date) FROM loom_production WHERE loom_code = ? AND contract_no = ?", code, rc)
-            qcd = qcr[0][0] if qcr and qcr[0][0] else recent_from
-        op, np_ = (_ppi(bc), _ppi(rc)) if (rc and bc) else (None, None)
-        ppi_changed = bool(op and np_ and abs(op - np_) > 0.01)
-        key = f"lhist-{code}-{d1}"
-        if not changed:
-            # same contract throughout the comparison - a real swing in the loom's own output
-            a.add("WATCH", "Weaving", f"{key}-{round(now / usual, 1)}",
-                  f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
-                  "a big change in the loom's output - stoppage, or entries booked to the wrong loom")
+        usual = run_avg(code, bc, before_from, before_to)  # old quality, before window
+        now = run_avg(code, rc, recent_from, d1)           # new quality, recent window
+        if not (usual >= 50 and now):
             continue
-        # the quality changed, so the 'usual' baseline is the OLD quality and cannot judge the new one. Prefer a
-        # like-for-like baseline: earlier days of the SAME quality on this loom. If there are none, we cannot say the
-        # output is off from history alone - fall back to the picks/inch ratio, and if the ppi did not change either,
-        # report it as INFO ("not enough same-quality history") rather than a false WATCH.
-        sq = a.q("""SELECT SUM(meters) FROM loom_production WHERE loom_code = ? AND quality = ?
-                    AND prod_date > date(?, '-74 days') AND prod_date <= date(?, '-14 days')""", code, rq, d1, d1)
-        sq_usual = ((sq[0][0] or 0) / 60.0) if sq else 0
-        if sq_usual >= 50:
-            if now < 0.5 * sq_usual or now > 1.8 * sq_usual:
-                a.add("WATCH", "Weaving", f"{key}-{round(now / sq_usual, 1)}",
-                      f"{loom}: {now:,.0f} m a day over 14 days vs its usual {sq_usual:,.0f} for the same quality ({now / sq_usual:.1f}x)",
-                      f"compared only against earlier days of quality '{rq}', so the quality change is not the reason - check it")
-            continue
-        if ppi_changed:
-            # expected = usual x old_ppi/new_ppi; within +-25% the picks/inch change explains the meters (INFO)
-            expected = usual * op / np_
-            ratio = (now / expected) if expected else 0
-            if 0.75 <= ratio <= 1.25:
-                a.add("INFO", "Weaving", key, f"{loom}: output changed because the quality changed on {qcd} (ppi {op:g} -> {np_:g})",
-                      f"{now:,.0f} m a day over 14 days vs its usual {usual:,.0f} - about the {expected:,.0f} expected from the picks/inch change")
-            else:
-                a.add("WATCH", "Weaving", f"{key}-{round(now / usual, 1)}",
-                      f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
-                      f"even allowing for the quality change on {qcd} (ppi {op:g} -> {np_:g}, so about {expected:,.0f} m expected) the output is {ratio:.1f}x - check it")
+        if 0.5 <= now / usual <= 1.8:
+            continue                                       # not a material swing - leave it
+        changed = rc != bc
+        op, np_ = _ppi(bc), _ppi(rc)
+        ppi_r = (op / np_) if (op and np_) else 1.0
+        old_pieces, new_pieces = pieces_for(code, bc, before_from, before_to), pieces_for(code, rc, recent_from, d1)
+        pieces_r = (new_pieces / old_pieces) if (old_pieces and new_pieces) else 1.0
+        adjusted = changed and (abs(ppi_r - 1) > 0.01 or abs(pieces_r - 1) > 0.01)
+        expected = usual * ppi_r * pieces_r
+        ratio = (now / expected) if expected else 0
+        key = f"lhist-{code}"   # stable per loom: the changing figures live in the title/detail, not the ack key
+        adj = []
+        if abs(ppi_r - 1) > 0.01 and op and np_:
+            adj.append(f"ppi {op:g}->{np_:g}")
+        if abs(pieces_r - 1) > 0.01:
+            adj.append(f"pieces {old_pieces:g}->{new_pieces:g}")
+        qcr = a.q("SELECT MIN(prod_date) FROM loom_production WHERE loom_code = ? AND contract_no = ?", code, rc) if changed else None
+        qcd = (qcr[0][0] if qcr and qcr[0][0] else recent_from) if changed else None
+        if adjusted and 0.75 <= ratio <= 1.25:
+            # the quality change FULLY explains the output - INFO only, not Needs Attention
+            a.add("INFO", "Weaving", key,
+                  f"{loom}: output changed because the quality changed on {qcd} ({', '.join(adj)})",
+                  f"{now:,.0f} m a day over its running days vs its usual {usual:,.0f} - about the {expected:,.0f} expected from the change")
+        elif adjusted:
+            # still off AFTER adjusting for the quality change - Needs Attention, with the adjusted expected figure
+            a.add("WATCH", "Weaving", key,
+                  f"{loom}: {now:,.0f} m a day vs {expected:,.0f} expected after the quality change ({ratio:.1f}x of expected)",
+                  f"even allowing for the quality change on {qcd} ({', '.join(adj)}, so about {expected:,.0f} m expected) the output is {ratio:.1f}x of that - check it")
+        elif changed:
+            # the quality changed but the picks/inch and pieces are unchanged, so it cannot explain the swing
+            a.add("WATCH", "Weaving", key,
+                  f"{loom}: {now:,.0f} m a day vs its usual {usual:,.0f} ({now / usual:.1f}x)",
+                  f"the quality changed on {qcd} but the picks/inch and pieces are the same, so it does not explain the {now / usual:.1f}x - check it")
         else:
-            # the picks/inch did NOT change, so the meters are directly comparable to the loom's usual - a quality
-            # change that leaves the ppi the same does not explain a big swing. Stays a WATCH (not a soft INFO).
-            ppic = (f"the picks/inch is the same ({op:g})" if (op and np_) else "the picks/inch is not recorded")
-            a.add("WATCH", "Weaving", f"{key}-{round(now / usual, 1)}",
-                  f"{loom}: {now:,.0f} m a day over 14 days vs its usual {usual:,.0f} ({now / usual:.1f}x)",
-                  f"the quality changed on {qcd} but {ppic}, so the quality change does not explain the {now / usual:.1f}x - check it")
+            # same quality throughout - a real swing in the loom's own output
+            a.add("WATCH", "Weaving", key,
+                  f"{loom}: {now:,.0f} m a day vs its usual {usual:,.0f} ({now / usual:.1f}x)",
+                  "a big change in the loom's output with no quality change to explain it - stoppage, or entries booked to the wrong loom")
 
     looms, m, rej = a.q("""SELECT COUNT(DISTINCT loom_code), SUM(meters), SUM(COALESCE(rejected_m, 0))
                            FROM loom_production WHERE prod_date BETWEEN ? AND ?""", d0, d1)[0]

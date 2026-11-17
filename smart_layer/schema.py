@@ -311,7 +311,12 @@ ENTITIES += (
          C("rpm", "REAL", "Average speed"),
          C("stops", "REAL", "Number of stops"),
          C("shift_sec", "REAL", "Total shift time in this reading (seconds) - the weight for a time-based efficiency"),
-         C("picks_per_inch", "REAL", "Picks/inch the monitor measured, if it reports it (optional)")),
+         C("picks_per_inch", "REAL", "Picks/inch the monitor measured, if it reports it (optional)"),
+         C("pieces", "REAL", "Panels/pieces across the beam the monitor reports (e.g. 3 for a 3-panel beam); the "
+                             "monitor's meters already count all pieces. Used to adjust expected output across a "
+                             "quality change (optional)"),
+         C("style", "TEXT", "Style / quality description the monitor shows for the loom (optional) - lets a quality "
+                            "change be detected from the scoreboard even before the ERP records the new beam")),
         date_column="read_date",
     ),
     Entity(

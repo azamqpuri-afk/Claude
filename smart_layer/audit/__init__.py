@@ -16,7 +16,7 @@ Only ACTION and CONFIRMED findings are pushed, each one once.
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from ..reports import Report
@@ -32,6 +32,7 @@ class Finding:
     key: str          # stable id, so a finding is pushed only once
     title: str
     detail: str = ""
+    meta: dict = field(default_factory=dict)   # optional structured data for the dashboard (e.g. a sensor episode to open)
 
 
 def pct(values, p):
@@ -56,12 +57,12 @@ class Audit:
     def window(self):
         return self.d0.isoformat(), self.d1.isoformat()
 
-    def add(self, severity, section, key, title, detail=""):
+    def add(self, severity, section, key, title, detail="", meta=None):
         for rule in self.t.get("dismiss", []):
             if re.search(rule.get("match", "^$"), f"{key} {title}", re.I):
                 severity, detail = "INFO", f"{detail} [normal practice: {rule.get('why', '')}]".strip()
                 break
-        self.findings.append(Finding(severity, section, key, title, detail))
+        self.findings.append(Finding(severity, section, key, title, detail, meta or {}))
 
     def learn(self):
         start = (self.d1 - timedelta(days=120)).isoformat()

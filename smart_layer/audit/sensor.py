@@ -5,7 +5,9 @@ A stopped loom's sensor fitted onto a running loom makes the scoreboard count ON
 then stop and restart on the same second, while the stopped loom produces nothing. This rule finds that, from the
 raw stop log (the loom_stops entity - only mills whose monitor exports per-stop timings have it).
 
-  - a "twin stop" = two looms stop within tol_seconds AND restart within tol_seconds of each other
+  - a "twin stop" = two looms stop within tol_seconds AND either restart within tol_seconds of each other, OR both
+    have no restart time recorded (both still stopped), OR - when only one has a restart - their NEXT stops also
+    match within tol_seconds (so a same-second stop with a blank restart is not silently dropped)
   - stops that hit more than max_simultaneous looms at once (power cuts, the monitor's polling bursts) are left out
   - twin stops of one pair no more than gap_minutes apart are one EPISODE (they move a sensor for a while, then
     put it back); an episode is CONFIRMED when it has min_twins+ twin stops that are min_share+ of the smaller
@@ -23,6 +25,7 @@ This rule does NOT use the audit's date window: it always looks at the most rece
 the same from the daily audit and from the 5-minute live run.
 """
 
+import bisect
 import re
 from datetime import datetime, timedelta
 
@@ -89,8 +92,8 @@ def episodes(rows, t):
     pos = build_positions(t)
     ev = []
     for loom, stop, restart in rows:
-        s, r = _parse(stop), _parse(restart)
-        if loom is not None and s and r:
+        s, r = _parse(stop), _parse(restart)             # r may be None - a stop with no restart time yet
+        if loom is not None and s:
             ev.append((str(loom), s, r))
     ev.sort(key=lambda e: e[1])
     if not ev:
@@ -98,16 +101,36 @@ def episodes(rows, t):
     # OPEN (still-stopped) stops can all carry the latest poll second as their "restart" on some monitors, which
     # would look like a twin. Drop that block ONLY when 3+ looms share the newest restart second (the tell-tale of
     # a rewritten poll time); when just 1-2 looms sit at the newest second they are genuine just-restarted stops -
-    # keep them (and the next sync re-reads them anyway). Monitors that instead leave open stops NULL never hit this.
-    poll = max(r for _, _, r in ev)
-    open_s = float(t["open_stop_seconds"])
-    if len({e[0] for e in ev if (poll - e[2]).total_seconds() <= open_s}) >= 3:
-        ev = [e for e in ev if (poll - e[2]).total_seconds() > open_s]
+    # keep them (and the next sync re-reads them anyway). Rows with NO restart time are real open stops - kept.
+    restarts = [r for _, _, r in ev if r]
+    if restarts:
+        poll = max(restarts)
+        open_s = float(t["open_stop_seconds"])
+        if len({e[0] for e in ev if e[2] and (poll - e[2]).total_seconds() <= open_s}) >= 3:
+            ev = [e for e in ev if not (e[2] and (poll - e[2]).total_seconds() <= open_s)]
     if not ev:
         return []
-    times = {}                                           # loom -> sorted stop times (all stops, for the share)
+    times = {}                                           # loom -> sorted stop times (all stops, for the share + next-stop)
     for loom, s, _ in ev:
         times.setdefault(loom, []).append(s)
+    for arr in times.values():
+        arr.sort()
+
+    def next_stop(loom, s):                              # the loom's next stop after time s, or None
+        arr = times.get(loom, [])
+        k = bisect.bisect_right(arr, s)
+        return arr[k] if k < len(arr) else None
+
+    def is_twin(a, b):
+        # a, b = (loom, stop, restart|None), already within tol on the STOP second. Decide on the restart:
+        ra, rb = a[2], b[2]
+        if ra and rb:
+            return abs((ra - rb).total_seconds()) <= tol        # both restarts known: must match
+        if ra is None and rb is None:
+            return True                                         # both still stopped: a twin
+        na, nb = next_stop(a[0], a[1]), next_stop(b[0], b[1])   # one blank: confirm via the NEXT stops matching
+        return bool(na and nb and abs((na - nb).total_seconds()) <= tol)
+
     twins = {}                                           # (a, b) -> [stop times of a in the twin]
     n, i = len(ev), 0
     lo, hi = 2, int(t["max_simultaneous"])
@@ -121,7 +144,7 @@ def episodes(rows, t):
             for x in range(len(grp)):
                 for y in range(x + 1, len(grp)):
                     a, b = grp[x], grp[y]
-                    if a[0] != b[0] and abs((a[2] - b[2]).total_seconds()) <= tol:
+                    if a[0] != b[0] and abs((a[1] - b[1]).total_seconds()) <= tol and is_twin(a, b):
                         twins.setdefault(tuple(sorted((a[0], b[0]))), []).append(a[1])
         i = j + 1 if j > i else i + 1
     out = []
@@ -159,7 +182,7 @@ def run(a):
         return
     since = (datetime.fromisoformat(str(last_date)[:10]) - timedelta(days=2)).date().isoformat()
     rows = a.q("""SELECT loom_code, stop_time, restart_time FROM loom_stops
-                  WHERE stop_date >= ? AND stop_time IS NOT NULL AND restart_time IS NOT NULL
+                  WHERE stop_date >= ? AND stop_time IS NOT NULL
                   ORDER BY stop_time""", since)
     names = dict(a.q("SELECT loom_code, loom_name FROM looms"))
     nm = lambda c: names.get(c) or names.get(str(_loom_num(c))) or f"loom {c}"   # noqa: E731
@@ -167,18 +190,49 @@ def run(a):
         na, nb = nm(ep["a"]), nm(ep["b"])
         where = {"neighbours": " (next to each other)", "near": " (near each other)",
                  "far": " (far apart)", "unknown": ""}[ep["near"]]
+        window = f"{ep['first']:%d-%b %H:%M:%S} to {ep['last']:%H:%M:%S}"
+        # structured data so the dashboard can OPEN both looms' stop timeline for the episode window (CCTV match)
+        meta = {"kind": "sensor", "a": ep["a"], "b": ep["b"], "name_a": na, "name_b": nb,
+                "from": (ep["first"] - timedelta(minutes=10)).isoformat(sep=" ", timespec="seconds"),
+                "to": (ep["last"] + timedelta(minutes=10)).isoformat(sep=" ", timespec="seconds"),
+                "twins": ep["twins"], "share": round(ep["share"], 2),
+                "first": ep["first"].isoformat(sep=" ", timespec="seconds"),
+                "last": ep["last"].isoformat(sep=" ", timespec="seconds")}
         if ep["confirmed"]:
             a.add("ACTION", "Looms", f"sensor-{ep['a']}-{ep['b']}-{ep['first']:%Y%m%d%H%M}",
-                  f"{na} and {nb}{where}: {ep['twins']} same-second stops since {ep['first']:%d-%b %H:%M} "
-                  f"({ep['share']:.0%} of their stops)",
+                  f"{na} and {nb}{where}: {ep['twins']} same-second stops {window} ({ep['share']:.0%} of their stops)",
                   "one loom's sensor may be fitted on the other (the scoreboard then counts one loom twice) - "
-                  "check both looms now")
+                  "check both looms now", meta=meta)
         elif ep["twins"] >= 3 and ep["near"] != "far":
             a.add("WATCH", "Looms", f"sensor-maybe-{ep['a']}-{ep['b']}-{ep['first']:%Y%m%d%H%M}",
-                  f"{na} and {nb}{where}: {ep['twins']} same-second stops since {ep['first']:%d-%b %H:%M} "
-                  f"({ep['share']:.0%} of their stops)",
-                  "a possible sensor move (below the alert threshold) - watch it")
+                  f"{na} and {nb}{where}: {ep['twins']} same-second stops {window} ({ep['share']:.0%} of their stops)",
+                  "a possible sensor move (below the alert threshold) - watch it", meta=meta)
     _stale(a, t)
+
+
+def episode_timeline(con, cfg, a_code, b_code, t_from, t_to):
+    """Both looms' stop timeline for an episode window, so the owner can match it against CCTV. Returns
+    {rows:[{loom, name, stop, restart, twin}]} - twin marks a stop the two share within the tolerance."""
+    t = settings(cfg)
+    tol = float(t["tol_seconds"])
+    names = dict(con.execute("SELECT loom_code, loom_name FROM looms").fetchall())
+    nm = lambda c: names.get(c) or names.get(str(_loom_num(c))) or f"loom {c}"   # noqa: E731
+    out = {a_code: [], b_code: []}
+    for loom in (a_code, b_code):
+        for lc, s, r in con.execute("""SELECT loom_code, stop_time, restart_time FROM loom_stops
+                WHERE loom_code = ? AND stop_time >= ? AND stop_time <= ? ORDER BY stop_time""",
+                (loom, t_from, t_to)).fetchall():
+            out[loom].append([s, r])
+    other = {a_code: b_code, b_code: a_code}
+    rows = []
+    for loom in (a_code, b_code):
+        others = [_parse(s) for s, _ in out[other[loom]]]
+        for s, r in out[loom]:
+            sp = _parse(s)
+            twin = bool(sp and any(o and abs((sp - o).total_seconds()) <= tol for o in others))
+            rows.append({"loom": loom, "name": nm(loom), "stop": s, "restart": r, "twin": twin})
+    rows.sort(key=lambda x: str(x["stop"]))
+    return {"from": t_from, "to": t_to, "rows": rows}
 
 
 def _stale(a, t):

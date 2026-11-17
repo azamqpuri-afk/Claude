@@ -615,9 +615,10 @@ class App:
                 pass
         return res
 
-    def acknowledge(self, fid, title="", who="", undo=False):
-        """Mark a Needs-attention finding read (or restore it). Kept in the local store's state by its fingerprint,
-        so it stays cleared across refreshes and syncs until the same finding recurs."""
+    def acknowledge(self, fid, title="", who="", undo=False, severity=""):
+        """Mark a Needs-attention finding read (or restore it). Kept in the local store's state by its STABLE
+        fingerprint with the severity it was read at, so it stays read even as its figures change and only returns
+        if it escalates; 'undo' restores it to unread."""
         from datetime import datetime
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
@@ -625,7 +626,10 @@ class App:
             if undo:
                 acked.pop(fid, None)
             elif fid:
-                acked[fid] = {"title": str(title)[:200], "by": str(who)[:60], "at": datetime.now().strftime("%Y-%m-%d %H:%M")}
+                today = datetime.now().strftime("%Y-%m-%d")
+                acked[fid] = {"title": str(title)[:200], "by": str(who)[:60],
+                              "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                              "severity": (severity or "WATCH"), "last_seen": today}
             store.set_state(con, "acked", acked)
             return {"ok": True, "count": len(acked)}
         finally:
@@ -693,6 +697,15 @@ class App:
         try:
             live = _data._scb_today(con, self.cfg)
             return {"live": live, "sensor": looms.sensor_live(con, self.cfg)}
+        finally:
+            con.close()
+
+    def sensor_episode(self, a_code, b_code, t_from, t_to):
+        """Both looms' stop timeline for a sensor-swap episode (Open from a Needs-attention item, item D)."""
+        from ..audit import sensor
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return sensor.episode_timeline(con, self.cfg, a_code, b_code, t_from, t_to)
         finally:
             con.close()
 
@@ -860,7 +873,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
                 "/api/edits", "/api/edits/detail",
                 "/api/looms/efficiency", "/api/looms/days",
-                "/api/scoreboard", "/api/scoreboard/trend", "/api/scoreboard/live",
+                "/api/scoreboard", "/api/scoreboard/trend", "/api/scoreboard/live", "/api/sensor/episode",
                 "/api/purchasing", "/api/purchasing/item",
                 "/api/reports/files", "/api/changes"):
         if check_licence:
@@ -981,6 +994,12 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.loom_efficiency(a0, a1, picked), "application/json", {}
         if path == "/api/scoreboard/live":               # live running-shift scoreboard + sensor live panel (#29)
             return 200, app.scoreboard_live(), "application/json", {}
+        if path == "/api/sensor/episode":                # both looms' stop timeline for a sensor-swap episode (item D)
+            a0, b0 = params.get("a", ""), params.get("b", "")
+            tf, tt = params.get("from", ""), params.get("to", "")
+            if not (a0 and b0 and tf and tt):
+                return 400, {"error": "a, b, from, to required"}, "application/json", {}
+            return 200, app.sensor_episode(a0, b0, tf, tt), "application/json", {}
         if path == "/api/scoreboard/trend":              # per-date shed ERP vs scoreboard eff, for the compare panel
             try:
                 a0 = date.fromisoformat(params["from"]) if params.get("from") else None
@@ -1187,7 +1206,8 @@ def handler(app):
                     n = min(int(self.headers.get("Content-Length", 0)), 20000)
                     body = json.loads(self.rfile.read(n) or b"{}")
                     return self._send(200, app.acknowledge(str(body.get("id", ""))[:200], body.get("title", ""),
-                                                           body.get("who", ""), bool(body.get("undo"))))
+                                                           body.get("who", ""), bool(body.get("undo")),
+                                                           str(body.get("severity", ""))[:12]))
                 except Exception as e:
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path == "/api/closing/counts":       # save edited closing counts (dashboard password already checked)

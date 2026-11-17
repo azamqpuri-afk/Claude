@@ -743,7 +743,9 @@ function render(){
   $("#asof").textContent = "as of " + dshort(D.as_of) + (_s.live_at? " · live sync "+String(_s.live_at).slice(11,16) : (D.synced_at? " · synced "+String(D.synced_at).slice(11,16) : ""));
   $("#asof").style.color = (_s.stale) ? "var(--red)" : "";
   renderSync();
-  if($("#day") && !$("#day").value && D.as_of) $("#day").value = D.as_of;
+  // Do NOT auto-fill the date box with as_of: the live feed and tiles must show TODAY unless the user picks a date.
+  // The box stays empty until the user explicitly chooses one (tracked by userPickedDay on its change event); with
+  // no pick the feed/tiles call the APIs with no date, so the server returns today (or the latest day with entries).
   var k=D.kpis||{};
   // attention - collapsible so it never covers the page
   var fs=D.findings||[];
@@ -755,16 +757,17 @@ function render(){
   } else {
     cnt.textContent = fs.length + (fs.length===1?" item":" items");
     var ack=D.acknowledged||[];
-    strip.innerHTML = fs.map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">— ${esc(f.detail)}</span>`:""}<button class="ackbtn" data-ack="${esc(f.id||"")}" data-ackt="${esc(f.title)}" title="I have seen this — clear it">✓ Mark read</button><span class="go">Open ›</span></div>`).join("")
-      + (ack.length?`<div class="ackfoot">${ack.length} marked read · <a href="#" id="ack-show">show</a><div id="ack-list" hidden style="margin-top:4px"></div></div>`:"");
+    strip.innerHTML = fs.map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">— ${esc(f.detail)}</span>`:""}<button class="ackbtn" data-ack="${esc(f.id||"")}" data-ackt="${esc(f.title)}" data-sev="${esc(f.severity)}" title="I have seen this — clear it">✓ Mark read</button><span class="go">Open ›</span></div>`).join("")
+      + (ack.length?`<div class="ackfoot">${ack.length} marked read · <a href="#" id="ack-show">show all notifications</a><div id="ack-list" hidden style="margin-top:6px"></div></div>`:"");
     strip.querySelectorAll(".alert").forEach(a=>a.onclick=(e)=>{ if(e.target.closest(".ackbtn")) return; openFinding(fs[+a.dataset.fi]); });
-    strip.querySelectorAll(".ackbtn").forEach(bn=>bn.onclick=(e)=>{ e.stopPropagation(); markRead(bn.getAttribute("data-ack"), bn.getAttribute("data-ackt"), false); });
+    strip.querySelectorAll(".ackbtn").forEach(bn=>bn.onclick=(e)=>{ e.stopPropagation(); markRead(bn.getAttribute("data-ack"), bn.getAttribute("data-ackt"), false, bn.getAttribute("data-sev")); });
     var showA=$("#ack-show");
     if(showA) showA.onclick=(e)=>{ e.preventDefault(); var l=$("#ack-list");
       if(l.hidden){ l.hidden=false; showA.textContent="hide";
-        l.innerHTML=ack.map(a=>`<div class="ackrow"><span>${esc(a.title||a.id)}</span><span class="muted">${esc(a.at||"")}</span><a href="#" data-unack="${esc(a.id)}">↩ restore</a></div>`).join("");
-        l.querySelectorAll("[data-unack]").forEach(x=>x.onclick=(ev)=>{ ev.preventDefault(); markRead(x.getAttribute("data-unack"), "", true); });
-      } else { l.hidden=true; showA.textContent="show"; } };
+        l.innerHTML=ack.map((a,i)=>`<div class="alert ${esc(a.severity)}" style="opacity:.55" data-ri="${i}"><span class="t">${esc(a.title)}</span>${a.detail?`<span class="d">— ${esc(a.detail)}</span>`:""}<span class="muted" style="margin-left:auto;font-size:11px;white-space:nowrap">read ${esc(String(a.read_at||"").slice(0,10))}</span><a href="#" class="unack" data-unack="${esc(a.id)}" style="margin-left:10px;white-space:nowrap">↩ mark unread</a><span class="go">Open ›</span></div>`).join("");
+        l.querySelectorAll(".alert").forEach(x=>x.onclick=(ev)=>{ if(ev.target.closest(".unack")) return; openFinding(ack[+x.dataset.ri]); });
+        l.querySelectorAll("[data-unack]").forEach(x=>x.onclick=(ev)=>{ ev.preventDefault(); ev.stopPropagation(); markRead(x.getAttribute("data-unack"), "", true, ""); });
+      } else { l.hidden=true; showA.textContent="show all notifications"; } };
     btn.style.display=""; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length);
     btn.onclick=()=>{ attOpen=!attOpen; strip.hidden=!attOpen; btn.textContent=attOpen?"Hide":("Show "+fs.length); };
   }
@@ -814,10 +817,10 @@ function render(){
   if(!STATIC_DATA){ lastCursor = (D.change_cursor!=null? D.change_cursor : lastCursor); prevKpis = D.kpis || null; prevFindingIds = new Set((D.findings||[]).map(f=>f.id)); }
 }
 
-async function markRead(id, title, undo){
+async function markRead(id, title, undo, severity){
   if(STATIC_DATA || !id) return;                         // clearing needs the live server
   try{ await fetch("api/ack",{method:"POST",headers:{"Content-Type":"application/json"},
-       body:JSON.stringify({id:id, title:title||"", undo:!!undo})}); load(); }   // reload so counts + strip update
+       body:JSON.stringify({id:id, title:title||"", undo:!!undo, severity:severity||""})}); load(); }   // reload so counts + strip update
   catch(e){}
 }
 
@@ -2346,10 +2349,25 @@ const SECTION_TAB={Weaving:"weaving",Looms:"weaving",Beams:"weaving",Yarn:"yf",S
 var findTerm="";
 function openFinding(f){
   if(!f) return;
+  if(f.meta && f.meta.kind==="sensor"){ openSensorEpisode(f.meta); return; }   // item D: show both looms' stop timeline
   setTab(SECTION_TAB[f.section]||"overview");
   var m=((f.title||"")+" "+(f.detail||"")).match(/\b([A-Z][A-Z0-9]*-[A-Z0-9]+|LOOM[-\s]?\w+|\d{5,})\b/);
   findTerm = m ? m[1] : "";
   setTimeout(applyFilter,500); setTimeout(applyFilter,1400);   // tables on some tabs load a moment later
+}
+
+async function openSensorEpisode(m){
+  var head="Sensor-swap timeline — "+esc(m.name_a||m.a)+" & "+esc(m.name_b||m.b);
+  openDrawer(head, '<div class="muted">Loading…</div>');
+  try{
+    var u="api/sensor/episode?a="+encodeURIComponent(m.a)+"&b="+encodeURIComponent(m.b)
+         +"&from="+encodeURIComponent(m.from)+"&to="+encodeURIComponent(m.to);
+    var j=await (await fetch(u)).json();
+    var rows=(j.rows||[]).map(r=>`<tr class="${r.twin?'hit':''}"><td>${esc(r.name)}</td><td>${esc(String(r.stop||'').slice(0,19))}</td><td>${esc(String(r.restart||'').slice(11,19)||'—')}</td><td>${r.twin?'● twin':''}</td></tr>`).join("");
+    openDrawer(head,
+      `<p class="muted" style="margin:0 0 8px">${esc(String(m.twins||''))} same-second stops · ${esc(String(m.first||'').slice(0,19))} → ${esc(String(m.last||'').slice(11,19))}. Twin stops (both looms stop on the same second) are highlighted — match them against the CCTV for that minute.</p>`
+      +`<table><thead><tr><th>Loom</th><th>Stop</th><th>Restart</th><th></th></tr></thead><tbody>${rows||'<tr><td colspan="4" class="muted">No stops in this window.</td></tr>'}</tbody></table>`);
+  }catch(e){ openDrawer(head, '<div class="muted">Could not load the timeline.</div>'); }
 }
 
 /* ---------- highlight the record a finding points to ---------- */

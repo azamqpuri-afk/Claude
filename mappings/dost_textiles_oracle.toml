@@ -362,7 +362,8 @@ SELECT PDATE AS read_date, PMACH AS loom_code,
        SUM(IIF(PPINCH > 0, PPROD * PDELV / (PPINCH * 39.37), 0)) AS meters,
        IIF(SUM(PSHFTDUR) > 0, 100 * (SUM(PSHFTDUR) - SUM(PTSTPDUR)) / SUM(PSHFTDUR), NULL) AS efficiency_pct,
        AVG(IIF(PRPM > 0, PRPM, NULL)) AS rpm, SUM(PWRP + PUD) AS stops, SUM(PSHFTDUR) AS shift_sec,
-       AVG(IIF(PPINCH > 0, PPINCH, NULL)) AS picks_per_inch
+       AVG(IIF(PPINCH > 0, PPINCH, NULL)) AS picks_per_inch,
+       MAX(PDELV) AS pieces, MAX(PSTYLEDESC) AS style
 FROM RTLSUM WHERE PDATE >= :since GROUP BY PDATE, PMACH, PSHIFT
 """
 

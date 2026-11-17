@@ -130,6 +130,17 @@ the mapping/config, never the core).
 | 3 | After the copy the installer re-enables the tasks, removes the flag, and (on an already-configured install) restarts the Dashboard and Live tasks — the existing Interactive/`run_hidden.vbs` logon is preserved, never reset to password logon | `installer/SmartLayer.iss` (`CurStepChanged`) |
 | 4 | `CloseApplications=force` + `RestartApplications=no` as an extra Restart-Manager safety net | `installer/SmartLayer.iss` |
 
+## New in 0.18.0 (weaving/monitor audit accuracy, sensor, feed, notifications)
+
+| # | What it does | Where |
+|---|--------------|-------|
+| 1 | **Over/under-production rebased for a quality change.** Expected = usual × old_ppi/new_ppi × new_pieces/old_pieces; "usual" from the loom's OLD-quality running days and "now" from its NEW-quality running days, dropping stoppage/beam-change days (monitor efficiency below the configurable floor). Fully explained → INFO (out of Needs Attention); still off after adjusting → stays, with the adjusted expected figure. ppi/pieces/quality change read from the ERP contract **or** the scoreboard | Audit → Weaving · `audit/weaving.py` · `[audit] stoppage_efficiency_floor_pct` · `loom_monitor.pieces`/`.style` |
+| 2 | **ERP vs loom-monitor compared cut-to-cut**: the window ends at the loom's last ERP cut and starts just after the previous cut, so uncut cloth on the loom is not counted against the ERP | Audit → Looms · `audit/monitor.py` |
+| 3 | **New alert — "quality change not entered in the ERP"**: the scoreboard shows a new style/ppi on a loom but after the grace period the ERP still has the old beam/contract and no new beam issue | Audit → Looms · `audit/monitor.py` · `[audit] quality_change_erp_grace_days` |
+| 4 | **Sensor-swap twin stops now count stops with no restart time** (both blank → twin; one blank → twin if the next stops also match); episodes show in Needs Attention with the pair, first→last time, count and share, and **Open** shows both looms' stop timeline for the window (CCTV match) | Audit → Looms · `audit/sensor.py` · `api/sensor/episode` |
+| 5 | **Live feed / tiles honour today**: the date box is used only when the owner explicitly picks a date, so the feed shows today (or the latest day with entries) instead of yesterday's as-of | Overview · `web/dashboard.html` |
+| 6 | **Notifications marked read stay read.** Stable finding keys (type + subject, never dates/ratios); a read item returns only if it escalates; a vanished item is remembered `ack_keep_days` before being forgotten; "show all notifications" lists read items greyed with the read date, Open, and "mark unread"; old acks migrate to the new keys | Overview · `web/data.py`, `web/server.py`, `web/dashboard.html` · `[reports] ack_keep_days` |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |
