@@ -2746,6 +2746,43 @@ def test_v0184_set_shrink_uses_panels_during_beam_run(env):
     assert 2 < float(str(cline[1]).rstrip("%")) < 7
 
 
+def test_v0185_panels_fallback_bwidth_and_unknown(env):
+    # 0.18.5: for OLD contracts with no in-window scoreboard data, panels fall back to bwidth (the ERP pieces field),
+    # marked "panels assumed", NOT the loom's current mode. When even bwidth is unknown, the row shows "—" and is left
+    # out of the contract shrinkage line rather than printing a misleading %.
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.execute("CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, meters REAL, pieces REAL)")
+    con.execute("CREATE TABLE sized_sets (set_no TEXT, set_date TEXT, sizer_name TEXT, contract_no TEXT, ends REAL, "
+                "set_length_m REAL, bags REAL, gullay_kg REAL, waste_kg REAL, yarn_sent_kg REAL)")
+    con.execute("INSERT INTO contracts (contract_no, picks_per_inch) VALUES ('OLD', 42)")
+    con.execute("INSERT INTO looms VALUES ('L5','LOOM-5')")
+    # No loom_monitor rows in the beam's window (pre-monitor). A running beam in the snapshot carries bwidth = 3.
+    con.execute("INSERT INTO beams VALUES ('B1','on_loom','SA','OLD','L5',NULL,0,2500,1,2000,'2025-11-01',NULL,3)")
+    con.execute("INSERT INTO sized_sets VALUES ('SA','2025-11-01','SZ','OLD',9000,2500,10,0,0,9000)")
+    # finished beam B2 of set SA: no window data, no snapshot row -> uses the contract's bwidth (3), marked assumed
+    con.execute("INSERT INTO beam_movements VALUES ('2025-11-01','G','B2','to_loom',NULL,'SA','OLD','L5',2500,0)")
+    con.execute("INSERT INTO beam_movements VALUES ('2025-11-20','G','B2','from_loom_finished',NULL,'SA','OLD','L5',2500,7470)")
+    secs = {s["key"]: s for s in cr.contract_report(con, cfg, "OLD")["sections"]}
+    srow = secs["sets"]["rows"][0]
+    scell = str(srow[secs["sets"]["columns"].index("Shrink %")])
+    assert "assumed" in scell and "-5" not in scell       # 7470/3=2490 vs 2500 ~ 0.4%, tagged assumed
+    assert 0 < float(scell.split("%")[0]) < 3
+
+    # a contract with NO bwidth anywhere and no monitor -> panels unknown -> "—" and excluded from the contract line
+    con.execute("INSERT INTO contracts (contract_no, picks_per_inch) VALUES ('UNK', 42)")
+    con.execute("INSERT INTO beam_movements VALUES ('2025-11-01','G','C1','to_loom',NULL,'SB','UNK','L5',3000,0)")
+    con.execute("INSERT INTO beam_movements VALUES ('2025-11-20','G','C1','from_loom_finished',NULL,'SB','UNK','L5',3000,9000)")
+    con.execute("INSERT INTO sized_sets VALUES ('SB','2025-11-01','SZ','UNK',9000,3000,10,0,0,9000)")
+    u = {s["key"]: s for s in cr.contract_report(con, cfg, "UNK")["sections"]}
+    assert str(u["sets"]["rows"][0][u["sets"]["columns"].index("Shrink %")]) == "—"
+    beam_pct = str(u["beams"]["rows"][0][u["beams"]["columns"].index("Short/extra %")])
+    assert beam_pct == "—"
+    cline = [r for r in u["balances"]["rows"] if "Shrinkage" in str(r[0])][0]
+    assert "not known" in str(cline[1])                   # excluded from the line, not a misleading %
+
+
 def test_v0181_quality_summary_combined_columns(env):
     # 0.18.1: in quality mode, when the quality's warp/weft are the same count every contract combines its yarn, so the
     # per-contract summary shows one "Yarn recv/bal" pair and drops the always-zero weft columns.
