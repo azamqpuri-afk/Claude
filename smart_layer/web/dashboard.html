@@ -1179,12 +1179,18 @@ async function drawWeftCheck(contract){
     if(contract){
       var j=await (await fetch("api/weft?contract="+encodeURIComponent(contract)+"&period=month")).json();
       var c=j.compare||{};
-      var head=`<thead><tr><th>Month</th><th class="num">Scoreboard kg</th><th class="num">ERP kg</th><th class="num">Diff</th><th class="num">%</th></tr></thead>`;
-      var body=(j.periods||[]).map(r=>`<tr><td>${esc(r.period)}</td>${cell(r)}</tr>`).join("");
+      var pcell=p=>p==null?"—":(p>0?"+":"")+p+"%";
+      // running totals are the primary columns; the plain month is secondary (weft is issued in lots ahead of use)
+      var head=`<thead><tr><th>Month</th><th class="num">Running scoreboard</th><th class="num">Running ERP</th>`+
+        `<th class="num">Running diff</th><th class="num">Running %</th><th class="num muted">Month scb</th><th class="num muted">Month ERP</th></tr></thead>`;
+      var body=(j.periods||[]).map(r=>`<tr${r.flag?' class="lowrow"':''}><td>${esc(r.period)}</td>`+
+        `<td class="num">${num(r.cum_scoreboard_kg)}</td><td class="num">${num(r.cum_erp_kg)}</td>`+
+        `<td class="num">${(r.cum_diff_kg>0?"+":"")+num(r.cum_diff_kg)}</td><td class="num">${pcell(r.cum_pct)}${r.flag?' <span class="tag out">⚠</span>':''}</td>`+
+        `<td class="num muted">${num(r.scoreboard_kg)}</td><td class="num muted">${num(r.erp_kg)}</td></tr>`).join("");
       $("#drawer-title").innerHTML="⚖ Weft — contract "+esc(contract);
       $("#drawer-body").innerHTML=`<p class="muted">Contract total: scoreboard <b>${num(c.scoreboard_kg)}</b> vs ERP <b>${num(c.erp_kg)}</b> kg `+
-        `(diff ${c.pct==null?"—":(c.pct>0?"+":"")+c.pct+"%"}${c.flag?" ⚠ beyond tolerance":""}).</p>`+
-        `<div class="tscroll"><table>${head}<tbody>${body||'<tr><td colspan="5" class="muted">No weft movement.</td></tr>'}</tbody></table></div>`+
+        `(diff ${pcell(c.pct)}${c.flag?" ⚠ beyond tolerance":""}). The running difference is weft lying at the looms (issued but not yet woven), or — if negative — woven beyond what the ERP shows issued.</p>`+
+        `<div class="tscroll"><table>${head}<tbody>${body||'<tr><td colspan="7" class="muted">No weft movement.</td></tr>'}</tbody></table></div>`+
         `<p style="margin-top:8px"><button class="btn ghost" onclick="drawWeftCheck()">‹ All contracts</button></p>`;
       return;
     }

@@ -256,14 +256,23 @@ def weft_by_period(con, cfg, contract, period="month"):
             WHERE contract_no=? AND move_type IN ('to_looms','from_looms') AND move_date>=?""", (contract, fs)):
         k = _period_key(str(dd), period)
         erp[k] = erp.get(k, 0) + (kg if mt == "to_looms" else -kg)
-    out = []
+    # CUMULATIVE view: weft is issued in lots ahead of use, so a single month swings wildly (−80% then +100%). The
+    # running totals are what matter - the running difference is weft lying at the looms (issued, not yet woven) or,
+    # if negative, woven beyond what the ERP shows issued. Flag on the RUNNING figure; keep the plain month as extra.
+    out, cs, ce = [], 0.0, 0.0
     for k in sorted(set(scb) | set(erp)):
         sc, e = scb.get(k, 0), erp.get(k, 0)
-        d = sc - e
+        cs += sc
+        ce += e
+        d, cd = sc - e, cs - ce
         pct = (100.0 * d / e) if e else None
-        out.append({"period": k, "scoreboard_kg": round(sc), "erp_kg": round(e), "diff_kg": round(d),
+        cpct = (100.0 * cd / ce) if ce else None
+        out.append({"period": k,
+                    "scoreboard_kg": round(sc), "erp_kg": round(e), "diff_kg": round(d),
                     "pct": (round(pct, 1) if pct is not None else None),
-                    "flag": bool(pct is not None and abs(pct) > tol)})
+                    "cum_scoreboard_kg": round(cs), "cum_erp_kg": round(ce), "cum_diff_kg": round(cd),
+                    "cum_pct": (round(cpct, 1) if cpct is not None else None),
+                    "flag": bool(cpct is not None and abs(cpct) > tol)})
     return out
 
 

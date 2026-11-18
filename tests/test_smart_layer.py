@@ -2952,6 +2952,9 @@ def test_vJ_weft_check(env):
     assert cmp["pct"] is not None
     per = weft_check.weft_by_period(con, cfg, "74", "month")
     assert per and per[0]["period"] == "2026-11" and per[0]["erp_kg"] == 2082
+    # the period view carries running (cumulative) totals, flagged on the running figure
+    assert per[0]["cum_erp_kg"] == 2082 and per[0]["cum_scoreboard_kg"] == per[0]["scoreboard_kg"]
+    assert "cum_diff_kg" in per[0] and "cum_pct" in per[0]
     ov = weft_check.weft_overview(con, cfg)
     assert any(r["contract"] == "74" for r in ov["rows"])
 
