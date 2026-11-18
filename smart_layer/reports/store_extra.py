@@ -103,10 +103,12 @@ def unused_stock(con, cfg, as_of=None):
     months = int(cfg["reports"].get("unused_stock_months", 6))
     cutoff = (as_of - timedelta(days=int(months * 30.44))).isoformat()
     cur = cfg["company"]["currency"]
+    from .stock import _locations
     stock = dict(con.execute("SELECT item_code, SUM(qty) FROM stock_balances GROUP BY item_code"))
     last_issue = dict(con.execute("SELECT item_code, MAX(doc_date) FROM store_issues GROUP BY item_code"))
     names = {c: n for c, n in con.execute("SELECT item_code, item_name FROM items")}
     heads = _item_heads(con)                              # item 30e
+    locs = _locations(con)                                # item O: rack/shelf location
     rows = []
     for code, qty in stock.items():
         if (qty or 0) <= 0:
@@ -118,19 +120,22 @@ def unused_stock(con, cfg, as_of=None):
                             ORDER BY doc_date DESC, doc_no DESC LIMIT 1""", (code,)).fetchone()
         rate = lp[1] if lp else None
         value = round((qty or 0) * rate) if rate else None
-        rows.append([names.get(code, code), code, heads.get(code, ""), round(qty, 2), li or "never", lp[0] if lp else None,
-                     round(rate) if rate else None, value])
-    rows.sort(key=lambda x: -(x[7] or 0))
-    total = sum((r[7] or 0) for r in rows)
-    summary = [f"{len(rows)} item(s) in stock with no issue for {months}+ months, tying up about {cur} {total:,.0f}."]
+        rows.append([names.get(code, code), locs.get(code) or "—", code, heads.get(code, ""), round(qty, 2),
+                     li or "never", lp[0] if lp else None, round(rate) if rate else None, value])
+    # grouped by location so the store man can walk rack by rack (blank locations last), biggest value within a rack
+    rows.sort(key=lambda x: (x[1] == "—", str(x[1]), -(x[8] or 0)))
+    total = sum((r[8] or 0) for r in rows)
+    summary = [f"{len(rows)} item(s) in stock with no issue for {months}+ months, tying up about {cur} {total:,.0f}. "
+               f"Sorted by store location (rack by rack)."]
     if heads:
         by_head = {}
         for rr in rows:
-            by_head[rr[2] or "—"] = by_head.get(rr[2] or "—", 0) + (rr[7] or 0)
+            by_head[rr[3] or "—"] = by_head.get(rr[3] or "—", 0) + (rr[8] or 0)
         top = sorted(by_head.items(), key=lambda x: -x[1])[:6]
         summary.append("By head: " + " · ".join(f"{h} {cur} {v:,.0f}" for h, v in top))
     return Report(f"Unused stock ({months}+ months) - {as_of:%d-%b-%Y}",
-                  ["Item", "Code", "Head", "Stock", "Last issued", "Last bought", f"Last rate {cur}", f"Value {cur}"], rows, summary)
+                  ["Item", "Location", "Code", "Head", "Stock", "Last issued", "Last bought", f"Last rate {cur}", f"Value {cur}"],
+                  rows, summary)
 
 
 def _is_loom(to, loomset):
@@ -211,11 +216,12 @@ def rates_audit(con, cfg, item, d0=None, d1=None):
 
 def slip_lines(con, doc_no):
     """The lines of one issue slip."""
-    rows = con.execute("""SELECT s.doc_date, COALESCE(i.item_name, s.item_code), s.item_code, s.qty, s.amount, s.issued_to
+    rows = con.execute("""SELECT s.doc_date, COALESCE(i.item_name, s.item_code), s.item_code, s.qty, s.amount, s.issued_to, i.location
                           FROM store_issues s LEFT JOIN items i ON i.item_code = s.item_code
                           WHERE s.doc_no = ? ORDER BY s.item_code""", (doc_no,)).fetchall()
     return {"doc_no": doc_no, "date": (rows[0][0] if rows else None),
-            "rows": [{"item": b, "code": c, "qty": round(d or 0, 2), "amount": round(e or 0), "to": f} for _, b, c, d, e, f in rows]}
+            "rows": [{"item": b, "code": c, "qty": round(d or 0, 2), "amount": round(e or 0), "to": f,
+                      "location": (g or "")} for _, b, c, d, e, f, g in rows]}
 
 
 def loom_lines(con, loom, d0=None, d1=None, limit=300):

@@ -123,8 +123,8 @@ def test_reports(env):
     p = production.daily_production(con, cfg, END)
     assert len(p.rows) == 23 and "LOOM-07" in p.summary[1]
     s = stock.stock_status(con, cfg, END)
-    assert [r for r in s.rows if r[2] == "EL-002"][0][0] == "OUT OF STOCK"
-    assert any(r[1] == "EL-002" for r in stock.reorder_list(con, cfg, END).rows)   # Code is now column 1
+    assert [r for r in s.rows if r[3] == "EL-002"][0][0] == "OUT OF STOCK"          # Code at index 3 (…, Location, Code)
+    assert any(r[2] == "EL-002" for r in stock.reorder_list(con, cfg, END).rows)    # Code now column 2 (Item, Location, Code)
 
 
 def test_fabric_stock_history_is_captured_from_the_erp(env):
@@ -189,7 +189,7 @@ def test_store_check_flags_similar_named_item_in_stock(tmp_path):
     con.commit()
     rep = stock_mod.stock_status(con, {"reports": {"tracked_issue_days": 90}}, date(2026, 10, 16))
     assert rep.columns[-1] == "Similar item in stock"
-    row = [r for r in rep.rows if r[2] == "6202"][0]
+    row = [r for r in rep.rows if r[3] == "6202"][0]     # Code is now at index 3 (Status, Item, Location, Code, ...)
     assert row[0] == "OUT OF STOCK" and "6202 SKF" in row[-1] and "10" in row[-1]
 
 
@@ -1183,7 +1183,7 @@ def test_demand_rule_a_uses_180_day_window(env):
         con.execute("INSERT INTO stock_balances (item_code, qty) VALUES (?, 0)", (code,))
     try:
         rep = stock.demand_list(con, cfg, END)
-        assert any(r[1] == code for r in rep.rows)                # listed though last issue was > 90 days ago
+        assert any(r[2] == code for r in rep.rows)                # Code now at index 2 (Item, Location, Code, ...)
     finally:
         with con:
             con.execute("DELETE FROM items WHERE item_code=?", (code,))
@@ -1278,7 +1278,7 @@ def test_change_feed_records_at_sync_time(env, tmp_path):
         def __init__(s, issues): s.mapping = FM(); s.issues = issues
         def fetch(s, n, since, as_of=None):
             if n == "items":
-                return iter([("I1", "Reed", "pcs", None, None, None), ("I2", "Bearing", "pcs", None, None, None)])
+                return iter([("I1", "Reed", "pcs", None, None, None, None), ("I2", "Bearing", "pcs", None, None, None, None)])
             if n == "store_issues":
                 return iter(s.issues)
             return iter([])
@@ -3073,3 +3073,34 @@ def test_vN_production_feed_line(env):
     assert pr and "Production 16-Nov entered: 5,689 m" in pr[0]["line"]
     assert "A 5,150 / B 320 / C+CP 219 (rej 9.5%)" in pr[0]["line"] and "2 looms" in pr[0]["line"]
     assert pr[0]["prod_date"] == "2026-11-16"
+
+
+def test_vO_store_location_shown_everywhere(env):
+    # O: the store item location appears in the stock check, unused stock (grouped by location), store demand,
+    # draft order, the issue-slip lines and the item ledger; and the location search matches it.
+    from smart_layer.reports import stock as st, store_extra as se
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE items (item_code TEXT, item_name TEXT, unit TEXT, category TEXT, head TEXT, sub_head TEXT, location TEXT);
+        CREATE TABLE stock_balances (item_code TEXT, qty REAL, location TEXT);
+        CREATE TABLE store_issues (doc_no TEXT, doc_date TEXT, item_code TEXT, qty REAL, amount REAL, issued_to TEXT, entered_by TEXT, entered_at TEXT);
+        CREATE TABLE store_receipts (doc_no TEXT, doc_date TEXT, item_code TEXT, qty REAL, rate REAL, supplier_name TEXT);
+        CREATE TABLE store_returns (doc_no TEXT, doc_date TEXT, item_code TEXT, qty REAL, amount REAL, returned_from TEXT);
+    """)
+    con.execute("INSERT INTO items VALUES ('6202','Bearing 6202','pcs',NULL,NULL,NULL,'A-01')")
+    con.execute("INSERT INTO items VALUES ('OIL68','Lube oil 68','ltr',NULL,NULL,NULL,'O-112')")
+    con.execute("INSERT INTO stock_balances VALUES ('6202',0,NULL),('OIL68',40,NULL)")
+    con.execute("INSERT INTO store_issues VALUES ('S1','2026-10-01','6202',5,500,'LOOM 5',NULL,NULL)")
+    con.execute("INSERT INTO store_receipts VALUES ('G1','2026-01-01','OIL68',50,100,'Chenab')")
+    asof = date(2026, 11, 18)
+    # stock check: a "Location" column next to the item name
+    sc = st.stock_status(con, {"reports": {"tracked_issue_days": 90}}, asof)
+    assert sc.columns[2] == "Location"
+    assert [r for r in sc.rows if r[3] == "6202"][0][2] == "A-01"
+    # unused stock: Location column, sorted by location (O-112 oil, idle 10 months)
+    us = se.unused_stock(con, cfg, asof)
+    assert "Location" in us.columns and any(r[1] == "O-112" for r in us.rows)
+    # item ledger + issue-slip lines carry location
+    assert st.issue_history(con, "6202", as_of=asof)["location"] == "A-01"
+    assert se.slip_lines(con, "S1")["rows"][0]["location"] == "A-01"

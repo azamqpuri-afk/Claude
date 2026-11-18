@@ -14,7 +14,7 @@ SELECT itm_id AS item_code, itm_desc AS item_name, uom_cd AS unit, grp_cd AS cat
        CASE grp_cd WHEN 'SPARES' THEN 'Loom Parts' WHEN 'ELECTRICAL' THEN 'Electrical'
                    WHEN 'CHEMICAL' THEN 'Sizing & Chemicals' WHEN 'LUBRICANT' THEN 'Lubricants'
                    WHEN 'PACKING' THEN 'Packing' ELSE 'General' END AS head,
-       grp_cd AS sub_head
+       grp_cd AS sub_head, NULL AS location
 FROM inv_item_master
 """
 

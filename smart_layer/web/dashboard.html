@@ -924,7 +924,7 @@ async function drawIssues(code, name, limit){
   try{
     var j=await (await fetch("api/store/issues?item="+encodeURIComponent(code)+"&limit="+limit)).json();
     var s=j.summary||{};
-    var head=`<p class="muted" style="margin:0 0 8px">Last 90 days: ${num(s.slips)} issue slip(s), ${num(s.qty)} ${esc(j.unit||"")} issued. ${num(j.total)} issues on record.</p>`;
+    var head=`<p class="muted" style="margin:0 0 8px">`+(j.location?`<b>Location ${esc(j.location)}</b> · `:``)+`Last 90 days: ${num(s.slips)} issue slip(s), ${num(s.qty)} ${esc(j.unit||"")} issued. ${num(j.total)} issues on record.</p>`;
     // "Entered by" is hidden when it is empty or the same for every row (e.g. a shared ERP login); shown for mills that record real users
     var bys=[...new Set((j.rows||[]).map(r=>String(r.by||"").trim()).filter(Boolean))];
     var showBy = bys.length>1;
@@ -1466,26 +1466,26 @@ async function drawSlip(doc){
   if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see slip lines.</p>'; return; }
   try{
     var j=await (await fetch("api/store/slip?doc="+encodeURIComponent(doc))).json();
-    var rows=(j.rows||[]).map(r=>[esc(r.item), esc(r.code), num(r.qty), num(r.amount), esc(r.to||"")]);
+    var rows=(j.rows||[]).map(r=>[esc(r.item), esc(r.location||"—"), esc(r.code), num(r.qty), num(r.amount), esc(r.to||"")]);
     var tot=(j.rows||[]).reduce((a,r)=>a+(r.amount||0),0);
     var head=`<p class="muted" style="margin:0 0 8px">Slip ${esc(doc)}${j.date?" · "+dshort(j.date):""} · ${(j.rows||[]).length} line(s) · Rs ${num(tot)}</p>`;
-    $("#drawer-body").innerHTML=head+(rows.length?table(["Item","Code","Qty","Amount","To"],rows,[2,3]):'<p class="muted">No lines found for this slip number.</p>');
+    $("#drawer-body").innerHTML=head+(rows.length?table(["Item","Location","Code","Qty","Amount","To"],rows,[3,4]):'<p class="muted">No lines found for this slip number.</p>');
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load this slip.</p>'; }
 }
 // The whole store room (BUG: it used to show only out/low items issued in the last window). Every item with stock
 // or any movement, searchable, each one clickable for its issue history. Status/avg still use the window.
 function renderStoreRoom(){
-  $("#store-tools").innerHTML = SEARCH_BOX('#store-out','Find item or code…')+`<span class="countline" style="margin-left:10px">Every item with stock or movement. Click an item for its issue history. Status &amp; average use are over the last ${(D&&D.reports_window)||90} days.</span><span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=stock&fmt=pdf${dayq()}">⤓ PDF</a>`;
+  $("#store-tools").innerHTML = SEARCH_BOX('#store-out','Find item, code or location…')+`<span class="countline" style="margin-left:10px">Every item with stock or movement. Click an item for its issue history. Status &amp; average use are over the last ${(D&&D.reports_window)||90} days.</span><span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=stock&fmt=pdf${dayq()}">⤓ PDF</a>`;
   var items=(D&&D.stock)||[];
   if(!items.length){ $("#store-out").innerHTML=""; $("#store-msg").textContent="No store items."; return; }
-  var cols=["Status","Item","Code","Unit","Stock","Avg / month","Last issue","Last receipt"];
-  var rows=items.map(r=>[statusCell(r.status), esc(r.item), esc(r.code), esc(r.unit||""),
+  var cols=["Status","Item","Location","Code","Unit","Stock","Avg / month","Last issue","Last receipt"];
+  var rows=items.map(r=>[statusCell(r.status), esc(r.item), esc(r.location||"—"), esc(r.code), esc(r.unit||""),
     num(r.stock), (r.recent_use?num(r.avg_month):'<span class="muted">no recent use</span>'),
     r.last_issue?dshort(r.last_issue):"—", r.last_receipt?dshort(r.last_receipt):"—"]);
   $("#store-out").innerHTML=`<div class="card"><div class="tscroll">`+
-    `<table><thead><tr>`+cols.map((c,i)=>`<th class="${[4,5].indexOf(i)>=0?'num':''}">${esc(c)}</th>`).join("")+`</tr></thead><tbody>`+
+    `<table><thead><tr>`+cols.map((c,i)=>`<th class="${[5,6].indexOf(i)>=0?'num':''}">${esc(c)}</th>`).join("")+`</tr></thead><tbody>`+
     rows.map((r,ri)=>`<tr class="clickrow" data-code="${esc(items[ri].code)}" data-name="${esc(items[ri].item)}" style="cursor:pointer">`+
-      r.map((c,i)=>`<td class="${[4,5].indexOf(i)>=0?'num':''}">${c}</td>`).join("")+`</tr>`).join("")+
+      r.map((c,i)=>`<td class="${[5,6].indexOf(i)>=0?'num':''}">${c}</td>`).join("")+`</tr>`).join("")+
     `</tbody></table></div></div>`;
   var n={}; items.forEach(r=>n[r.status]=(n[r.status]||0)+1);
   $("#store-msg").textContent = `${items.length} items — ${n['OUT OF STOCK']||0} out of stock, ${n['LOW STOCK']||0} low, ${n['IN STOCK']||0} in stock, ${n['IDLE']||0} idle.`;

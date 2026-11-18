@@ -40,6 +40,15 @@ def _strict_similar(a, b):
     return a[0] == b[0] and _is_partnum(a[0])
 
 
+def _locations(con):
+    """item_code -> rack/shelf/bin location in the store (item O). '' when the ERP has none (shown as '—')."""
+    try:
+        return {c: (l or "") for c, l in con.execute(
+            "SELECT item_code, location FROM items WHERE location IS NOT NULL AND TRIM(location) <> ''")}
+    except Exception:
+        return {}
+
+
 def _in_stock_index(con):
     """Every item that currently has stock > 0, with its name/code tokens, to match near-identical names against."""
     pos = []
@@ -71,6 +80,7 @@ def store_room_rows(con, cfg, as_of=None):
     months = days / 30.0
     stock = dict(con.execute("SELECT item_code, SUM(qty) FROM stock_balances GROUP BY item_code"))
     names = {c: (n, u) for c, n, u in con.execute("SELECT item_code, item_name, unit FROM items")}
+    locs = _locations(con)
     win = {c: (iss, last) for c, iss, last in con.execute(
         "SELECT item_code, SUM(CASE WHEN qty > 0 THEN qty ELSE 0 END), MAX(doc_date) "
         "FROM store_issues WHERE doc_date > ? AND doc_date <= ? GROUP BY item_code", (since, as_of.isoformat()))}
@@ -90,7 +100,7 @@ def store_room_rows(con, cfg, as_of=None):
         name = (names.get(code) or (code, ""))[0]
         unit = (names.get(code) or (code, ""))[1] or ""
         out.append(dict(item_code=code, item_name=name or code, unit=unit, stock=qty, avg_month=avg,
-                        status=status, recent_use=recent,
+                        status=status, recent_use=recent, location=locs.get(code) or "",
                         last_issue=last_issue.get(code), last_receipt=last_recv.get(code)))
     order = {"OUT OF STOCK": 0, "LOW STOCK": 1, "IN STOCK": 2, "IDLE": 3}
     out.sort(key=lambda r: (r["last_issue"] or "0000-00-00"), reverse=True)   # newest movement first (None last)
@@ -107,15 +117,15 @@ def _status_rows(con, as_of, days):
             FROM store_issues WHERE doc_date > ? AND doc_date <= ? AND qty > 0
             GROUP BY item_code),
         stock AS (SELECT item_code, SUM(qty) AS qty FROM stock_balances GROUP BY item_code)
-        SELECT u.item_code, COALESCE(i.item_name, u.item_code), i.unit, COALESCE(s.qty, 0), u.issued, u.last_issue
+        SELECT u.item_code, COALESCE(i.item_name, u.item_code), i.unit, COALESCE(s.qty, 0), u.issued, u.last_issue, i.location
         FROM used u LEFT JOIN items i ON i.item_code = u.item_code LEFT JOIN stock s ON s.item_code = u.item_code
         ORDER BY 2""", (since, as_of.isoformat())).fetchall()
     out = []
-    for code, name, unit, qty, issued, last_issue in rows:
+    for code, name, unit, qty, issued, last_issue, location in rows:
         avg = issued / months
         status = "OUT OF STOCK" if qty <= 0 else "LOW STOCK" if qty < avg else "IN STOCK"
         out.append(dict(item_code=code, item_name=name, unit=unit or "", stock=qty, avg_month=avg,
-                        status=status, last_issue=last_issue))
+                        status=status, last_issue=last_issue, location=location or ""))
     return out
 
 
@@ -133,14 +143,15 @@ def stock_status(con, cfg, as_of=None):
         sim = "; ".join(_similar_in_stock(pos, r["item_code"], r["item_name"])) if r["status"] != "IN STOCK" else ""
         if sim:
             dupes += 1
-        rows.append([r["status"], r["item_name"], r["item_code"], r["unit"], r["stock"], r["avg_month"], r["last_issue"], sim])
+        rows.append([r["status"], r["item_name"], r.get("location") or "—", r["item_code"], r["unit"], r["stock"],
+                     r["avg_month"], r["last_issue"], sim])
     summary = [f"{len(items)} items used in the last {days} days: {n['OUT OF STOCK']} out of stock, "
                f"{n['LOW STOCK']} low (below one month of use), {n['IN STOCK']} in stock."]
     if dupes:
         summary.append(f"{dupes} out/low item(s) have a similar-named item still in stock - check before ordering.")
     return Report(
         f"Store stock check - {as_of:%d-%b-%Y}",
-        ["Status", "Item", "Code", "Unit", "Stock", "Avg use / month", "Last issued", "Similar item in stock"],
+        ["Status", "Item", "Location", "Code", "Unit", "Stock", "Avg use / month", "Last issued", "Similar item in stock"],
         rows, summary,
     )
 
@@ -161,7 +172,7 @@ def issue_history(con, code, limit=20, as_of=None):
     (a demand with nothing issued) are flagged. Read-only; no schema change (store_issues already has these)."""
     as_of = as_of or date.today()
     limit = max(1, min(int(limit), 200))
-    name = con.execute("SELECT item_name, unit FROM items WHERE item_code = ?", (code,)).fetchone()
+    name = con.execute("SELECT item_name, unit, location FROM items WHERE item_code = ?", (code,)).fetchone()
     rows = con.execute("""SELECT doc_date, issued_to, qty, amount, doc_no, entered_by FROM store_issues
                           WHERE item_code = ? ORDER BY doc_date DESC, entered_at DESC, rowid DESC LIMIT ?""",
                        (code, limit + 1)).fetchall()
@@ -175,6 +186,7 @@ def issue_history(con, code, limit=20, as_of=None):
                            (code, since, as_of.isoformat())).fetchone()
     total = con.execute("SELECT COUNT(*) FROM store_issues WHERE item_code = ?", (code,)).fetchone()[0]
     return {"item_code": code, "item_name": (name[0] if name else code), "unit": (name[1] if name else "") or "",
+            "location": ((name[2] if name and len(name) > 2 else "") or ""),
             "rows": out, "more": more, "total": total,
             "summary": {"days": 90, "slips": n90 or 0, "qty": round(q90 or 0, 2)}}
 
@@ -227,7 +239,8 @@ def demand_list(con, cfg, as_of=None):
              zero AS (SELECT DISTINCT item_code FROM store_issues WHERE doc_date > ? AND doc_date <= ? AND COALESCE(qty,0) <= 0),
              stock AS (SELECT item_code, SUM(qty) AS qty FROM stock_balances GROUP BY item_code)
         SELECT c.item_code, COALESCE(i.item_name, c.item_code), i.unit, COALESCE(s.qty, 0),
-               COALESCE(u.issued90, 0), COALESCE(u2.issued180, 0), (c.item_code IN (SELECT item_code FROM zero)) AS has_zero
+               COALESCE(u.issued90, 0), COALESCE(u2.issued180, 0), (c.item_code IN (SELECT item_code FROM zero)) AS has_zero,
+               i.location
         FROM (SELECT item_code FROM used180 WHERE issued180 > 0 UNION SELECT item_code FROM zero) c
         LEFT JOIN items i ON i.item_code = c.item_code
         LEFT JOIN stock s ON s.item_code = c.item_code
@@ -238,7 +251,7 @@ def demand_list(con, cfg, as_of=None):
     cur = cfg["company"]["currency"]
     rows = 0
     out = []
-    for code, name, unit, qty, issued90, issued180, has_zero in cand:
+    for code, name, unit, qty, issued90, issued180, has_zero, location in cand:
         avg = (issued90 or 0) / months
         reasons = []
         if qty <= 0 and issued180 > 0:                    # rule (a): used in the last 180 days AND out of stock now
@@ -253,18 +266,18 @@ def demand_list(con, cfg, as_of=None):
         lp = _last_purchase(con, code)
         li = _last_issue(con, code)
         sim = "; ".join(_similar_in_stock(pos, code, name))
-        out.append([name, code, unit or "", qty, round(avg, 1),
+        out.append([name, location or "—", code, unit or "", qty, round(avg, 1),
                     li[0] if li else None, lp[0] if lp else None,
                     (lp[1] if (lp and lp[1]) else "(no purchase on record)"),
                     lp[3] if (lp and lp[3]) else None, "; ".join(reasons), sim])
     summary = [f"{rows} item(s) the store should consider buying, on usage (last {used_days} days) not the ERP's "
                f"reorder levels. Average use is per 30 days over the last {avg_days} days.",
                "DRAFT - review before anything is ordered."]
-    dupes = sum(1 for x in out if x[10])
+    dupes = sum(1 for x in out if x[11])
     if dupes:
         summary.append(f"{dupes} item(s) have a similar-named item still in stock - check the last column first.")
     return Report(f"Store demand - {as_of:%d-%b-%Y}",
-                  ["Item", "Code", "Unit", "Stock", "Avg use / month", "Last issued", "Last bought", "Last from",
+                  ["Item", "Location", "Code", "Unit", "Stock", "Avg use / month", "Last issued", "Last bought", "Last from",
                    f"Last rate {cur}", "Why listed", "Similar item in stock"], out, summary)
 
 
@@ -285,17 +298,17 @@ def reorder_list(con, cfg, as_of=None):
         li = _last_issue(con, r["item_code"])
         party = lp[1] if (lp and lp[1]) else "(no purchase on record)"
         sim = "; ".join(_similar_in_stock(pos, r["item_code"], r["item_name"]))
-        rows.append([r["item_name"], r["item_code"], r["stock"], round(need, 2),
+        rows.append([r["item_name"], r.get("location") or "—", r["item_code"], r["stock"], round(need, 2),
                      rate, party, round(lp[2]) if (lp and lp[2]) else None, lp[0] if lp else None,
                      (li[1] if li else None), sim])
     # items with a known last purchase first; "(no purchase on record)" at the bottom
-    rows.sort(key=lambda x: (x[5] == "(no purchase on record)", str(x[5]), str(x[0])))
+    rows.sort(key=lambda x: (x[6] == "(no purchase on record)", str(x[6]), str(x[0])))
     cur = cfg["company"]["currency"]
-    dupes = sum(1 for x in rows if x[9])
+    dupes = sum(1 for x in rows if x[10])
     summary = [f"{len(rows)} items to order for {cover:g} months of use, about {cur} {total:,.0f} at last rates.",
                "DRAFT - review before anything is sent to suppliers."]
     if dupes:
         summary.insert(1, f"{dupes} item(s) have a similar-named item still in stock - check the last column before ordering.")
     return Report(f"Draft order list - {as_of:%d-%b-%Y}",
-                  ["Item", "Code", "Stock", "Order qty", "Last rate", "Last party", "Last qty", "Last date",
+                  ["Item", "Location", "Code", "Stock", "Order qty", "Last rate", "Last party", "Last qty", "Last date",
                    "Last issued to", "Similar item in stock"], rows, summary)

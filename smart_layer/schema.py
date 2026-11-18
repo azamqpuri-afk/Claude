@@ -50,7 +50,9 @@ ENTITIES = (
          C("unit", "TEXT", "Unit of measure (pcs, kg, ltr, m ...)"),
          C("category", "TEXT", "Item group / category, if the ERP has one"),
          C("head", "TEXT", "Item head (top group, e.g. Loom Parts, Electrical), if the ERP has one (item 30e)"),
-         C("sub_head", "TEXT", "Item sub-head (second-level group), if the ERP has one")),
+         C("sub_head", "TEXT", "Item sub-head (second-level group), if the ERP has one"),
+         C("location", "TEXT", "Rack / shelf / bin location in the store (e.g. A-01, O-112), if the ERP records it "
+                               "(item O) - lets the store man walk rack by rack; NULL when the ERP has none")),
         key=("item_code",),
     ),
     Entity(

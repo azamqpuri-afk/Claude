@@ -152,6 +152,12 @@ the mapping/config, never the core).
 | N | **Live-feed production line per date.** The feed's old "Woven +X m" becomes a proper production line per production date gained in the sync — "Production 16-Nov entered: 5,689 m · eff 76.4% · A 5,150 / B 320 / C+CP 219 (rej 9.5%) · 10 looms" — recomputed from `loom_production` so a later sync of the same date updates that line instead of adding another. Efficiency is total metres ÷ metres-at-100 (as the reports use); the grade split comes from first/second/rejected metres with the mapping's labels (A / B / C+CP). Tapping it opens a per-loom table for that date (loom, contract, quality, metres, eff %, A / B / rej) | Overview live feed · `web/data.py`, `web/server.py`, `web/dashboard.html` · `api/feed`, `api/feed/production` |
 | M | **Store expense tiles fixed + totals.** The tiles now read the Issued/Returned columns by name (a Head column had shifted the fixed indexes, so the figures were wrong), and the report carries a TOTAL row on screen and in the PDF/Excel | Store → Expense · `web/dashboard.html`, `reports/store_extra.py` |
 
+## New in 0.19.5 (item O - store item location)
+
+| # | What it does | Where |
+|---|--------------|-------|
+| O | **Store item location (rack/shelf) everywhere.** A new `items.location` column (Dost `DOSTEX.I.LOC`) shows the bin/rack code (e.g. A-01, O-112) next to the item name in the Store stock tab and its PDF, the unused-stock report (now **sorted by location** so the store man can walk rack by rack), the store-demand and draft-order reports, the issue-slip lines and the item ledger drawer — and the store search box matches on location too. NULL when the ERP has none, shown as "—" | Store · `schema.py` (`items.location`), `reports/stock.py`, `reports/store_extra.py`, `web/data.py`, `web/dashboard.html` · mapping `items.location` |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |

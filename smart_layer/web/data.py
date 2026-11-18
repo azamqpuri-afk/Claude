@@ -368,6 +368,7 @@ def build(con, cfg, as_of=None):
     items = _status_rows(con, as_of, int(cfg["reports"]["tracked_issue_days"]))
     pos = _in_stock_index(con)
     stock = [{"status": r["status"], "item": r["item_name"], "code": r["item_code"], "unit": r["unit"],
+              "location": r.get("location", ""),
               "stock": round(r["stock"], 2), "avg_month": round(r["avg_month"], 1), "recent_use": r["recent_use"],
               "last_issue": r["last_issue"], "last_receipt": r["last_receipt"],
               "similar": (_similar_in_stock(pos, r["item_code"], r["item_name"]) if r["status"] in ("OUT OF STOCK", "LOW STOCK") else [])}

@@ -18,7 +18,7 @@ name = "Dost Textiles ERP (Oracle, DOSTEX)"
 # links are 100%). category is left unmapped (the ERP groups by head/sub-head, not a separate category).
 sql = """
 SELECT i.ic AS item_code, MAX(i.idesc) AS item_name, MAX(i.uom) AS unit,
-       MAX(s.sn) AS sub_head, MAX(h.hn) AS head
+       MAX(s.sn) AS sub_head, MAX(h.hn) AS head, MAX(i.loc) AS location
 FROM dostex.i i
 LEFT JOIN dostex.isubs s ON s.sc = i.sc AND s.uc = i.uc
 LEFT JOIN dostex.ih h ON h.hc = s.hc AND h.uc = s.uc
