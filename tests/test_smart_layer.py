@@ -2639,6 +2639,32 @@ def test_v0181_combined_yarn_and_shrinkage_pieces(env):
     assert -5 < pct < 10 and "panels" in shrink[0]                        # ~1-2%, not -200%
     for key in ("sizing", "sets", "beams", "fabric_other"):              # totals present on every section
         assert secs[key]["totals"], key
+    # 0.18.1: Sets 'Woven m' comes through the set's finished beams in beam_movements (the beams snapshot reads 0),
+    # and Shrink % divides it by panels. S1 woven 222,000 / 3 panels = 74,000 vs set length 75,000 ~ 1.3%.
+    sset = secs["sets"]
+    wcol, scol = sset["columns"].index("Woven m"), sset["columns"].index("Shrink %")
+    row = sset["rows"][0]
+    assert row[wcol] == 222000 and row[scol] != "—"
+    assert -5 < float(str(row[scol]).rstrip("%")) < 10
+
+
+def test_v0181_quality_summary_combined_columns(env):
+    # 0.18.1: in quality mode, when the quality's warp/weft are the same count every contract combines its yarn, so the
+    # per-contract summary shows one "Yarn recv/bal" pair and drops the always-zero weft columns.
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.execute("""CREATE TABLE yarn_movements (move_date TEXT, gatepass_no TEXT, doc_no TEXT, move_type TEXT,
+        yarn_code TEXT, yarn_name TEXT, contract_no TEXT, party_code TEXT, party_name TEXT, bags REAL, kg REAL, warp_weft TEXT)""")
+    for cn in ("K6", "K7"):                                               # same party, same 54/54 quality -> combined
+        con.execute("INSERT INTO contracts (contract_no, party_code, party_name, quality, warp_count, weft_count) "
+                    "VALUES (?,'P1','QADRI','90x82 54/54',54,54)", (cn,))
+        con.execute("INSERT INTO yarn_movements (move_date, doc_no, move_type, contract_no, kg) "
+                    "VALUES ('2026-10-01','I','party_receipt',?,20000)", (cn,))
+    rep = cr.quality_report(con, cfg, "P1", "90x82 54/54")
+    summ = next(s for s in rep["sections"] if s["key"] == "summary")
+    assert "Yarn recv kg" in summ["columns"] and "Yarn bal kg" in summ["columns"]
+    assert "Weft recv kg" not in summ["columns"] and "Warp recv kg" not in summ["columns"]
 
 
 def test_v0181_warp_weft_splits_by_count_when_counts_differ(env):

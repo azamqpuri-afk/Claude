@@ -204,9 +204,24 @@ def contract_report(con, cfg, contract):
     ss = _q(con, """SELECT set_no, set_date, sizer_name, COALESCE(ends,0), COALESCE(set_length_m,0), COALESCE(bags,0),
                     COALESCE(gullay_kg,0), COALESCE(waste_kg,0), COALESCE(yarn_sent_kg,0) FROM sized_sets
                     WHERE contract_no = ? ORDER BY set_date, set_no""", (contract,))
+    # Woven metres per set. A set's beams come off the loom and leave the beams snapshot, so its snapshot woven_m
+    # reads 0 - beam_movements keeps the REAL woven metres of finished beams (and their set_no). Merge both per beam
+    # (keep the larger woven, and a non-blank set), then total by set, so Sets 'Woven m' ties to what was woven.
+    bw_by_beam = {}                                       # _norm(beam_no) -> {"set": set_no, "woven": m}
+    for beam, sno, wv in _q(con, "SELECT beam_no, set_no, COALESCE(woven_m,0) FROM beams WHERE contract_no = ?", (contract,)):
+        e = bw_by_beam.setdefault(_norm(beam), {"set": sno, "woven": 0.0})
+        e["woven"] = max(e["woven"], wv or 0)
+        if sno:
+            e["set"] = sno
+    for beam, sno, wv in _q(con, """SELECT beam_no, MAX(set_no), MAX(COALESCE(woven_m,0)) FROM beam_movements
+            WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> '' GROUP BY beam_no""", (contract,)):
+        e = bw_by_beam.setdefault(_norm(beam), {"set": sno, "woven": 0.0})
+        e["woven"] = max(e["woven"], wv or 0)
+        if sno and not e.get("set"):
+            e["set"] = sno
     set_woven = {}
-    for sno, wv in _q(con, "SELECT set_no, SUM(COALESCE(woven_m,0)) FROM beams WHERE contract_no = ? GROUP BY set_no", (contract,)):
-        set_woven[_norm(sno)] = wv or 0
+    for e in bw_by_beam.values():
+        set_woven[_norm(e["set"])] = set_woven.get(_norm(e["set"]), 0) + (e["woven"] or 0)
     rows = []
     for sn, sd, sz, ends, length, bags, gully, waste, ysent in ss:
         count = (ends * 1.0936 * length / (840.0 * ysent * 2.2046)) if (ysent and length) else 0
@@ -468,20 +483,30 @@ def quality_report(con, cfg, party_code, quality):
               "warp_count": h0.get("warp_count"), "weft_count": h0.get("weft_count"),
               "ends_per_inch": h0.get("ends_per_inch"), "picks_per_inch": h0.get("picks_per_inch")}
     sections = []
-    # per-contract summary table on top
-    s_cols = ["Contract", "Warp recv kg", "Warp bal kg", "Weft recv kg", "Weft bal kg", "Woven m",
-              "Dispatched m", "To other m", "Stock m", "Sized m", "Shrinkage %"]
-    s_rows, tot = [], [0.0] * 9
+    # per-contract summary table on top. When the quality's warp and weft are the same count every contract combines
+    # its yarn (warp_recv/warp_bal already hold the single combined figure), so show one "Yarn recv/bal" pair and drop
+    # the always-zero weft columns; only split warp/weft when the counts differ.
+    combined = all(r["summary"].get("combined") for r in reps)
+    if combined:
+        s_cols = ["Contract", "Yarn recv kg", "Yarn bal kg", "Woven m", "Dispatched m", "To other m",
+                  "Stock m", "Sized m", "Shrinkage %"]
+        val_keys = ["warp_recv", "warp_bal", "woven", "dispatched", "to_other", "stock", "sized"]
+    else:
+        s_cols = ["Contract", "Warp recv kg", "Warp bal kg", "Weft recv kg", "Weft bal kg", "Woven m",
+                  "Dispatched m", "To other m", "Stock m", "Sized m", "Shrinkage %"]
+        val_keys = ["warp_recv", "warp_bal", "weft_recv", "weft_bal", "woven", "dispatched", "to_other", "stock", "sized"]
+    nv = len(val_keys)
+    s_rows, tot = [], [0.0] * nv
     for r in reps:
         s = r["summary"]
-        vals = [s["warp_recv"], s["warp_bal"], s["weft_recv"], s["weft_bal"], s["woven"], s["dispatched"],
-                s["to_other"], s["stock"], s["sized"]]
+        vals = [s[k] for k in val_keys]
         s_rows.append([s["contract"], *[round(v) for v in vals],
                        (f"{s['shrink']:.1f}%" if s["shrink"] is not None else "—")])
         for i, v in enumerate(vals):
             tot[i] += v or 0
     sections.append({"key": "summary", "title": "Per-contract summary", "columns": s_cols, "rows": s_rows,
-                     "totals": ["TOTAL", *[round(x) for x in tot], ""], "note": None, "num_cols": list(range(1, 10))})
+                     "totals": ["TOTAL", *[round(x) for x in tot], ""], "note": None,
+                     "num_cols": list(range(1, nv + 1))})
     # detail sections, merged by key with a sub-row per contract and a grand total
     order = ["yarn_in", "yarn_out", "sizing", "sets", "beams", "production", "weft", "fabric_out", "fabric_other",
              "picks_within", "picks_check"]
