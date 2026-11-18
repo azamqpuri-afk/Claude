@@ -91,6 +91,10 @@ duplicate_payment_min = 5000
 # ne_m_per_kg = 1693.3          # metres of 1-Ne cotton yarn per kg (change for a denier/tex count system)
 # weft_active_days = 60         # the weft check lists contracts with scoreboard data in this many days first; older
 #                               # contracts (from before the scoreboard went live) show "no scoreboard data"
+# max_reed_width_in = 150       # cap panels so width_in x panels <= this (a stale 3-panel count on a 118" loom is
+#                               # impossible): panels = floor(max / width_in), so 118" -> 1 and 46" -> up to 3
+# weft_ply_markers = ["DOUB", "DBL", "PLY"]   # yarn-name text that means 2-ply; effective weft count = count / plies
+# weft_ply_max_single = 6       # in an "a/b" count ("36/2", "2/40") a side at or below this is the ply, not the count
 
 # Contract report (party-first closing). A fabric OGP whose party_code differs from the contract's party_code is
 # "to another party" (rejection sale or sold elsewhere): it goes to a separate "Fabric to other parties" tab and is

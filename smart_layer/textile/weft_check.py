@@ -103,16 +103,66 @@ def _resolver(con):
     return resolve
 
 
+def _ply_fn(cfg):
+    """Returns plies(text) -> number of plies read from a yarn name / style. '36/2', '2/40' -> 2; a configured text
+    marker (DOUB, DBL, PLY) -> 2; otherwise 1. A 2-ply 36s weighs like an 18s single, so the effective weft count is
+    count / plies."""
+    import re
+    markers = [str(m).upper() for m in (cfg["weaving"].get("weft_ply_markers") or [])]
+    small_max = int(cfg["weaving"].get("weft_ply_max_single", 6))
+
+    def plies(text):
+        if not text:
+            return 1
+        t = str(text).upper()
+        if any(m and m in t for m in markers):
+            return 2
+        best = 1
+        for a, b in re.findall(r"(\d+)\s*/\s*(\d+)", t):   # "36/2" or "2/40": the small side is the ply
+            a, b = int(a), int(b)
+            s, big = min(a, b), max(a, b)
+            if 2 <= s <= small_max and big >= 10:
+                best = max(best, s)
+        return best
+    return plies
+
+
+def _contract_plies(con, cfg):
+    """Plies per contract, from the contract's weft yarn name (the yarn master, else the weft_yarn field) and quality.
+    The scoreboard style of the reading is folded in per row in _attributed."""
+    plies = _ply_fn(cfg)
+    name_by_code = {}
+    try:
+        for code, name in con.execute("SELECT yarn_code, yarn_name FROM yarn_movements WHERE yarn_name IS NOT NULL"):
+            if code is not None:
+                name_by_code.setdefault(str(code), str(name))
+    except Exception:
+        pass
+    try:
+        rows = con.execute("SELECT contract_no, weft_yarn, quality FROM contracts").fetchall()
+    except Exception:                                    # a store without a weft_yarn column: fall back to quality
+        rows = [(c, None, q) for c, q in con.execute("SELECT contract_no, quality FROM contracts")]
+    out = {}
+    for c, wy, q in rows:
+        texts = [wy or "", name_by_code.get(str(wy or ""), ""), q or ""]
+        out[str(c)] = max((plies(t) for t in texts), default=1)
+    return out, plies
+
+
 def _attributed(con, cfg):
-    """(contract, read_date, kg) per scoreboard reading, attributed by the beam on the loom (carry-forward fallback)."""
+    """(contract, read_date, kg) per scoreboard reading, attributed by the beam on the loom (carry-forward fallback).
+    The weft count is divided by the yarn's plies, and the panels are capped to a sane reed width (a stale 3-panel
+    count on a 118" loom would otherwise treble the weft)."""
     waste, ne, _ = _cfg(cfg)
+    max_reed = float(cfg["weaving"].get("max_reed_width_in", 150))
     resolve = _resolver(con)
+    cplies, plies = _contract_plies(con, cfg)
     cinfo = {str(c): (w, wc, ppi) for c, w, wc, ppi in
              con.execute("SELECT contract_no, width_in, weft_count, picks_per_inch FROM contracts")}
     pk = ", picks" if _has_picks(con) else ", NULL AS picks"
     out = []
-    for loom, rd, meters, ppi_m, pieces, picks in con.execute(
-            f"SELECT loom_code, read_date, COALESCE(meters,0), picks_per_inch, pieces{pk} FROM loom_monitor"):
+    for loom, rd, meters, ppi_m, pieces, style, picks in con.execute(
+            f"SELECT loom_code, read_date, COALESCE(meters,0), picks_per_inch, pieces, style{pk} FROM loom_monitor"):
         cno = resolve(loom, rd)
         if not cno or cno not in cinfo:
             continue
@@ -123,7 +173,11 @@ def _attributed(con, cfg):
         if not p:
             continue
         panels = float(pieces or 1)
-        kg = float(p) * float(width_in) * panels * IN_TO_M * (1 + waste) / (float(weft_count) * ne)
+        if width_in and panels * float(width_in) > max_reed:   # cap impossible panel counts to the real reed width
+            panels = max(1.0, float(int(max_reed / float(width_in))))
+        ply = max(cplies.get(cno, 1), plies(style))            # the scoreboard style can also carry the ply (DOUB)
+        eff_count = float(weft_count) / float(ply or 1)
+        kg = float(p) * float(width_in) * panels * IN_TO_M * (1 + waste) / (eff_count * ne)
         out.append((cno, str(rd), kg))
     return out
 

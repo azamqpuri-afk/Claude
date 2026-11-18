@@ -2936,7 +2936,7 @@ def test_vJ_weft_check(env):
     cfg, _ = env
     con = sqlite3.connect(":memory:")
     con.executescript("""
-        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL);
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL, style TEXT);
         CREATE TABLE loom_production (loom_code TEXT, prod_date TEXT, contract_no TEXT, meters REAL);
         CREATE TABLE beam_movements (loom_code TEXT, contract_no TEXT, move_type TEXT, move_date TEXT);
         CREATE TABLE contracts (contract_no TEXT, party_name TEXT, party_code TEXT, quality TEXT, width_in REAL, weft_count REAL, picks_per_inch REAL);
@@ -2944,7 +2944,7 @@ def test_vJ_weft_check(env):
     """)
     con.execute("INSERT INTO contracts VALUES ('74','QADRI','P1','76x66 30/30 118',118,30,66)")
     con.execute("INSERT INTO loom_production VALUES ('L4','2026-11-10','74',13090)")   # L4 wove 74 that day
-    con.execute("INSERT INTO loom_monitor VALUES ('2026-11-10','L4','day',13090,66,900000,1)")  # picks given directly
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-11-10','L4','day',13090,66,900000,1,NULL)")  # picks given directly
     con.execute("INSERT INTO yarn_movements VALUES ('2026-11-10','74','to_looms',2082)")
     cmp = weft_check.weft_compare(con, cfg, "74")
     exp = 900000 * 118 * 1 * 0.0254 * 1.03 / (30 * 1693.3)
@@ -2962,7 +2962,7 @@ def test_vJ_weft_picks_derived_when_monitor_has_none(env):
     cfg, _ = env
     con = sqlite3.connect(":memory:")
     con.executescript("""
-        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL);
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL, style TEXT);
         CREATE TABLE loom_production (loom_code TEXT, prod_date TEXT, contract_no TEXT, meters REAL);
         CREATE TABLE beam_movements (loom_code TEXT, contract_no TEXT, move_type TEXT, move_date TEXT);
         CREATE TABLE contracts (contract_no TEXT, party_name TEXT, party_code TEXT, quality TEXT, width_in REAL, weft_count REAL, picks_per_inch REAL);
@@ -2970,7 +2970,7 @@ def test_vJ_weft_picks_derived_when_monitor_has_none(env):
     """)
     con.execute("INSERT INTO contracts VALUES ('C9','X','P','q',118,30,66)")
     con.execute("INSERT INTO loom_production VALUES ('L4','2026-11-10','C9',5000)")
-    con.execute("INSERT INTO loom_monitor VALUES ('2026-11-10','L4','day',5000,66,NULL,1)")   # no picks -> derive
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-11-10','L4','day',5000,66,NULL,1,NULL)")   # no picks -> derive
     cmp = weft_check.weft_compare(con, cfg, "C9")
     picks = 5000 * 66 * 39.37
     exp = picks * 118 * 1 * 0.0254 * 1.03 / (30 * 1693.3)
@@ -2984,7 +2984,7 @@ def test_vJ_weft_attribution_by_beam_covers_gap_days(env):
     cfg, _ = env
     con = sqlite3.connect(":memory:")
     con.executescript("""
-        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL);
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL, style TEXT);
         CREATE TABLE loom_production (loom_code TEXT, prod_date TEXT, contract_no TEXT, meters REAL);
         CREATE TABLE beam_movements (loom_code TEXT, contract_no TEXT, move_type TEXT, move_date TEXT);
         CREATE TABLE contracts (contract_no TEXT, party_name TEXT, party_code TEXT, quality TEXT, width_in REAL, weft_count REAL, picks_per_inch REAL);
@@ -2995,8 +2995,47 @@ def test_vJ_weft_attribution_by_beam_covers_gap_days(env):
     con.execute("INSERT INTO beam_movements VALUES ('L4','C1','to_loom','2026-11-10')")
     # scoreboard ran three days; the ERP only keyed one production lump (on the 12th)
     for d in ("2026-11-10", "2026-11-11", "2026-11-12"):
-        con.execute("INSERT INTO loom_monitor VALUES (?, 'L4','day',4000,66,300000,1)", (d,))
+        con.execute("INSERT INTO loom_monitor VALUES (?, 'L4','day',4000,66,300000,1,NULL)", (d,))
     con.execute("INSERT INTO loom_production VALUES ('L4','2026-11-12','C1',12000)")
     cmp = weft_check.weft_compare(con, cfg, "C1")
     one = 300000 * 118 * 1 * 0.0254 * 1.03 / (30 * 1693.3)
     assert cmp["scoreboard_kg"] == round(3 * one)        # all THREE days counted, not just the ERP day
+
+
+def test_vJ_weft_ply_and_panel_cap(env):
+    # J fixes: (1) ply yarn - a 2-ply 36s weighs like an 18s single, so the effective weft count is count/plies, read
+    # from the yarn name / scoreboard style. (2) impossible panels - cap width_in x panels to the real reed width.
+    from smart_layer.textile import weft_check
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL, style TEXT);
+        CREATE TABLE loom_production (loom_code TEXT, prod_date TEXT, contract_no TEXT, meters REAL);
+        CREATE TABLE beam_movements (loom_code TEXT, contract_no TEXT, move_type TEXT, move_date TEXT);
+        CREATE TABLE contracts (contract_no TEXT, party_name TEXT, party_code TEXT, quality TEXT, width_in REAL, weft_count REAL, picks_per_inch REAL, weft_yarn TEXT);
+        CREATE TABLE yarn_movements (move_date TEXT, contract_no TEXT, move_type TEXT, kg REAL, yarn_code TEXT, yarn_name TEXT);
+    """)
+    # Contract 67: 36/36 construction but the WEFT yarn is 2-ply (name "36/2 VA") -> effective count 18, not 36
+    con.execute("INSERT INTO contracts VALUES ('67','Q','P','50x42 36/36',46,36,42,'Y36')")
+    con.execute("INSERT INTO yarn_movements VALUES ('2026-11-10','67','to_looms',100,'Y36','36/2 VA')")
+    con.execute("INSERT INTO beam_movements VALUES ('L1','67','to_loom','2026-11-09')")
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-11-10','L1','day',5000,42,200000,3,'50x42/36DOUBx36DOUB')")
+    cmp = weft_check.weft_compare(con, cfg, "67")
+    exp = 200000 * 46 * 3 * 0.0254 * 1.03 / ((36 / 2) * 1693.3)                # 46x3=138 <=150 ok; count halved for 2-ply
+    assert cmp["scoreboard_kg"] == round(exp)
+
+    # Panel cap: a 118" loom with a stale PDELV=3 -> 118x3=354 impossible, cap to floor(150/118)=1 panel
+    con2 = sqlite3.connect(":memory:")
+    con2.executescript("""
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL, style TEXT);
+        CREATE TABLE loom_production (loom_code TEXT, prod_date TEXT, contract_no TEXT, meters REAL);
+        CREATE TABLE beam_movements (loom_code TEXT, contract_no TEXT, move_type TEXT, move_date TEXT);
+        CREATE TABLE contracts (contract_no TEXT, party_name TEXT, party_code TEXT, quality TEXT, width_in REAL, weft_count REAL, picks_per_inch REAL, weft_yarn TEXT);
+        CREATE TABLE yarn_movements (move_date TEXT, contract_no TEXT, move_type TEXT, kg REAL, yarn_code TEXT, yarn_name TEXT);
+    """)
+    con2.execute("INSERT INTO contracts VALUES ('74','Q','P','76x66 30/30 118',118,30,66,'Y30')")
+    con2.execute("INSERT INTO beam_movements VALUES ('L4','74','to_loom','2026-10-19')")
+    con2.execute("INSERT INTO loom_monitor VALUES ('2026-10-20','L4','day',13090,66,900000,3,NULL)")  # PDELV still 3
+    cmp2 = weft_check.weft_compare(con2, cfg, "74")
+    exp2 = 900000 * 118 * 1 * 0.0254 * 1.03 / (30 * 1693.3)                    # panels capped 3 -> 1
+    assert cmp2["scoreboard_kg"] == round(exp2)
