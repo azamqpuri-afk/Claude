@@ -156,6 +156,7 @@ the mapping/config, never the core).
 
 | # | What it does | Where |
 |---|--------------|-------|
+| O+ | **Location-wise filter in the Store tab.** A location dropdown (every rack/shelf in the store, natural-sorted so A-2 is before A-10, plus "(no location)") next to the search box filters the item list to one rack; it combines with the free-text search, and the count line updates to "N item(s) shown in location X" | Store · `web/dashboard.html` |
 | O | **Store item location (rack/shelf) everywhere.** A new `items.location` column (Dost `DOSTEX.I.LOC`) shows the bin/rack code (e.g. A-01, O-112) next to the item name in the Store stock tab and its PDF, the unused-stock report (now **sorted by location** so the store man can walk rack by rack), the store-demand and draft-order reports, the issue-slip lines and the item ledger drawer — and the store search box matches on location too. NULL when the ERP has none, shown as "—" | Store · `schema.py` (`items.location`), `reports/stock.py`, `reports/store_extra.py`, `web/data.py`, `web/dashboard.html` · mapping `items.location` |
 
 ## Not in the product, and why

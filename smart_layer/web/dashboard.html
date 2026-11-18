@@ -1475,8 +1475,15 @@ async function drawSlip(doc){
 // The whole store room (BUG: it used to show only out/low items issued in the last window). Every item with stock
 // or any movement, searchable, each one clickable for its issue history. Status/avg still use the window.
 function renderStoreRoom(){
-  $("#store-tools").innerHTML = SEARCH_BOX('#store-out','Find item, code or location…')+`<span class="countline" style="margin-left:10px">Every item with stock or movement. Click an item for its issue history. Status &amp; average use are over the last ${(D&&D.reports_window)||90} days.</span><span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=stock&fmt=pdf${dayq()}">⤓ PDF</a>`;
   var items=(D&&D.stock)||[];
+  // location-wise filter (item O): a dropdown of the store's racks/shelves, so the store man can pull up one rack.
+  var locs=[...new Set(items.map(r=>(r.location||"").trim()).filter(Boolean))].sort(cmpLoc);
+  var noLoc=items.some(r=>!(r.location||"").trim());
+  var locSel=`<select id="store-loc" onchange="filterStore()" style="padding:6px 10px;border:1px solid var(--line);border-radius:8px;background:var(--field);color:var(--ink)">`+
+    `<option value="">All locations</option>`+locs.map(l=>`<option value="${esc(l)}">${esc(l)}</option>`).join("")+
+    (noLoc?`<option value="\u0000none">(no location)</option>`:``)+`</select>`;
+  $("#store-tools").innerHTML = `<input type="search" id="store-q" placeholder="🔍 Find item, code or location…" oninput="filterStore()" style="padding:6px 11px;border:1px solid var(--line);border-radius:8px;background:var(--field);color:var(--ink);min-width:200px"> `
+    +locSel+`<span class="countline" style="margin-left:10px">Every item with stock or movement. Click an item for its issue history. Status &amp; average use are over the last ${(D&&D.reports_window)||90} days.</span><span class="spacer" style="flex:1"></span><a class="btn ghost" href="api/report?name=stock&fmt=pdf${dayq()}">⤓ PDF</a>`;
   if(!items.length){ $("#store-out").innerHTML=""; $("#store-msg").textContent="No store items."; return; }
   var cols=["Status","Item","Location","Code","Unit","Stock","Avg / month","Last issue","Last receipt"];
   var rows=items.map(r=>[statusCell(r.status), esc(r.item), esc(r.location||"—"), esc(r.code), esc(r.unit||""),
@@ -1484,12 +1491,27 @@ function renderStoreRoom(){
     r.last_issue?dshort(r.last_issue):"—", r.last_receipt?dshort(r.last_receipt):"—"]);
   $("#store-out").innerHTML=`<div class="card"><div class="tscroll">`+
     `<table><thead><tr>`+cols.map((c,i)=>`<th class="${[5,6].indexOf(i)>=0?'num':''}">${esc(c)}</th>`).join("")+`</tr></thead><tbody>`+
-    rows.map((r,ri)=>`<tr class="clickrow" data-code="${esc(items[ri].code)}" data-name="${esc(items[ri].item)}" style="cursor:pointer">`+
+    rows.map((r,ri)=>`<tr class="clickrow" data-code="${esc(items[ri].code)}" data-name="${esc(items[ri].item)}" data-loc="${esc((items[ri].location||"").trim())}" style="cursor:pointer">`+
       r.map((c,i)=>`<td class="${[5,6].indexOf(i)>=0?'num':''}">${c}</td>`).join("")+`</tr>`).join("")+
     `</tbody></table></div></div>`;
   var n={}; items.forEach(r=>n[r.status]=(n[r.status]||0)+1);
   $("#store-msg").textContent = `${items.length} items — ${n['OUT OF STOCK']||0} out of stock, ${n['LOW STOCK']||0} low, ${n['IN STOCK']||0} in stock, ${n['IDLE']||0} idle.`;
   $("#store-out").querySelectorAll(".clickrow").forEach(tr=>tr.onclick=()=>drawIssues(tr.dataset.code, tr.dataset.name));
+}
+// natural-ish sort for rack codes so A-2 comes before A-10 ("A-01"/"O-112")
+function cmpLoc(a,b){ return String(a).localeCompare(String(b), undefined, {numeric:true, sensitivity:"base"}); }
+// combined Store filter: free-text search AND the picked location (item O location-wise filter)
+function filterStore(){
+  var term=(($("#store-q")||{}).value||"").toLowerCase().trim();
+  var loc=(($("#store-loc")||{}).value||"");
+  var shown=0;
+  document.querySelectorAll("#store-out tbody tr").forEach(function(tr){
+    var okText = !term || tr.textContent.toLowerCase().indexOf(term)>=0;
+    var rl=(tr.dataset.loc||"");
+    var okLoc = !loc || (loc==="\u0000none" ? !rl : rl===loc);
+    var show = okText && okLoc; tr.style.display = show?"":"none"; if(show) shown++;
+  });
+  var msg=$("#store-msg"); if(msg && (term||loc)) msg.textContent = shown+" item(s) shown"+(loc&&loc!=="\u0000none"?(" in location "+loc):(loc?" with no location":""))+(term?` matching “${term}”`:"");
 }
 function dayq(){ var d=$("#day").value; return d?("&date="+d):""; }
 // live client-side filter over a rendered report table (Store, Payroll)
