@@ -361,7 +361,8 @@
     <div class="card"><div class="hd"><h3>Loom by loom</h3><span class="count" id="wv-loomcount"></span></div><div class="tscroll"><table id="wv-looms"></table></div></div>
 
     <div class="sec" style="margin-top:8px">Beams</div>
-    <div class="grid g5" id="wv-beamstock" style="margin-bottom:16px"></div>
+    <div class="grid g5" id="wv-beamstock" style="margin-bottom:8px"></div>
+    <div id="wv-weftcheck" style="margin-bottom:16px"></div>
     <div class="card"><div class="hd"><h3>Beams on looms</h3><span class="count">fabric still to come · days left · backup ready?</span>
         <div class="tools" style="margin:0"><a class="btn ghost" href="api/report?name=beams&fmt=pdf">⤓ On looms</a> <a class="btn ghost" href="api/report?name=sizers&fmt=pdf">⤓ At sizers</a></div></div>
       <div class="tscroll"><table id="wv-beams"></table></div></div>
@@ -1132,10 +1133,14 @@ function renderBeams(){
   var bs=D.beam_stock||{};
   $("#wv-beamstock").innerHTML =
     tile("🧵 On looms", num(bs.on_loom), "weaving now","accent") +
-    tile("📥 Sized, waiting", num(bs.sized_waiting), "ready to mount") +
+    tile("📥 Sized, waiting", num(bs.sized_waiting), "click to list beams", "", "", "sized") +
     tile("⬜ Empty in mill", num(bs.empty_in_mill), "") +
     tile("🏭 At sizer", num(bs.at_sizer), "out for sizing") +
     tile("↗ Sent out", num(bs.sent_out), "");
+  var sz=$("#wv-beamstock [data-drill='sized']");
+  if(sz){ sz.onclick=drawSizedBeams; sz.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); drawSizedBeams(); } }; }
+  var wc=$("#wv-weftcheck");
+  if(wc) wc.innerHTML = STATIC_DATA ? "" : `<button class="btn ghost" onclick="drawWeftCheck()">⚖ Weft: scoreboard vs ERP ›</button>`;
   var bm=(D.beams||[]);
   var rows=bm.map(function(b){
     var warn = b.alert ? ' class="lowrow"' : "";
@@ -1146,6 +1151,52 @@ function renderBeams(){
   $("#wv-beams").outerHTML = (`<table id="wv-beams"><thead><tr><th>Loom</th><th>Beam</th><th>Quality / contract</th>`+
     `<th class="num">Fabric to come (m)</th><th class="num">Days left</th><th>Backup</th></tr></thead><tbody>`+
     (rows||`<tr><td colspan="6" class="muted">No beams on looms.</td></tr>`)+`</tbody></table>`);
+}
+async function drawSizedBeams(){
+  openDrawer("📥 Sized beams waiting for a loom",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see sized beams.</p>'; return; }
+  try{
+    var j=await (await fetch("api/weaving/sized-beams")).json();
+    var head=`<thead><tr><th>Set</th><th>Beam</th><th>Contract</th><th>Quality</th><th class="num">Ends</th>`+
+      `<th class="num">Set length m</th><th>Sizer</th><th>Received</th><th class="num">Days waiting</th></tr></thead>`;
+    var body=(j.rows||[]).map(r=>`<tr><td>${esc(r.set_no)}</td><td><b>${esc(r.beam_no)}</b></td><td>${esc(r.contract)}</td>`+
+      `<td>${esc(r.quality)}</td><td class="num">${num(r.ends)}</td><td class="num">${num(r.set_length_m)}</td>`+
+      `<td>${esc(r.sizer)}</td><td>${esc(dshort(r.received))}</td><td class="num">${esc(r.days_waiting)}</td></tr>`).join("");
+    var tot=`<tfoot><tr><th>TOTAL</th><th class="num" colspan="4">${num(j.beams)} beams</th>`+
+      `<th class="num">${num(j.total_length_m)}</th><th colspan="3"></th></tr></tfoot>`;
+    $("#drawer-body").innerHTML = body
+      ? `<div class="tscroll"><table>${head}<tbody>${body}</tbody>${tot}</table></div>`
+      : '<p class="muted">No sized beams waiting for a loom.</p>';
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load sized beams.</p>'; }
+}
+async function drawWeftCheck(contract){
+  openDrawer("⚖ Weft — scoreboard vs ERP",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see the weft check.</p>'; return; }
+  try{
+    var cell=r=>`<td class="num">${num(r.scoreboard_kg)}</td><td class="num">${num(r.erp_kg)}</td>`+
+      `<td class="num">${(r.diff_kg>0?"+":"")+num(r.diff_kg)}</td>`+
+      `<td class="num">${r.pct==null?"—":(r.pct>0?"+":"")+r.pct+"%"}${r.flag?' <span class="tag out">⚠</span>':""}</td>`;
+    if(contract){
+      var j=await (await fetch("api/weft?contract="+encodeURIComponent(contract)+"&period=month")).json();
+      var c=j.compare||{};
+      var head=`<thead><tr><th>Month</th><th class="num">Scoreboard kg</th><th class="num">ERP kg</th><th class="num">Diff</th><th class="num">%</th></tr></thead>`;
+      var body=(j.periods||[]).map(r=>`<tr><td>${esc(r.period)}</td>${cell(r)}</tr>`).join("");
+      $("#drawer-title").innerHTML="⚖ Weft — contract "+esc(contract);
+      $("#drawer-body").innerHTML=`<p class="muted">Contract total: scoreboard <b>${num(c.scoreboard_kg)}</b> vs ERP <b>${num(c.erp_kg)}</b> kg `+
+        `(diff ${c.pct==null?"—":(c.pct>0?"+":"")+c.pct+"%"}${c.flag?" ⚠ beyond tolerance":""}).</p>`+
+        `<div class="tscroll"><table>${head}<tbody>${body||'<tr><td colspan="5" class="muted">No weft movement.</td></tr>'}</tbody></table></div>`+
+        `<p style="margin-top:8px"><button class="btn ghost" onclick="drawWeftCheck()">‹ All contracts</button></p>`;
+      return;
+    }
+    var j=await (await fetch("api/weft")).json();
+    var head=`<thead><tr><th>Contract</th><th>Party / quality</th><th class="num">Scoreboard kg</th><th class="num">ERP kg</th><th class="num">Diff</th><th class="num">%</th></tr></thead>`;
+    var body=(j.rows||[]).map(r=>`<tr class="clickrow" data-c="${esc(r.contract)}" style="cursor:pointer"><td><b>${esc(r.contract)}</b></td>`+
+      `<td>${esc(r.party||"")} ${esc(r.quality||"")}</td>${cell(r)}</tr>`).join("");
+    $("#drawer-body").innerHTML=`<p class="muted">Looms' woven weft (from the scoreboard picks) vs the weft the ERP issued. `+
+      `Flagged beyond ±${(j.tolerance_pct||5)}%. Click a contract for its monthly split.</p>`+
+      `<div class="tscroll"><table>${head}<tbody>${body||'<tr><td colspan="6" class="muted">No weft data.</td></tr>'}</tbody></table></div>`;
+    $("#drawer-body").querySelectorAll(".clickrow").forEach(tr=>tr.onclick=()=>drawWeftCheck(tr.dataset.c));
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load the weft check.</p>'; }
 }
 
 /* ---------- yarn & fabric tiles ---------- */
@@ -1339,14 +1390,19 @@ async function loadExpense(){
   $("#store-msg").textContent="Loading…"; $("#store-out").innerHTML="";
   try{
     var j=await (await fetch(`api/report?name=store-expense&fmt=json`+dayq()+storeRangeQ())).json();
-    // net store expense = issued − returned (last column total)
-    var issued=j.rows.reduce((a,r)=>a+(+String(r[2]).replace(/[^\d.-]/g,"")||0),0);
-    var retd=j.rows.reduce((a,r)=>a+(+String(r[3]).replace(/[^\d.-]/g,"")||0),0);
+    // Find the money columns BY NAME (the report has an Item/Code/Head prefix, so fixed indexes read the wrong column).
+    var ci=h=>j.columns.findIndex(c=>String(c).toLowerCase().startsWith(h));
+    var iIdx=ci("issued"), rIdx=ci("returned");
+    var toNum=v=>+String(v).replace(/[^\d.-]/g,"")||0;
+    // Sum the item rows only (skip the report's own TOTAL row so it is not counted twice).
+    var body=j.rows.filter(r=>String(r[0]).toUpperCase()!=="TOTAL");
+    var issued=body.reduce((a,r)=>a+(iIdx>=0?toNum(r[iIdx]):0),0);
+    var retd=body.reduce((a,r)=>a+(rIdx>=0?toNum(r[rIdx]):0),0);
     $("#store-tiles").innerHTML =
       tile("🧾 Net store expense", "Rs "+rs(issued-retd), "issued − returned","accent") +
       tile("📤 Issued", "Rs "+rs(issued), "") +
       tile("↩ Returned", "Rs "+rs(retd), "") +
-      tile("📦 Items", num(j.rows.length), "with movement");
+      tile("📦 Items", num(body.length), "with movement");
     var nums=j.columns.map((_,i)=>i).filter(i=>j.rows.length && j.rows.every(row=>row[i]===""||/^[-+\d.,%\s]+$/.test(String(row[i]))));
     $("#store-msg").textContent = j.title + (j.summary&&j.summary.length? "  —  "+j.summary.join("  ·  ") : "");
     $("#store-out").innerHTML = `<div class="card"><div class="tscroll">`+table(j.columns, j.rows.map(row=>row.map(c=>esc(c))), nums)+`</div></div>`;

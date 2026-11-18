@@ -756,5 +756,37 @@ def _beam_stock(con, cfg, as_of=None):
             "sent_out": counts.get("sent_out", 0)}
 
 
+def sized_beam_list(con, cfg, as_of=None):
+    """Each sized beam waiting for a loom (status sized_waiting) - the Weaving 'Sized, waiting' tile drill-down (item L).
+    beams.sizer_name / received_date are often NULL on live, so the sizer and received date are taken from sized_sets
+    via set_no (sizer_name, set_date); days waiting = today - received date; quality comes from the contract."""
+    as_of = as_of or date.today()
+    ss = {}
+    for sno, sd, sz in con.execute("SELECT set_no, set_date, sizer_name FROM sized_sets ORDER BY rowid"):
+        if sno is not None:
+            ss.setdefault(str(sno), (sd, sz))            # first (earliest) row per set wins
+    ql = {str(c): q for c, q in con.execute("SELECT contract_no, quality FROM contracts")}
+    rows = []
+    for beam, sno, cno, ends, slen, sizer, recv in con.execute(
+            """SELECT beam_no, set_no, contract_no, ends, set_length_m, sizer_name, received_date
+               FROM beams WHERE status = 'sized_waiting' ORDER BY set_no, beam_no"""):
+        sd, sz = ss.get(str(sno), (None, None))
+        recv = recv or sd                                # the snapshot's received date, else the set's sizing date
+        sizer = sizer or sz or "—"
+        days = None
+        if recv:
+            try:
+                days = (as_of - date.fromisoformat(str(recv)[:10])).days
+            except Exception:
+                days = None
+        rows.append({"set_no": sno or "—", "beam_no": beam or "—", "contract": cno or "—",
+                     "ends": round(ends or 0), "quality": ql.get(str(cno), "") or "—",
+                     "set_length_m": round(slen or 0), "sizer": sizer,
+                     "received": (str(recv)[:10] if recv else "—"),
+                     "days_waiting": (days if days is not None else "—")})
+    total_len = sum(r["set_length_m"] for r in rows if isinstance(r["set_length_m"], (int, float)))
+    return {"rows": rows, "beams": len(rows), "total_length_m": round(total_len)}
+
+
 def t_look(cfg):
     return {**pilferage.DEFAULTS, **cfg["pilferage"]}["lookback_days"]

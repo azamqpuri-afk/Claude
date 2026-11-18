@@ -720,6 +720,27 @@ class App:
         finally:
             con.close()
 
+    def sized_beams(self):
+        """Each sized beam waiting for a loom - the Weaving 'Sized, waiting' tile drill-down (item L)."""
+        from . import data as _data
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return _data.sized_beam_list(con, self.cfg)
+        finally:
+            con.close()
+
+    def weft(self, contract="", period="month"):
+        """Scoreboard-vs-ERP weft (item J): all contracts, or one contract's per-week/month breakdown."""
+        from ..textile import weft_check
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            if contract:
+                return {"contract": contract, "compare": weft_check.weft_compare(con, self.cfg, contract),
+                        "periods": weft_check.weft_by_period(con, self.cfg, contract, period or "month")}
+            return weft_check.weft_overview(con, self.cfg)
+        finally:
+            con.close()
+
     def purchasing(self, q="", only="all"):
         from . import purchasing
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -885,6 +906,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/edits", "/api/edits/detail",
                 "/api/looms/efficiency", "/api/looms/days",
                 "/api/scoreboard", "/api/scoreboard/trend", "/api/scoreboard/live", "/api/sensor/episode",
+                "/api/weaving/sized-beams", "/api/weft",
                 "/api/purchasing", "/api/purchasing/item",
                 "/api/reports/files", "/api/changes"):
         if check_licence:
@@ -1007,6 +1029,10 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.loom_efficiency(a0, a1, picked), "application/json", {}
         if path == "/api/scoreboard/live":               # live running-shift scoreboard + sensor live panel (#29)
             return 200, app.scoreboard_live(), "application/json", {}
+        if path == "/api/weaving/sized-beams":           # sized beams waiting for a loom (Weaving tile drill, item L)
+            return 200, app.sized_beams(), "application/json", {}
+        if path == "/api/weft":                          # scoreboard-vs-ERP weft (item J): overview or per-contract
+            return 200, app.weft(params.get("contract", ""), params.get("period", "month")), "application/json", {}
         if path == "/api/sensor/episode":                # both looms' stop timeline for a sensor-swap episode (item D)
             a0, b0 = params.get("a", ""), params.get("b", "")
             tf, tt = params.get("from", ""), params.get("to", "")

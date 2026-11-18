@@ -314,6 +314,9 @@ ENTITIES += (
          C("stops", "REAL", "Number of stops"),
          C("shift_sec", "REAL", "Total shift time in this reading (seconds) - the weight for a time-based efficiency"),
          C("picks_per_inch", "REAL", "Picks/inch the monitor measured, if it reports it (optional)"),
+         C("picks", "REAL", "Total picks (weft insertions / loom revolutions) the monitor counted in this reading "
+                            "(e.g. Dost RTLSUM PPROD). Used for the scoreboard-vs-ERP weft check; when the monitor "
+                            "does not report it, picks are derived from meters x picks/inch (optional)"),
          C("pieces", "REAL", "Panels/pieces across the beam the monitor reports (e.g. 3 for a 3-panel beam); the "
                              "monitor's meters already count all pieces. Used to adjust expected output across a "
                              "quality change (optional)"),

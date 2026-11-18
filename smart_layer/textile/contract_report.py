@@ -511,9 +511,22 @@ def contract_report(con, cfg, contract):
     ]
     if oth_m:
         brows.append(["Fabric to other parties (memo, not in the balance) m", round(oth_m)])
+    # Scoreboard vs ERP weft (item J): what the looms wove (from the scoreboard picks) vs what the ERP issued as weft.
+    weft_j = None
+    try:
+        from . import weft_check
+        wj = weft_check.weft_compare(con, cfg, contract)
+        if wj["scoreboard_kg"] or wj["erp_kg"]:
+            weft_j = wj
+            pc = (f"{wj['pct']:+.1f}%" if wj["pct"] is not None else "—")
+            tag = "  ⚠ beyond tolerance" if wj["flag"] else ""
+            brows.append([f"Weft - scoreboard vs ERP kg (diff {pc}){tag}",
+                          f"{wj['scoreboard_kg']:,} vs {wj['erp_kg']:,}  (diff {wj['diff_kg']:+,})"])
+    except Exception:
+        weft_j = None
     sec("balances", "Summary", ["Item", "Value"], brows)
 
-    summary = {"contract": cno, "combined": combined,
+    summary = {"contract": cno, "combined": combined, "weft_check": weft_j,
                "warp_recv": round(tk if combined else warp_k), "warp_bal": round((tk - to_sizing - weft_net) if combined else (warp_k - to_sizing)),
                "weft_recv": (0 if combined else round(weft_k)), "weft_bal": (0 if combined else round(weft_k - weft_net)),
                "woven": round(woven), "dispatched": round(out_m - in_m), "to_other": round(oth_m),

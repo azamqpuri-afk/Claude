@@ -48,6 +48,8 @@ def store_expense(con, cfg, d0=None, d1=None):
         rows.append([names.get(code, code), code, heads.get(code, ""), i, r, i - r])
     rows.sort(key=lambda x: -x[5])
     ti, tr = sum(r[3] for r in rows), sum(r[4] for r in rows)
+    if rows:                                              # a TOTAL row under the table (on screen and in the PDF/Excel)
+        rows.append(["TOTAL", "", "", round(ti), round(tr), round(ti - tr)])
     summary = [f"{d0:%d-%b-%Y} to {d1:%d-%b-%Y}: issued {cur} {ti:,.0f}, returned {cur} {tr:,.0f}, "
                f"NET store expense {cur} {ti - tr:,.0f} over {len(rows)} items."]
     if heads:                                            # a "by head" breakdown line when the ERP groups items by head

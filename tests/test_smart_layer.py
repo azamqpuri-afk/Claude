@@ -97,7 +97,7 @@ def test_audit_finds_every_planted_mistake(env):
         ("ACTION", "Store", "bill V05-777"),
         ("CONFIRMED", "Store", "Proximity sensor: stock is"),
         ("ACTION", "Weaving", "LOOM-07: no production"),
-        ("CONFIRMED", "Weaving", "LOOM-11 2026-10-02: efficiency 112%"),
+        # (efficiency-over-100% is no longer raised in the live/default run - item K; see test_v0186_eff100_daily_only)
         ("WATCH", "Weaving", "LOOM-15 (contract CON-42): rejection 20%"),
     }
     for sev, section, text in expected:
@@ -2204,10 +2204,11 @@ def test_v0174_routine_rerate_downgrades_action_to_info(env):
 
 class _AuditStub:
     """A minimal Audit for calling one module's run() in isolation on a hand-built store."""
-    def __init__(self, con, cfg, d0, d1):
+    def __init__(self, con, cfg, d0, d1, persist=True):
         self.con, self.cfg, self.t = con, cfg, cfg["audit"]
         self._win = (d0, d1)
         self.d0, self.d1 = d0, d1
+        self.persist = persist                           # daily audit (True) runs the daily-only checks e.g. eff100
         self.profile, self.findings, self.summary = {}, [], []
 
     @property
@@ -2862,3 +2863,113 @@ def test_v0180_ack_migration_maps_old_keys():
     new = _migrate_acks(old)
     assert "Weaving|lhist-L1" in new and "Looms|monitor-L1" in new
     assert "Weaving|rej-LOOM-15-CON-42" in new and "Weaving|nobeam-LOOM-07-2026-10-02" in new
+
+
+# ---- 18-Nov batch J, K, L, M --------------------------------------------------------------------
+
+def test_vK_eff100_daily_only(env):
+    # K: efficiency-over-100% runs ONLY in the daily audit (persist), never the live run, and only on days on or
+    # before yesterday. WATCH the first sighting (prod_date = yesterday); CONFIRMED once it survives a day (older).
+    from smart_layer.audit import weaving
+    cfg, _ = env
+    con = _weaving_store()
+    con.execute("INSERT INTO looms VALUES ('L1','LOOM # 1')")
+    con.execute("INSERT INTO contracts VALUES ('C1','Q',66)")
+    con.execute("INSERT INTO loom_production VALUES ('2026-11-18','L1','day','C1','Q',NULL,300,300,0,0,110,NULL)")  # today
+    con.execute("INSERT INTO loom_production VALUES ('2026-11-17','L1','day','C1','Q',NULL,300,300,0,0,112,NULL)")  # yesterday
+    con.execute("INSERT INTO loom_production VALUES ('2026-11-15','L1','day','C1','Q',NULL,300,300,0,0,108,NULL)")  # older
+    d0, d1 = "2026-10-01", "2026-11-18"
+    live = _AuditStub(con, cfg, d0, d1, persist=False); weaving.run(live)
+    assert not [f for f in live.findings if f.key.startswith("eff100-")]        # never in the live/urgent run
+    daily = _AuditStub(con, cfg, d0, d1, persist=True); weaving.run(daily)
+    effs = {f.key: f.severity for f in daily.findings if f.key.startswith("eff100-")}
+    assert any(k.endswith("2026-11-17") and v == "WATCH" for k, v in effs.items())      # yesterday -> WATCH
+    assert any(k.endswith("2026-11-15") and v == "CONFIRMED" for k, v in effs.items())  # older -> CONFIRMED
+    assert not any(k.endswith("2026-11-18") for k in effs)                     # today is not fully keyed -> not raised
+
+
+def test_vL_sized_beam_list(env):
+    # L: the Sized-waiting tile drill lists each sized_waiting beam; beams.sizer_name/received_date are NULL on live,
+    # so the sizer and received date come from sized_sets via set_no, and days waiting = as_of - received date.
+    from smart_layer.web import data as web_data
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE beams (beam_no TEXT, status TEXT, set_no TEXT, contract_no TEXT, loom_code TEXT, sizer_name TEXT,
+            ends REAL, set_length_m REAL, woven_m REAL, length_left_m REAL, mounted_date TEXT, received_date TEXT, bwidth REAL);
+        CREATE TABLE sized_sets (set_no TEXT, set_date TEXT, sizer_name TEXT, contract_no TEXT, ends REAL, set_length_m REAL);
+        CREATE TABLE contracts (contract_no TEXT, quality TEXT);
+    """)
+    con.execute("INSERT INTO contracts VALUES ('C1','90x82')")
+    con.execute("INSERT INTO sized_sets VALUES ('260275','2026-10-17','HAJI TAJ BABU','C1',9000,3150)")
+    con.execute("INSERT INTO beams VALUES ('00040','sized_waiting','260275','C1','L1',NULL,9000,3150,0,0,NULL,NULL,3)")
+    con.execute("INSERT INTO beams VALUES ('00041','on_loom','260275','C1','L1',NULL,9000,3150,0,100,NULL,NULL,3)")
+    d = web_data.sized_beam_list(con, cfg, as_of=date(2026, 11, 18))
+    assert d["beams"] == 1 and d["total_length_m"] == 3150                     # only the sized_waiting beam
+    r = d["rows"][0]
+    assert r["sizer"] == "HAJI TAJ BABU" and r["received"] == "2026-10-17" and r["quality"] == "90x82"
+    assert r["days_waiting"] == 32                                             # 17-Oct -> 18-Nov
+
+
+def test_vM_store_expense_total_row(env):
+    # M: the store-expense report carries a Head column, and now ends with a TOTAL row (Issued / Returned / Net).
+    from smart_layer.reports import store_extra
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE store_issues (item_code TEXT, doc_date TEXT, amount REAL);
+        CREATE TABLE store_returns (item_code TEXT, doc_date TEXT, amount REAL);
+        CREATE TABLE items (item_code TEXT, item_name TEXT);
+    """)
+    con.execute("INSERT INTO items VALUES ('I1','Reed'),('I2','Oil')")
+    con.execute("INSERT INTO store_issues VALUES ('I1','2026-11-05',583737),('I2','2026-11-06',0)")
+    con.execute("INSERT INTO store_returns VALUES ('I1','2026-11-07',11734)")
+    rep = store_extra.store_expense(con, cfg, date(2026, 11, 1), date(2026, 11, 30))
+    assert rep.columns[2] == "Head"                                           # Head sits between Code and the money cols
+    tot = rep.rows[-1]
+    assert tot[0] == "TOTAL" and tot[3] == 583737 and tot[4] == 11734 and tot[5] == 572003
+
+
+def test_vJ_weft_check(env):
+    # J: scoreboard-vs-ERP weft. weft_kg = picks x width_in x panels x 0.0254 x (1+waste) / (count x ne_m_per_kg).
+    from smart_layer.textile import weft_check
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL);
+        CREATE TABLE loom_production (loom_code TEXT, prod_date TEXT, contract_no TEXT, meters REAL);
+        CREATE TABLE contracts (contract_no TEXT, party_name TEXT, party_code TEXT, quality TEXT, width_in REAL, weft_count REAL, picks_per_inch REAL);
+        CREATE TABLE yarn_movements (move_date TEXT, contract_no TEXT, move_type TEXT, kg REAL);
+    """)
+    con.execute("INSERT INTO contracts VALUES ('74','QADRI','P1','76x66 30/30 118',118,30,66)")
+    con.execute("INSERT INTO loom_production VALUES ('L4','2026-11-10','74',13090)")   # L4 wove 74 that day
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-11-10','L4','day',13090,66,900000,1)")  # picks given directly
+    con.execute("INSERT INTO yarn_movements VALUES ('2026-11-10','74','to_looms',2082)")
+    cmp = weft_check.weft_compare(con, cfg, "74")
+    exp = 900000 * 118 * 1 * 0.0254 * 1.03 / (30 * 1693.3)
+    assert cmp["scoreboard_kg"] == round(exp) and cmp["erp_kg"] == 2082
+    assert cmp["pct"] is not None
+    per = weft_check.weft_by_period(con, cfg, "74", "month")
+    assert per and per[0]["period"] == "2026-11" and per[0]["erp_kg"] == 2082
+    ov = weft_check.weft_overview(con, cfg)
+    assert any(r["contract"] == "74" for r in ov["rows"])
+
+
+def test_vJ_weft_picks_derived_when_monitor_has_none(env):
+    # J fallback: when the monitor gives no pick count, picks = metres x picks/inch x 39.37.
+    from smart_layer.textile import weft_check
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, shift TEXT, meters REAL, picks_per_inch REAL, picks REAL, pieces REAL);
+        CREATE TABLE loom_production (loom_code TEXT, prod_date TEXT, contract_no TEXT, meters REAL);
+        CREATE TABLE contracts (contract_no TEXT, party_name TEXT, party_code TEXT, quality TEXT, width_in REAL, weft_count REAL, picks_per_inch REAL);
+        CREATE TABLE yarn_movements (move_date TEXT, contract_no TEXT, move_type TEXT, kg REAL);
+    """)
+    con.execute("INSERT INTO contracts VALUES ('C9','X','P','q',118,30,66)")
+    con.execute("INSERT INTO loom_production VALUES ('L4','2026-11-10','C9',5000)")
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-11-10','L4','day',5000,66,NULL,1)")   # no picks -> derive
+    cmp = weft_check.weft_compare(con, cfg, "C9")
+    picks = 5000 * 66 * 39.37
+    exp = picks * 118 * 1 * 0.0254 * 1.03 / (30 * 1693.3)
+    assert cmp["scoreboard_kg"] == round(exp)

@@ -25,12 +25,20 @@ def run(a):
                 code, d_from, d_to)
         return r[0][0] if r else None
 
-    # efficiency over 100% - tiny part-shift entries round over 100, only a big one is a definite error
-    for pd, loom, eff, m in a.q(f"""SELECT p.prod_date, COALESCE(l.loom_name, p.loom_code), {EFF_SQL}, p.meters
-            FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
-            WHERE p.prod_date BETWEEN ? AND ? AND {EFF_SQL} > 100""", d0, d1):
-        a.add("CONFIRMED" if m >= 150 else "WATCH", "Weaving", f"eff100-{loom}-{pd}",
-              f"{loom} {pd}: efficiency {eff:.0f}% (over 100%) on {m:,.0f} m", "meters, shift length or RPM keyed wrong")
+    # efficiency over 100% - only in the DAILY audit (a.persist), and only on days that are fully keyed (prod_date on
+    # or before yesterday). A live / mid-entry shift often shows a transient >100% that settles once the other shift is
+    # keyed (e.g. a 306 m entry at 103% that reads 96% once the 358 m second shift lands), so it must NEVER fire from
+    # the live/urgent run. WATCH the first daily sighting (prod_date = yesterday); CONFIRMED only if it is STILL over
+    # 100% a day later (prod_date older than yesterday), re-read fresh each daily run so a corrected entry drops out.
+    if a.persist:
+        yday = (date.fromisoformat(str(d1)) - timedelta(days=1)).isoformat()
+        for pd, loom, eff, m in a.q(f"""SELECT p.prod_date, COALESCE(l.loom_name, p.loom_code), {EFF_SQL}, p.meters
+                FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
+                WHERE p.prod_date BETWEEN ? AND ? AND {EFF_SQL} > 100""", d0, yday):
+            sev = "WATCH" if str(pd) >= yday else "CONFIRMED"
+            a.add(sev, "Weaving", f"eff100-{loom}-{pd}",
+                  f"{loom} {pd}: efficiency {eff:.0f}% (over 100%) on {m:,.0f} m",
+                  "meters, shift length or RPM keyed wrong" + ("" if sev == "WATCH" else " - still over 100% a day later"))
 
     # production without a beam - only for ERPs that record beams on production
     with_beam, rows = a.q("""SELECT SUM(beam_no IS NOT NULL), COUNT(*) FROM loom_production WHERE prod_date >= date(?, '-120 days')""", d1)[0]

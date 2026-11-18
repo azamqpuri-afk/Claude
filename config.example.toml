@@ -83,6 +83,12 @@ duplicate_payment_min = 5000
 # keep the three separate (Total = A + B + Rejection). "auto" works it out per contract; set true or false to force.
 # rejection_includes_second = "auto"
 # grade_labels = { a = "A-grade", b = "B-grade", reject = "Rejection" }   # rename the columns if the mill uses other names
+# Scoreboard-vs-ERP weft check (the Weaving "Weft: scoreboard vs ERP" panel and the contract-report summary line):
+# weft used (kg) = scoreboard picks x reed width (m) x (1 + waste) / (weft count x metres-per-kg). The constants live
+# here so a denier/tex mill can change them without touching the code.
+# weft_waste_pct = 3.0          # crimp + wastage added to the woven weft length (%)
+# weft_tolerance_pct = 5.0      # flag a contract whose scoreboard vs ERP weft differ by more than this (%)
+# ne_m_per_kg = 1693.3          # metres of 1-Ne cotton yarn per kg (change for a denier/tex count system)
 
 # Contract report (party-first closing). A fabric OGP whose party_code differs from the contract's party_code is
 # "to another party" (rejection sale or sold elsewhere): it goes to a separate "Fabric to other parties" tab and is
