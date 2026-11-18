@@ -139,6 +139,21 @@ def contract_report(con, cfg, contract):
                        GROUP BY pieces ORDER BY COUNT(*) DESC, pieces DESC LIMIT 1""", (loom,))
         return float(r[0][0]) if r and r[0][0] else pieces_x
 
+    def loom_pieces_win(loom, d_from, d_to):
+        # Panels across the beam DURING ITS OWN RUN (to_loom -> from_loom), not the loom's whole-life mode: a loom that
+        # later changed pieces (e.g. 3 panels -> 1 x 118") would otherwise divide this beam's woven by the wrong panels.
+        if loom and (d_from or d_to):
+            clauses, params = ["loom_code = ?", "pieces IS NOT NULL"], [loom]
+            if d_from:
+                clauses.append("read_date >= ?"); params.append(d_from)
+            if d_to:
+                clauses.append("read_date <= ?"); params.append(d_to)
+            r = _q(con, f"SELECT pieces FROM loom_monitor WHERE {' AND '.join(clauses)} "
+                        "GROUP BY pieces ORDER BY COUNT(*) DESC, pieces DESC LIMIT 1", tuple(params))
+            if r and r[0][0]:
+                return float(r[0][0])
+        return loom_pieces(loom)                          # no monitor data in the window -> the loom's overall mode
+
     # ---- yarn received (IGP), split warp vs weft ----
     # When the contract's warp and weft are the SAME count (e.g. 54/54, 36/36), warp and weft cannot be told apart, so
     # we COMBINE them into one "Yarn received / to sizing / to looms / balance". We do NOT use the receipt warp/weft
@@ -230,14 +245,16 @@ def contract_report(con, cfg, contract):
     # and the Sets section, the Beams section and the contract line agree by construction (a set's beams can run on
     # different looms with different panels, so one panels factor for the whole set was wrong).
     set_fin = {}                                          # _norm(set) -> {"num": SUM(woven/panels), "den": SUM(len), "n": finished}
-    for beam, sno, loom, blen, bwov, came_off in _q(con, """SELECT beam_no, MAX(set_no), MAX(loom_code),
+    for beam, sno, loom, blen, bwov, came_off, d_from, d_to in _q(con, """SELECT beam_no, MAX(set_no), MAX(loom_code),
             MAX(COALESCE(length_m,0)), MAX(COALESCE(woven_m,0)),
-            MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN 1 ELSE 0 END)
+            MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN 1 ELSE 0 END),
+            MIN(CASE WHEN move_type = 'to_loom' THEN move_date END),
+            MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN move_date END)
             FROM beam_movements WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> '' GROUP BY beam_no""", (contract,)):
         if not came_off or not blen:
             continue
         f = set_fin.setdefault(_norm(sno), {"num": 0.0, "den": 0.0, "n": 0})
-        f["num"] += (bwov or 0) / (loom_pieces(loom) or 1)
+        f["num"] += (bwov or 0) / (loom_pieces_win(loom, d_from, d_to) or 1)
         f["den"] += blen or 0
         f["n"] += 1
     rows = []
@@ -274,7 +291,7 @@ def contract_report(con, cfg, contract):
     bm = _q(con, """SELECT beam_no, status, loom_code, mounted_date, COALESCE(set_length_m,0),
                     COALESCE(woven_m,0), length_left_m FROM beams WHERE contract_no = ? ORDER BY mounted_date, beam_no""", (contract,))
     seen = set()
-    rows, fin_set, fin_woven, running, finished = [], 0.0, 0.0, 0, 0
+    rows, fin_num, fin_den, running, finished = [], 0.0, 0.0, 0, 0
     for beam, status, loom, md, length, woven, left in bm:
         seen.add(_norm(beam))
         st = _norm(status)
@@ -293,18 +310,20 @@ def contract_report(con, cfg, contract):
     # woven meters - pull in any not already shown. We never source beam numbers from loom_production.beam_no: on
     # some ERPs that is an internal transaction id, not the beam number. Short/extra % and shrinkage are finished-only.
     mv = _q(con, """SELECT beam_no, MAX(loom_code), MAX(COALESCE(length_m,0)), MAX(COALESCE(woven_m,0)),
-                    MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN 1 ELSE 0 END)
+                    MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN 1 ELSE 0 END),
+                    MIN(CASE WHEN move_type = 'to_loom' THEN move_date END),
+                    MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN move_date END)
                     FROM beam_movements WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> ''
                     GROUP BY beam_no ORDER BY beam_no""", (contract,))
-    for beam, loom, length, woven, came_off in mv:
+    for beam, loom, length, woven, came_off, d_from, d_to in mv:
         if _norm(beam) in seen:
             continue
         seen.add(_norm(beam))
         if came_off:
             finished += 1
-            lp = loom_pieces(loom)                        # woven counts every panel; compare one panel's woven to the set
+            lp = loom_pieces_win(loom, d_from, d_to)      # panels DURING this beam's run; woven counts every panel
             ew = (woven or 0) / (lp or 1)
-            fin_set += length or 0; fin_woven += woven or 0
+            fin_num += ew; fin_den += length or 0         # contract-line shrinkage: SUM(woven/panels) / SUM(length)
             pct = (f"{100.0 * (ew - length) / length:+.1f}%" if length else "—")
             state = "finished"
         else:
@@ -442,12 +461,11 @@ def contract_report(con, cfg, contract):
     weft_ret = (weft_ret[0][0] or 0) if weft_ret else 0
     # Shrinkage: finished beams only (a running beam's warp is partly unwoven, so set-length vs woven would read as a
     # huge false shrinkage). The woven meters count EVERY panel across the loom, while the set length is one panel's
-    # warp length, so divide the woven meters by the panels-across before comparing (else a 3-panel beam reads ~-200%).
-    pieces_x = _pieces_across(con, contract)
-    shrink_pct = (100.0 * (fin_set - fin_woven / (pieces_x or 1)) / fin_set) if (finished and fin_set) else None
+    # warp length, so each beam's woven is divided by the panels of the loom it ran on (fin_num, built in the Beams
+    # section with loom_pieces_win) before comparing: shrink % = 1 - SUM(woven/panels) / SUM(set length).
+    shrink_pct = (100.0 * (1 - fin_num / fin_den)) if (finished and fin_den) else None
     if shrink_pct is not None:
-        px = f", {pieces_x:g} panels" if pieces_x and pieces_x != 1 else ""
-        shrink_item = f"Shrinkage % (finished beams only: {finished}{px})"
+        shrink_item = f"Shrinkage % (finished beams only: {finished})"
         shrink_val = f"{shrink_pct:.1f}%"
     elif running:
         shrink_item, shrink_val = "Shrinkage %", f"n/a - all {running} beam(s) still running"

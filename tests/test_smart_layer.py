@@ -2636,7 +2636,7 @@ def test_v0181_combined_yarn_and_shrinkage_pieces(env):
     assert any(k.startswith("Yarn received") for k in bal) and not any("Weft yarn received" in k for k in bal)
     shrink = [r for r in secs["balances"]["rows"] if "Shrinkage" in r[0]][0]
     pct = float(str(shrink[1]).rstrip("%"))
-    assert -5 < pct < 10 and "panels" in shrink[0]                        # ~1-2%, not -200%
+    assert -5 < pct < 10 and "finished beams only" in shrink[0]           # ~1-2%, not -200%
     for key in ("sizing", "sets", "beams", "fabric_other"):              # totals present on every section
         assert secs[key]["totals"], key
     # 0.18.1: Sets 'Woven m' comes through the set's finished beams in beam_movements (the beams snapshot reads 0),
@@ -2712,6 +2712,38 @@ def test_v0183_set_shrink_is_weighted_mean_of_its_beam_rows(env):
     scol = srow["columns"].index("Shrink %")
     got = float(str(srow["rows"][0][scol]).rstrip("%"))
     assert abs(got - expected) < 0.2, (got, expected)
+
+
+def test_v0184_set_shrink_uses_panels_during_beam_run(env):
+    # 0.18.4: panels are taken from the loom DURING the beam's own run (to_loom -> from_loom), not the loom's whole-life
+    # mode. Loom 4 wove 3 panels while the beam ran, then changed to 1 x 118" afterwards; the overall mode is now 1, so
+    # loom_pieces() would divide 9,027 / 1 = -186% - but in-window it is 3, giving ~4.5%. Beams, Sets and contract agree.
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.execute("CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, meters REAL, pieces REAL)")
+    con.execute("CREATE TABLE sized_sets (set_no TEXT, set_date TEXT, sizer_name TEXT, contract_no TEXT, ends REAL, "
+                "set_length_m REAL, bags REAL, gullay_kg REAL, waste_kg REAL, yarn_sent_kg REAL)")
+    con.execute("INSERT INTO contracts (contract_no, picks_per_inch) VALUES ('KX', 42)")
+    con.execute("INSERT INTO looms VALUES ('L4','LOOM # 4')")
+    # 3 panels while the beam ran (Sep 26 - Oct 16), then 1 panel from Oct 23 on -> overall mode is now 1
+    for d in ("2026-09-28", "2026-10-05", "2026-10-14"):
+        con.execute("INSERT INTO loom_monitor VALUES (?, 'L4', 9000, 3)", (d,))
+    for d in ("2026-10-25", "2026-10-28", "2026-11-02", "2026-11-05"):
+        con.execute("INSERT INTO loom_monitor VALUES (?, 'L4', 3000, 1)", (d,))
+    con.execute("INSERT INTO sized_sets VALUES ('S7','2026-09-20','SZ','KX',9000,3150,10,0,0,12000)")
+    con.execute("INSERT INTO beam_movements VALUES ('2026-09-26','G','00020','to_loom',NULL,'S7','KX','L4',3150,0)")
+    con.execute("INSERT INTO beam_movements VALUES ('2026-10-16','G','00020','from_loom_finished',NULL,'S7','KX','L4',3150,9027)")
+    secs = {s["key"]: s for s in cr.contract_report(con, cfg, "KX")["sections"]}
+    scol = secs["sets"]["columns"].index("Shrink %")
+    pct = float(str(secs["sets"]["rows"][0][scol]).rstrip("%"))
+    assert 2 < pct < 7, pct                                # ~4.5% in-window, not -186% from the loom's current mode
+    # the Beams section's per-beam Short/extra % and the contract line must use the same in-window panels
+    bcol = secs["beams"]["columns"]
+    bpct = float(str(secs["beams"]["rows"][0][bcol.index("Short/extra %")]).rstrip("%"))
+    assert -7 < bpct < -2                                  # 9027/3=3009 vs 3150 -> about -4.5% short
+    cline = [r for r in secs["balances"]["rows"] if "Shrinkage" in str(r[0])][0]
+    assert 2 < float(str(cline[1]).rstrip("%")) < 7
 
 
 def test_v0181_quality_summary_combined_columns(env):
