@@ -516,7 +516,10 @@ def contract_report(con, cfg, contract):
     try:
         from . import weft_check
         wj = weft_check.weft_compare(con, cfg, contract)
-        if wj["scoreboard_kg"] or wj["erp_kg"]:
+        if wj.get("no_scoreboard") and wj["erp_kg"]:
+            weft_j = wj
+            brows.append(["Weft - scoreboard vs ERP", "no scoreboard data for this contract's looms"])
+        elif wj["scoreboard_kg"] or wj["erp_kg"]:
             weft_j = wj
             pc = (f"{wj['pct']:+.1f}%" if wj["pct"] is not None else "—")
             tag = "  ⚠ beyond tolerance" if wj["flag"] else ""

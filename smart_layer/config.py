@@ -107,6 +107,7 @@ DEFAULTS = {
         "weft_waste_pct": 3.0,            # crimp + wastage added to the woven weft length (%)
         "weft_tolerance_pct": 5.0,        # flag a contract whose scoreboard vs ERP weft differ by more than this (%)
         "ne_m_per_kg": 1693.3,            # metres of 1-Ne cotton yarn per kg; a denier/tex mill changes this constant
+        "weft_active_days": 60,           # the weft check lists contracts with scoreboard data in this many days first
     },
     "contract_report": {                  # the party-first contract report - see smart_layer/textile/contract_report.py
         # A fabric OGP whose party_code differs from the contract's party_code is "to another party" (rejection sale

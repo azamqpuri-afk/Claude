@@ -1190,10 +1190,15 @@ async function drawWeftCheck(contract){
     }
     var j=await (await fetch("api/weft")).json();
     var head=`<thead><tr><th>Contract</th><th>Party / quality</th><th class="num">Scoreboard kg</th><th class="num">ERP kg</th><th class="num">Diff</th><th class="num">%</th></tr></thead>`;
-    var body=(j.rows||[]).map(r=>`<tr class="clickrow" data-c="${esc(r.contract)}" style="cursor:pointer"><td><b>${esc(r.contract)}</b></td>`+
-      `<td>${esc(r.party||"")} ${esc(r.quality||"")}</td>${cell(r)}</tr>`).join("");
-    $("#drawer-body").innerHTML=`<p class="muted">Looms' woven weft (from the scoreboard picks) vs the weft the ERP issued. `+
-      `Flagged beyond ±${(j.tolerance_pct||5)}%. Click a contract for its monthly split.</p>`+
+    var body=(j.rows||[]).map(function(r){
+      var vals = r.no_scoreboard
+        ? `<td class="num">—</td><td class="num">${num(r.erp_kg)}</td><td colspan="2" class="muted">no scoreboard data</td>`
+        : cell(r);
+      return `<tr class="clickrow" data-c="${esc(r.contract)}" style="cursor:pointer"><td><b>${esc(r.contract)}</b></td>`+
+        `<td>${esc(r.party||"")} ${esc(r.quality||"")}</td>${vals}</tr>`;
+    }).join("");
+    $("#drawer-body").innerHTML=`<p class="muted">Looms' woven weft (from the scoreboard picks) vs the weft the ERP issued over the same window. `+
+      `Flagged beyond ±${(j.tolerance_pct||5)}%. Contracts with monitor data in the last ${(j.active_days||60)} days first. Click a contract for its monthly split.</p>`+
       `<div class="tscroll"><table>${head}<tbody>${body||'<tr><td colspan="6" class="muted">No weft data.</td></tr>'}</tbody></table></div>`;
     $("#drawer-body").querySelectorAll(".clickrow").forEach(tr=>tr.onclick=()=>drawWeftCheck(tr.dataset.c));
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load the weft check.</p>'; }

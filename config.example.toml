@@ -89,6 +89,8 @@ duplicate_payment_min = 5000
 # weft_waste_pct = 3.0          # crimp + wastage added to the woven weft length (%)
 # weft_tolerance_pct = 5.0      # flag a contract whose scoreboard vs ERP weft differ by more than this (%)
 # ne_m_per_kg = 1693.3          # metres of 1-Ne cotton yarn per kg (change for a denier/tex count system)
+# weft_active_days = 60         # the weft check lists contracts with scoreboard data in this many days first; older
+#                               # contracts (from before the scoreboard went live) show "no scoreboard data"
 
 # Contract report (party-first closing). A fabric OGP whose party_code differs from the contract's party_code is
 # "to another party" (rejection sale or sold elsewhere): it goes to a separate "Fabric to other parties" tab and is
