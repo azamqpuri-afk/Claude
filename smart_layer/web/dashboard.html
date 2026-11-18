@@ -1495,9 +1495,11 @@ function renderStoreRoom(){
       r.map((c,i)=>`<td class="${[5,6].indexOf(i)>=0?'num':''}">${c}</td>`).join("")+`</tr>`).join("")+
     `</tbody></table></div></div>`;
   var n={}; items.forEach(r=>n[r.status]=(n[r.status]||0)+1);
-  $("#store-msg").textContent = `${items.length} items — ${n['OUT OF STOCK']||0} out of stock, ${n['LOW STOCK']||0} low, ${n['IN STOCK']||0} in stock, ${n['IDLE']||0} idle.`;
+  storeDefaultMsg = `${items.length} items — ${n['OUT OF STOCK']||0} out of stock, ${n['LOW STOCK']||0} low, ${n['IN STOCK']||0} in stock, ${n['IDLE']||0} idle.`;
+  $("#store-msg").textContent = storeDefaultMsg;
   $("#store-out").querySelectorAll(".clickrow").forEach(tr=>tr.onclick=()=>drawIssues(tr.dataset.code, tr.dataset.name));
 }
+var storeDefaultMsg = "";
 // natural-ish sort for rack codes so A-2 comes before A-10 ("A-01"/"O-112")
 function cmpLoc(a,b){ return String(a).localeCompare(String(b), undefined, {numeric:true, sensitivity:"base"}); }
 // combined Store filter: free-text search AND the picked location (item O location-wise filter)
@@ -1511,7 +1513,7 @@ function filterStore(){
     var okLoc = !loc || (loc==="\u0000none" ? !rl : rl===loc);
     var show = okText && okLoc; tr.style.display = show?"":"none"; if(show) shown++;
   });
-  var msg=$("#store-msg"); if(msg && (term||loc)) msg.textContent = shown+" item(s) shown"+(loc&&loc!=="\u0000none"?(" in location "+loc):(loc?" with no location":""))+(term?` matching “${term}”`:"");
+  var msg=$("#store-msg"); if(msg) msg.textContent = (term||loc) ? (shown+" item(s) shown"+(loc&&loc!=="\u0000none"?(" in location "+loc):(loc?" with no location":""))+(term?` matching “${term}”`:"")) : storeDefaultMsg;
 }
 function dayq(){ var d=$("#day").value; return d?("&date="+d):""; }
 // live client-side filter over a rendered report table (Store, Payroll)
