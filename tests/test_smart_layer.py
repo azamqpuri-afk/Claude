@@ -2641,18 +2641,20 @@ def test_v0181_combined_yarn_and_shrinkage_pieces(env):
         assert secs[key]["totals"], key
 
 
-def test_v0181_warp_weft_tag_splits(env):
-    # G retest bug 2: when the ERP tags warp/weft (yarn_movements.warp_weft), the split uses the tag even if counts match.
+def test_v0181_warp_weft_splits_by_count_when_counts_differ(env):
+    # G retest bug 2: equal counts ALWAYS combine (the receipt tag is unreliable). When the counts DIFFER, split by
+    # yarn count. Here warp=30 / weft=20 with matching yarn codes -> a real warp/weft split.
     from smart_layer.textile import contract_report as cr
     cfg, _ = env
     con = _mini_contract_store()
     con.execute("""CREATE TABLE yarn_movements (move_date TEXT, gatepass_no TEXT, doc_no TEXT, move_type TEXT,
         yarn_code TEXT, yarn_name TEXT, contract_no TEXT, party_code TEXT, party_name TEXT, bags REAL, kg REAL, warp_weft TEXT)""")
-    con.execute("INSERT INTO contracts (contract_no, party_code, warp_count, weft_count) VALUES ('K5','P1',54,54)")
-    con.execute("INSERT INTO yarn_movements (move_date, doc_no, move_type, contract_no, kg, warp_weft) VALUES ('2026-10-01','A','party_receipt','K5',30000,'WARP')")
-    con.execute("INSERT INTO yarn_movements (move_date, doc_no, move_type, contract_no, kg, warp_weft) VALUES ('2026-10-02','B','party_receipt','K5',20000,'WEFT')")
+    con.execute("INSERT INTO contracts (contract_no, party_code, warp_count, weft_count, warp_yarn, weft_yarn) "
+                "VALUES ('K5','P1',30,20,'Y30','Y20')")
+    con.execute("INSERT INTO yarn_movements (move_date, doc_no, move_type, contract_no, yarn_code, kg) VALUES ('2026-10-01','A','party_receipt','K5','Y30',30000)")
+    con.execute("INSERT INTO yarn_movements (move_date, doc_no, move_type, contract_no, yarn_code, kg) VALUES ('2026-10-02','B','party_receipt','K5','Y20',20000)")
     secs = {s["key"]: s for s in cr.contract_report(con, cfg, "K5")["sections"]}
-    assert secs["yarn_in"]["columns"][-1] == "Warp/Weft"
+    assert secs["yarn_in"]["columns"][-1] == "Warp/Weft"       # counts differ -> split
     sides = {r[-1] for r in secs["yarn_in"]["rows"]}
     assert "warp" in sides and "weft" in sides
     bal = {r[0]: r[1] for r in secs["balances"]["rows"]}

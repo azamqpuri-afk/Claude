@@ -132,27 +132,34 @@ def contract_report(con, cfg, contract):
         sections.append({"key": key, "title": title, "columns": columns, "rows": rows,
                          "totals": totals, "note": note, "num_cols": num_cols or []})
 
+    pieces_x = _pieces_across(con, contract)              # panels across for this contract (woven meters count them all)
+
+    def loom_pieces(loom):
+        r = _q(con, """SELECT pieces FROM loom_monitor WHERE loom_code = ? AND pieces IS NOT NULL
+                       GROUP BY pieces ORDER BY COUNT(*) DESC, pieces DESC LIMIT 1""", (loom,))
+        return float(r[0][0]) if r and r[0][0] else pieces_x
+
     # ---- yarn received (IGP), split warp vs weft ----
-    # Prefer the ERP's own warp/weft tag (yarn_movements.warp_weft). Without it, tell them apart by count - but when
-    # the warp and weft counts are the SAME (e.g. 54/54) they cannot be told apart, so we COMBINE them into one "yarn
-    # received" with one balance rather than guessing (which split differently in the two modes). Both modes use this.
+    # When the contract's warp and weft are the SAME count (e.g. 54/54, 36/36), warp and weft cannot be told apart, so
+    # we COMBINE them into one "Yarn received / to sizing / to looms / balance". We do NOT use the receipt warp/weft
+    # tag to split: the ERP tags the party's whole yarn lot "warp" even when the same yarn is woven as weft, which gave
+    # false 0 weft / negative balances. When the counts DIFFER we split by yarn count (the tag is only a tie-break).
     yr = _q(con, """SELECT move_date, COALESCE(gatepass_no, doc_no), yarn_name, yarn_code, party_name,
                     COALESCE(bags,0), COALESCE(kg,0), warp_weft FROM yarn_movements
                     WHERE contract_no = ? AND move_type = 'party_receipt' ORDER BY move_date""", (contract,))
-    has_tag = any((ww and _norm(ww) in ("WARP", "WEFT")) for *_, ww in yr)
     try:
         counts_differ = bool(warp_count and weft_count and abs(float(warp_count) - float(weft_count)) > 0.001)
     except (TypeError, ValueError):
         counts_differ = bool(warp_count and weft_count and str(warp_count) != str(weft_count))
-    combined = not (has_tag or counts_differ)
+    combined = not counts_differ
     rows, tb, tk, warp_k, weft_k = [], 0.0, 0.0, 0.0, 0.0
     for md, gp, yn, yc, party, bags, kg, ww in yr:
         if combined:
             side = "yarn"
-        elif ww and _norm(ww) in ("WARP", "WEFT"):
-            side = _norm(ww).lower()
         else:
             side = _side(yc, yn, warp_yarn, warp_count, weft_yarn, weft_count)
+            if side == "weft" and ww and _norm(ww) == "WARP" and _norm(yc) != _norm(weft_yarn):
+                side = "warp"                            # count was ambiguous - fall back to the ERP's tag as a tie-break
         rows.append([md, gp, yn, party, round(bags), round(kg), side])
         tb += bags; tk += kg
         if side == "weft":
@@ -197,17 +204,25 @@ def contract_report(con, cfg, contract):
     ss = _q(con, """SELECT set_no, set_date, sizer_name, COALESCE(ends,0), COALESCE(set_length_m,0), COALESCE(bags,0),
                     COALESCE(gullay_kg,0), COALESCE(waste_kg,0), COALESCE(yarn_sent_kg,0) FROM sized_sets
                     WHERE contract_no = ? ORDER BY set_date, set_no""", (contract,))
+    set_woven = {}
+    for sno, wv in _q(con, "SELECT set_no, SUM(COALESCE(woven_m,0)) FROM beams WHERE contract_no = ? GROUP BY set_no", (contract,)):
+        set_woven[_norm(sno)] = wv or 0
     rows = []
     for sn, sd, sz, ends, length, bags, gully, waste, ysent in ss:
         count = (ends * 1.0936 * length / (840.0 * ysent * 2.2046)) if (ysent and length) else 0
-        rows.append([sn, sd, sz, round(ends), round(length), round(bags), round(ysent), round(gully, 1), round(waste, 1),
+        bw = set_woven.get(_norm(sn), 0)                 # fabric woven from this set's beams (counts every panel)
+        shrink = (100.0 * (1 - (bw / (pieces_x or 1)) / length)) if (length and bw) else None
+        rows.append([sn, sd, sz, round(ends), round(length), round(bags), round(ysent), round(gully, 1),
+                     round(waste, 1), round(bw), (f"{shrink:.1f}%" if shrink is not None else "—"),
                      (f"{count:.1f}" if count else "—")])
+
     def _col(i):
         return sum(r[i] for r in rows if isinstance(r[i], (int, float)))
     sets_tot = (["", "", "TOTAL", round(_col(3)), round(_col(4)), round(_col(5)), round(_col(6)),
-                 round(_col(7), 1), round(_col(8), 1), ""] if rows else None)
-    sec("sets", "Sets sized", ["Set", "Date", "Sizer", "Ends", "Length m", "Beams/bags", "Yarn kg", "Gully kg", "Waste kg", "Calc count"],
-        rows, totals=sets_tot, num_cols=[3, 4, 5, 6, 7, 8])
+                 round(_col(7), 1), round(_col(8), 1), round(_col(9)), "", ""] if rows else None)
+    sec("sets", "Sets sized",
+        ["Set", "Date", "Sizer", "Ends", "Length m", "Beams/bags", "Yarn kg", "Gully kg", "Waste kg", "Woven m", "Shrink %", "Calc count"],
+        rows, totals=sets_tot, num_cols=[3, 4, 5, 6, 7, 8, 9])
 
     # ---- beams, per loom, running vs finished ----
     # A running beam still has warp on it (status on_loom, or length_left_m > 0): short/extra % has no meaning yet,
@@ -246,8 +261,10 @@ def contract_report(con, cfg, contract):
         seen.add(_norm(beam))
         if came_off:
             finished += 1
+            lp = loom_pieces(loom)                        # woven counts every panel; compare one panel's woven to the set
+            ew = (woven or 0) / (lp or 1)
             fin_set += length or 0; fin_woven += woven or 0
-            pct = (f"{100.0 * (woven - length) / length:+.1f}%" if length else "—")
+            pct = (f"{100.0 * (ew - length) / length:+.1f}%" if length else "—")
             state = "finished"
         else:
             state = "on record"
