@@ -225,38 +225,34 @@ def contract_report(con, cfg, contract):
     ss = _q(con, """SELECT set_no, set_date, sizer_name, COALESCE(ends,0), COALESCE(set_length_m,0), COALESCE(bags,0),
                     COALESCE(gullay_kg,0), COALESCE(waste_kg,0), COALESCE(yarn_sent_kg,0) FROM sized_sets
                     WHERE contract_no = ? ORDER BY set_date, set_no""", (contract,))
-    # 'Woven m' per set, for the column (ties to the Beams section total): a finished set's beams come off the loom and
-    # leave the beams snapshot (snapshot woven_m reads 0), so merge the snapshot with beam_movements per beam, keep the
-    # larger woven and a non-blank set, then total by set. Also count each set's total beams (for the "n of m" label).
-    bw_by_beam = {}                                       # _norm(beam_no) -> {"set": set_no, "woven": m}
+    # 'Woven m' per set, for the column (ties to the Beams section total): a finished set's beams leave the beams
+    # snapshot (snapshot woven_m reads 0), so merge the snapshot with beam_movements and key by (beam, set) - a beam
+    # number reused on more than one set (re-painted, or two runs) keeps its woven matched to the right set, not merged
+    # by beam number alone. Then total by set, and count each set's beams (for the "n of m" label).
+    bw_by_beam = {}                                       # (_norm(beam), _norm(set)) -> woven
     for beam, sno, wv in _q(con, "SELECT beam_no, set_no, COALESCE(woven_m,0) FROM beams WHERE contract_no = ?", (contract,)):
-        e = bw_by_beam.setdefault(_norm(beam), {"set": sno, "woven": 0.0})
-        e["woven"] = max(e["woven"], wv or 0)
-        if sno:
-            e["set"] = sno
-    for beam, sno, wv in _q(con, """SELECT beam_no, MAX(set_no), MAX(COALESCE(woven_m,0)) FROM beam_movements
-            WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> '' GROUP BY beam_no""", (contract,)):
-        e = bw_by_beam.setdefault(_norm(beam), {"set": sno, "woven": 0.0})
-        e["woven"] = max(e["woven"], wv or 0)
-        if sno and not e.get("set"):
-            e["set"] = sno
+        k = (_norm(beam), _norm(sno))
+        bw_by_beam[k] = max(bw_by_beam.get(k, 0.0), wv or 0)
+    for beam, sno, wv in _q(con, """SELECT beam_no, set_no, MAX(COALESCE(woven_m,0)) FROM beam_movements
+            WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> '' GROUP BY beam_no, set_no""", (contract,)):
+        k = (_norm(beam), _norm(sno))
+        bw_by_beam[k] = max(bw_by_beam.get(k, 0.0), wv or 0)
     set_woven, set_beams = {}, {}
-    for e in bw_by_beam.values():
-        k = _norm(e["set"])
-        set_woven[k] = set_woven.get(k, 0) + (e["woven"] or 0)
-        set_beams[k] = set_beams.get(k, 0) + 1
+    for (beam, sk), wv in bw_by_beam.items():
+        set_woven[sk] = set_woven.get(sk, 0) + (wv or 0)
+        set_beams[sk] = set_beams.get(sk, 0) + 1
     # Per-set shrinkage, aggregated from the set's FINISHED beams EXACTLY as the Beams section computes each one: each
     # beam's woven divided by the panels of the loom IT ran on, summed, over the set's summed beam lengths. So
     #   set shrink % = 1 - SUM(woven_i / panels_i) / SUM(set_length_i)   over the set's finished beams,
     # and the Sets section, the Beams section and the contract line agree by construction (a set's beams can run on
     # different looms with different panels, so one panels factor for the whole set was wrong).
     set_fin = {}         # _norm(set) -> {num: SUM(woven/panels), den: SUM(len), n_used, n_fin, assumed}
-    for beam, sno, loom, blen, bwov, came_off, d_from, d_to in _q(con, """SELECT beam_no, MAX(set_no), MAX(loom_code),
+    for beam, sno, loom, blen, bwov, came_off, d_from, d_to in _q(con, """SELECT beam_no, set_no, MAX(loom_code),
             MAX(COALESCE(length_m,0)), MAX(COALESCE(woven_m,0)),
             MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN 1 ELSE 0 END),
             MIN(CASE WHEN move_type = 'to_loom' THEN move_date END),
             MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN move_date END)
-            FROM beam_movements WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> '' GROUP BY beam_no""", (contract,)):
+            FROM beam_movements WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> '' GROUP BY beam_no, set_no""", (contract,)):
         if not came_off or not blen:
             continue
         f = set_fin.setdefault(_norm(sno), {"num": 0.0, "den": 0.0, "n_used": 0, "n_fin": 0, "assumed": False})
@@ -302,11 +298,11 @@ def contract_report(con, cfg, contract):
     # a beam the ERP recorded against a loom but not in the beam view still shows, with its woven meters.
     nm = dict(_q(con, "SELECT loom_code, loom_name FROM looms"))
     bm = _q(con, """SELECT beam_no, status, loom_code, mounted_date, COALESCE(set_length_m,0),
-                    COALESCE(woven_m,0), length_left_m FROM beams WHERE contract_no = ? ORDER BY mounted_date, beam_no""", (contract,))
-    seen = set()
+                    COALESCE(woven_m,0), length_left_m, set_no FROM beams WHERE contract_no = ? ORDER BY mounted_date, beam_no""", (contract,))
+    seen = set()                                          # (beam, set): a reused beam number is one row per set, not merged
     rows, fin_num, fin_den, running, finished = [], 0.0, 0.0, 0, 0
-    for beam, status, loom, md, length, woven, left in bm:
-        seen.add(_norm(beam))
+    for beam, status, loom, md, length, woven, left, sno in bm:
+        seen.add((_norm(beam), _norm(sno)))
         st = _norm(status)
         is_running = (st == "ON_LOOM") or (left is not None and (left or 0) > 0.5)
         if is_running:
@@ -322,16 +318,16 @@ def contract_report(con, cfg, contract):
     # has come off the loom has left it. beam_movements keeps the REAL beam number (painted), its set length and
     # woven meters - pull in any not already shown. We never source beam numbers from loom_production.beam_no: on
     # some ERPs that is an internal transaction id, not the beam number. Short/extra % and shrinkage are finished-only.
-    mv = _q(con, """SELECT beam_no, MAX(loom_code), MAX(COALESCE(length_m,0)), MAX(COALESCE(woven_m,0)),
+    mv = _q(con, """SELECT beam_no, set_no, MAX(loom_code), MAX(COALESCE(length_m,0)), MAX(COALESCE(woven_m,0)),
                     MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN 1 ELSE 0 END),
                     MIN(CASE WHEN move_type = 'to_loom' THEN move_date END),
                     MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN move_date END)
                     FROM beam_movements WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> ''
-                    GROUP BY beam_no ORDER BY beam_no""", (contract,))
-    for beam, loom, length, woven, came_off, d_from, d_to in mv:
-        if _norm(beam) in seen:
+                    GROUP BY beam_no, set_no ORDER BY beam_no""", (contract,))
+    for beam, sno, loom, length, woven, came_off, d_from, d_to in mv:
+        if (_norm(beam), _norm(sno)) in seen:
             continue
-        seen.add(_norm(beam))
+        seen.add((_norm(beam), _norm(sno)))
         if came_off:
             finished += 1
             panels, trusted = panels_for_beam(loom, beam, d_from, d_to)   # panels DURING this beam's run

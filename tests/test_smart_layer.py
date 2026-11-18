@@ -2783,6 +2783,38 @@ def test_v0185_panels_fallback_bwidth_and_unknown(env):
     assert "not known" in str(cline[1])                   # excluded from the line, not a misleading %
 
 
+def test_v0186_reused_beam_number_matched_by_set(env):
+    # 0.18.6: a beam NUMBER reused on two sets within one contract must keep its woven matched by (beam, set), not
+    # merged by beam number alone. Beam 00413 ran on set SX (woven 9,000) and later on set SY (woven 6,000); each set's
+    # shrink must use its OWN run's woven, and both runs must appear as separate Beams rows.
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.execute("CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, meters REAL, pieces REAL)")
+    con.execute("CREATE TABLE sized_sets (set_no TEXT, set_date TEXT, sizer_name TEXT, contract_no TEXT, ends REAL, "
+                "set_length_m REAL, bags REAL, gullay_kg REAL, waste_kg REAL, yarn_sent_kg REAL)")
+    con.execute("INSERT INTO contracts (contract_no, picks_per_inch) VALUES ('RB', 42)")
+    con.execute("INSERT INTO looms VALUES ('L1','LOOM-1')")
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-09-10','L1',1000,3)")     # 3 panels in SX's run window
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-10-10','L1',1000,3)")     # 3 panels in SY's run window
+    con.execute("INSERT INTO sized_sets VALUES ('SX','2026-09-01','SZ','RB',9000,3000,10,0,0,9000)")
+    con.execute("INSERT INTO sized_sets VALUES ('SY','2026-10-01','SZ','RB',9000,2000,10,0,0,6000)")
+    # same beam number 00413, two runs on two sets
+    con.execute("INSERT INTO beam_movements VALUES ('2026-09-02','G','00413','to_loom',NULL,'SX','RB','L1',3000,0)")
+    con.execute("INSERT INTO beam_movements VALUES ('2026-09-20','G','00413','from_loom_finished',NULL,'SX','RB','L1',3000,9000)")
+    con.execute("INSERT INTO beam_movements VALUES ('2026-10-02','G','00413','to_loom',NULL,'SY','RB','L1',2000,0)")
+    con.execute("INSERT INTO beam_movements VALUES ('2026-10-20','G','00413','from_loom_cut',NULL,'SY','RB','L1',2000,6000)")
+    secs = {s["key"]: s for s in cr.contract_report(con, cfg, "RB")["sections"]}
+    by_set = {r[0]: r for r in secs["sets"]["rows"]}
+    wcol = secs["sets"]["columns"].index("Woven m")
+    assert by_set["SX"][wcol] == 9000 and by_set["SY"][wcol] == 6000   # each set keeps its own run's woven
+    scol = secs["sets"]["columns"].index("Shrink %")
+    # SX: 9000/3=3000 vs 3000 -> 0.0% ; SY: 6000/3=2000 vs 2000 -> 0.0%
+    assert abs(float(str(by_set["SX"][scol]).rstrip("%"))) < 1
+    assert abs(float(str(by_set["SY"][scol]).rstrip("%"))) < 1
+    assert len(secs["beams"]["rows"]) == 2                             # both runs shown, not collapsed to one
+
+
 def test_v0181_quality_summary_combined_columns(env):
     # 0.18.1: in quality mode, when the quality's warp/weft are the same count every contract combines its yarn, so the
     # per-contract summary shows one "Yarn recv/bal" pair and drops the always-zero weft columns.
