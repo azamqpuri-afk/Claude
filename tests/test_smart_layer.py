@@ -3042,3 +3042,34 @@ def test_vJ_weft_ply_and_panel_cap(env):
     cmp2 = weft_check.weft_compare(con2, cfg, "74")
     exp2 = 900000 * 118 * 1 * 0.0254 * 1.03 / (30 * 1693.3)                    # panels capped 3 -> 1
     assert cmp2["scoreboard_kg"] == round(exp2)
+
+
+def test_vN_production_feed_line(env):
+    # N: the live feed's "woven" line becomes a production line PER production date - metres, eff, the grade split
+    # (A / B / C+CP with rejection %) and loom count - re-computed from loom_production, with a per-loom tap-detail.
+    from smart_layer.web import data as web_data
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE loom_production (loom_code TEXT, prod_date TEXT, contract_no TEXT, quality TEXT, meters REAL,
+            first_quality_m REAL, second_quality_m REAL, rejected_m REAL, efficiency_pct REAL, meters_at_100 REAL);
+        CREATE TABLE looms (loom_code TEXT, loom_name TEXT);
+        CREATE TABLE change_log (id INTEGER PRIMARY KEY, synced_at TEXT, entity TEXT, kind TEXT, payload TEXT);
+    """)
+    con.execute("INSERT INTO looms VALUES ('L1','LOOM # 1'),('L2','LOOM # 2')")
+    # Dost-style grades: Total = A + Rejection, and Rejection already includes B (B + C/CP).
+    con.execute("INSERT INTO loom_production VALUES ('L1','2026-11-16','74','Q',3000,2700,200,300,76.4,3927)")
+    con.execute("INSERT INTO loom_production VALUES ('L2','2026-11-16','74','Q',2689,2450,120,239,76.4,3520)")
+    s = web_data.production_summary(con, cfg, "2026-11-16")
+    assert s["meters"] == 5689 and s["looms"] == 2 and s["incl_b"]
+    assert s["a"] == 5150 and s["b"] == 320 and s["ccp"] == 219 and s["rej"] == 539 and s["rej_pct"] == 9.5
+    d = web_data.production_day(con, cfg, "2026-11-16")
+    assert len(d["rows"]) == 2 and d["rows"][0]["loom"] == "LOOM # 1"     # ordered by metres desc
+    # the feed turns a 'woven' change_log event (with its per-date breakdown) into one production line for that date
+    con.execute("INSERT INTO change_log VALUES (1,'2026-11-16 10:30','loom_production','woven',?)",
+                (json.dumps({"kind": "woven", "meters": 5689, "dates": {"2026-11-16": 5689}}),))
+    f = web_data.feed_day(con, cfg, date(2026, 11, 16))
+    pr = [r for r in f["rows"] if r["kind"] == "production"]
+    assert pr and "Production 16-Nov entered: 5,689 m" in pr[0]["line"]
+    assert "A 5,150 / B 320 / C+CP 219 (rej 9.5%)" in pr[0]["line"] and "2 looms" in pr[0]["line"]
+    assert pr[0]["prod_date"] == "2026-11-16"

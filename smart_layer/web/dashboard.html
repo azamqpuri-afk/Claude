@@ -826,7 +826,7 @@ async function markRead(id, title, undo, severity){
 }
 
 /* ---------- live feed panel (today's change_log) ---------- */
-var FEED_ICON={store:"📦",cash:"💵",woven:"🧵",out:"🚚",in:"↙",alert:"⚠️"};
+var FEED_ICON={store:"📦",cash:"💵",woven:"🧵",production:"🧵",out:"🚚",in:"↙",alert:"⚠️"};
 async function renderFeed(){
   var el=$("#ov-feed"); if(!el) return;
   if(STATIC_DATA){ el.innerHTML='<p class="muted" style="margin:4px 2px">Open the dashboard from the mill server to see the live feed.</p>'; return; }
@@ -843,8 +843,34 @@ async function renderFeed(){
       else { head.textContent="Live feed"; }
     }
     if(!rows.length){ el.innerHTML='<p class="muted" style="margin:4px 2px">No new entries'+(j.is_today?" yet today":"")+'. New production, dispatches, store issues and cash show here as each sync brings them in.</p>'; return; }
-    el.innerHTML='<div class="feed">'+rows.map(r=>`<div class="row"><span class="tm">${esc(r.time||"")}</span><span class="ic">${FEED_ICON[r.kind]||"•"}</span><span class="tx">${esc(r.line||"")}</span></div>`).join("")+'</div>';
+    el.innerHTML='<div class="feed">'+rows.map(function(r){
+      var click = (r.kind==="production" && r.prod_date) ? ` class="row clickrow" data-pd="${esc(r.prod_date)}" style="cursor:pointer" title="per-loom detail"` : ' class="row"';
+      return `<div${click}><span class="tm">${esc(r.time||"")}</span><span class="ic">${FEED_ICON[r.kind]||"•"}</span><span class="tx">${esc(r.line||"")}</span></div>`;
+    }).join("")+'</div>';
+    el.querySelectorAll(".clickrow[data-pd]").forEach(d=>d.onclick=()=>drawProductionDay(d.dataset.pd));
   }catch(e){ el.innerHTML='<p class="muted" style="margin:4px 2px">Could not load the live feed.</p>'; }
+}
+async function drawProductionDay(pd){
+  openDrawer("🧵 Production "+esc(pd),'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see per-loom production.</p>'; return; }
+  try{
+    var j=await (await fetch("api/feed/production?date="+encodeURIComponent(pd))).json();
+    var s=j.summary||{}, lb=(s.labels||{a:"A",b:"B",reject:"Rejection"});
+    $("#drawer-title").innerHTML="🧵 Production "+esc(j.label||pd);
+    var ccpH = s.incl_b ? `<th class="num">${esc(lb.reject)}</th>` : "";
+    var head=`<thead><tr><th>Loom</th><th>Contract</th><th>Quality</th><th class="num">Meters</th><th class="num">Eff %</th>`+
+      `<th class="num">${esc(lb.a)}</th><th class="num">${esc(lb.b)}</th>${ccpH}<th class="num">Rej %</th></tr></thead>`;
+    var body=(j.rows||[]).map(r=>`<tr><td><b>${esc(r.loom)}</b></td><td>${esc(r.contract)}</td><td>${esc(r.quality)}</td>`+
+      `<td class="num">${num(r.meters)}</td><td class="num">${r.eff==null?"—":r.eff}</td>`+
+      `<td class="num">${num(r.a)}</td><td class="num">${num(r.b)}</td>${s.incl_b?`<td class="num">${num(r.ccp)}</td>`:""}`+
+      `<td class="num">${r.rej_pct}%</td></tr>`).join("");
+    var tot=`<tfoot><tr><th colspan="3">TOTAL · ${num(s.looms)} looms</th><th class="num">${num(s.meters)}</th>`+
+      `<th class="num">${s.eff==null?"—":s.eff}</th><th class="num">${num(s.a)}</th><th class="num">${num(s.b)}</th>`+
+      `${s.incl_b?`<th class="num">${num(s.ccp)}</th>`:""}<th class="num">${s.rej_pct}%</th></tr></tfoot>`;
+    $("#drawer-body").innerHTML = (j.rows&&j.rows.length)
+      ? `<div class="tscroll"><table>${head}<tbody>${body}</tbody>${tot}</table></div>`
+      : '<p class="muted">No production entered for this date.</p>';
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load the production detail.</p>'; }
 }
 
 /* ---------- sync freshness + Sync now ---------- */

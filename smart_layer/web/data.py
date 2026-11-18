@@ -518,6 +518,72 @@ def changes(con, cfg, since):
     return _changes.feed(con, cfg, since)
 
 
+def _dmon(d):
+    """A YYYY-MM-DD date as '16-Nov' for the feed line."""
+    try:
+        import datetime
+        return datetime.date.fromisoformat(str(d)[:10]).strftime("%d-%b")
+    except Exception:
+        return str(d)
+
+
+def _grade_labels(cfg, incl_b):
+    gl = (cfg["weaving"].get("grade_labels") or {})
+    la, lb, lr = gl.get("a", "A"), gl.get("b", "B"), gl.get("reject", "Rejection")
+    if incl_b and lr == "Rejection":                     # when the rejection total already carries B, the remainder is C+CP
+        lr = "C+CP"
+    return {"a": la, "b": lb, "reject": lr}
+
+
+def _incl_b(cfg, tot, a, b, r):
+    """Does the rejection total already include the B/2nd-quality metres (Total = A + Rejection)? auto per date, or
+    forced by [weaving] rejection_includes_second - same rule the contract report uses."""
+    mode = cfg["weaving"].get("rejection_includes_second", "auto")
+    if mode != "auto":
+        return bool(mode)
+    tol = max(1.0, 0.01 * tot) if tot else 1.0
+    return bool(tot and abs((a + r) - tot) <= tol and r + tol >= b)
+
+
+def production_summary(con, cfg, pd):
+    """One production date's totals for the feed line (item N): metres, efficiency, the grade split and loom count.
+    Generic - the grade columns come from first/second/rejected metres and the mapping's labels."""
+    from ..reports.production import EFF_AGG
+    r = con.execute(f"""SELECT COALESCE(SUM(meters),0), {EFF_AGG}, COALESCE(SUM(first_quality_m),0),
+            COALESCE(SUM(second_quality_m),0), COALESCE(SUM(rejected_m),0), COUNT(DISTINCT loom_code)
+            FROM loom_production WHERE prod_date = ?""", (str(pd),)).fetchone()
+    tot, eff, a, b, rej, looms = (r or (0, None, 0, 0, 0, 0))
+    tot, a, b, rej = (tot or 0), (a or 0), (b or 0), (rej or 0)
+    incl_b = _incl_b(cfg, tot, a, b, rej)
+    ccp = max(0.0, rej - b) if incl_b else None
+    rej_pct = (100.0 * rej / tot) if tot else 0.0
+    return {"date": str(pd), "meters": round(tot), "eff": (round(eff, 1) if eff is not None else None),
+            "a": round(a), "b": round(b), "ccp": (round(ccp) if ccp is not None else None), "rej": round(rej),
+            "rej_pct": round(rej_pct, 1), "looms": int(looms or 0),
+            "labels": _grade_labels(cfg, incl_b), "incl_b": incl_b}
+
+
+def production_day(con, cfg, pd):
+    """Per-loom production for one date - the feed production line's tap-detail (item N)."""
+    from ..reports.production import EFF_AGG
+    rows = con.execute(f"""SELECT COALESCE(l.loom_name, p.loom_code) AS loom, MAX(p.contract_no), MAX(p.quality),
+            COALESCE(SUM(p.meters),0), {EFF_AGG}, COALESCE(SUM(p.first_quality_m),0),
+            COALESCE(SUM(p.second_quality_m),0), COALESCE(SUM(p.rejected_m),0)
+            FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
+            WHERE p.prod_date = ? GROUP BY COALESCE(l.loom_name, p.loom_code)
+            ORDER BY SUM(p.meters) DESC""", (str(pd),)).fetchall()
+    summ = production_summary(con, cfg, pd)
+    out = []
+    for loom, cno, q, m, eff, a, b, rej in rows:
+        tot = m or 0
+        ccp = max(0.0, (rej or 0) - (b or 0)) if summ["incl_b"] else None
+        out.append({"loom": loom, "contract": cno or "", "quality": q or "", "meters": round(tot),
+                    "eff": (round(eff, 1) if eff is not None else None), "a": round(a or 0), "b": round(b or 0),
+                    "ccp": (round(ccp) if ccp is not None else None), "rej": round(rej or 0),
+                    "rej_pct": (round(100.0 * (rej or 0) / tot, 1) if tot else 0.0)})
+    return {"date": str(pd), "label": _dmon(pd), "rows": out, "summary": summ}
+
+
 def feed_day(con, cfg, day=None):
     """The live-feed panel's change_log rows: each with its time, a line and the tap-detail payload, newest first.
     With no explicit day it shows the LATEST day that has entries (which may be before today when the ERP has not
@@ -532,7 +598,7 @@ def feed_day(con, cfg, day=None):
     rows = con.execute("""SELECT id, synced_at, kind, payload FROM change_log WHERE substr(synced_at,1,10) = ?
                           ORDER BY id DESC LIMIT 400""", (day,)).fetchall()
     latest_at = str(rows[0][1]) if rows else None         # full timestamp of the newest entry, for "from <date> HH:MM"
-    grouped, out = {}, []
+    grouped, out, prod = {}, [], {}
     for _id, at, kind, payload in rows:
         try:
             e = json.loads(payload)
@@ -547,7 +613,19 @@ def feed_day(con, cfg, day=None):
                 out.append(g)
             g["items"].append(e.get("item"))
             continue
+        if kind == "woven":                               # item N: one production line PER production date, not "+X m"
+            dates = e.get("dates") or {}
+            if dates:
+                for d in dates:
+                    prod.setdefault(str(d), t)            # rows are newest-first, so the first time seen is the newest
+                continue
+            # legacy payload with no per-date breakdown: fall back to a plain woven line below
         out.append({"time": t, "kind": kind, "payload": e})
+    # item N: one production line per production date that gained metres, computed from the current loom_production
+    # (so re-syncs of the same date update the line instead of adding another "+X m"); newest time first overall.
+    for pdate, t in prod.items():
+        out.append({"time": t, "kind": "production", "payload": production_summary(con, cfg, pdate)})
+    out.sort(key=lambda r: r["time"], reverse=True)
     # render a line per row
     def line(r):
         if r["kind"] == "store":
@@ -557,6 +635,18 @@ def feed_day(con, cfg, day=None):
         e = r["payload"]
         if r["kind"] == "cash":
             return f"Cash {('+' if e.get('delta',0)>=0 else '')}{e.get('delta',0):,} {e.get('label','') or ''}".strip()
+        if r["kind"] == "production":
+            parts = [f"Production {_dmon(e['date'])} entered: {e['meters']:,} m"]
+            if e.get("eff") is not None:
+                parts.append(f"eff {e['eff']:.1f}%")
+            lb = e["labels"]
+            g = f"{lb['a']} {e['a']:,} / {lb['b']} {e['b']:,}"
+            if e.get("incl_b") and e.get("ccp") is not None:
+                g += f" / {lb['reject']} {e['ccp']:,}"
+            g += f" (rej {e['rej_pct']:.1f}%)"
+            parts.append(g)
+            parts.append(f"{e['looms']} loom{'s' if e['looms'] != 1 else ''}")
+            return " · ".join(parts)
         if r["kind"] == "woven":
             return f"Woven +{e.get('meters',0):,} m"
         if r["kind"] == "out":
@@ -567,7 +657,8 @@ def feed_day(con, cfg, day=None):
         if r["kind"] == "alert":
             return "Alert: " + str(e.get("title", ""))
         return r["kind"]
-    return {"rows": [{"time": r["time"], "kind": r["kind"], "line": line(r)} for r in out],
+    return {"rows": [{"time": r["time"], "kind": r["kind"], "line": line(r),
+                      **({"prod_date": r["payload"].get("date")} if r["kind"] == "production" else {})} for r in out],
             "date": day, "is_today": day == today, "latest_at": latest_at}
 
 

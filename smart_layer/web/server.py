@@ -135,6 +135,14 @@ class App:
         finally:
             con.close()
 
+    def production_day(self, day):
+        """Per-loom production for one date - the feed production line's tap-detail (item N)."""
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return data.production_day(con, self.cfg, day)
+        finally:
+            con.close()
+
     def contracts_all(self):
         """Parties (for the party-first dropdown) and every contract (each carries its party_code + quality, so the
         contract and quality dropdowns are filtered to the picked party client-side)."""
@@ -902,7 +910,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/closing/count-review", "/api/closing/counts-saved",
                 "/api/gully", "/api/gully/sets", "/api/gully/lines", "/api/gully/quality",
                 "/api/contracts-all", "/api/contract-report",
-                "/api/feed", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
+                "/api/feed", "/api/feed/production", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
                 "/api/edits", "/api/edits/detail",
                 "/api/looms/efficiency", "/api/looms/days",
                 "/api/scoreboard", "/api/scoreboard/trend", "/api/scoreboard/live", "/api/sensor/episode",
@@ -1074,6 +1082,10 @@ def get_response(app, path, query, check_licence=True):
             except ValueError:
                 return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
             return 200, app.feed(fday), "application/json", {}
+        if path == "/api/feed/production":               # per-loom production for one date (feed line tap, item N)
+            if not params.get("date"):
+                return 400, {"error": "date required"}, "application/json", {}
+            return 200, app.production_day(params["date"]), "application/json", {}
         try:
             day = date.fromisoformat(params["date"]) if params.get("date") else None
         except ValueError:
