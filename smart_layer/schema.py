@@ -213,6 +213,8 @@ ENTITIES = (
          C("kg", "REAL", "Weight in kg (the mapping may substitute bags x a standard bag weight when the ERP weight "
                          "is missing/implausible; raw_kg keeps the untouched ERP figure for the data-quality check)", True),
          C("raw_kg", "REAL", "The ERP's own entered weight, before any plausibility substitution (optional)"),
+         C("warp_weft", "TEXT", "'warp' or 'weft' when the ERP tags the yarn that way (optional); lets the contract "
+                                "report split warp vs weft reliably even when the two counts are the same"),
          C("entered_by", "TEXT", "ERP user who keyed it")),
         date_column="move_date",
     ),

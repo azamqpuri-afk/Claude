@@ -2605,6 +2605,60 @@ def test_v0180_fabric_to_other_parties(env):
     assert any("other parties" in str(r[0]).lower() for r in secs["balances"]["rows"])   # memo line in the summary
 
 
+def test_v0181_combined_yarn_and_shrinkage_pieces(env):
+    # G retest bug 2: equal warp/weft counts (no tag) -> ONE combined "Yarn received" with a combined balance.
+    # bug 1: shrinkage divides woven by the panels-across (so a 3-panel beam is ~0%, not -200%). bugs 3/4: totals
+    # on every section + the "Fabric to other parties" section always shows (with 0 when empty).
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.executescript("""
+        CREATE TABLE yarn_movements (move_date TEXT, gatepass_no TEXT, doc_no TEXT, move_type TEXT, yarn_code TEXT,
+            yarn_name TEXT, contract_no TEXT, party_code TEXT, party_name TEXT, bags REAL, kg REAL, warp_weft TEXT);
+        CREATE TABLE sized_sets (set_no TEXT, set_date TEXT, sizer_name TEXT, contract_no TEXT, ends REAL,
+            set_length_m REAL, bags REAL, gullay_kg REAL, waste_kg REAL, yarn_sent_kg REAL);
+        CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, meters REAL, pieces REAL);
+    """)
+    # 54/54 construction (warp_count == weft_count), no warp_weft tag -> combined
+    con.execute("INSERT INTO contracts (contract_no, party_code, party_name, quality, warp_count, weft_count, picks_per_inch) "
+                "VALUES ('K4','P1','QADRI','90x82 54/54', 54, 54, 82)")
+    con.execute("INSERT INTO yarn_movements (move_date, doc_no, move_type, contract_no, kg, bags) "
+                "VALUES ('2026-10-01','IG1','party_receipt','K4', 40000, 800)")
+    con.execute("INSERT INTO looms VALUES ('L9','LOOM # 9')")
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-10-05','L9',1000,3)")   # scoreboard: 3 panels across
+    con.execute("INSERT INTO sized_sets VALUES ('S1','2026-09-20','SZ','K4',9000,75000,10,160,20,40000)")
+    # finished beam: set length 75,000 (one panel warp); woven 222,000 counts 3 panels -> /3 = 74,000 ~ 1.3% shrink
+    con.execute("INSERT INTO beam_movements VALUES ('2026-10-10','GP','00040','from_loom_finished',NULL,'S1','K4','L9',75000,222000)")
+    con.execute("INSERT INTO loom_production VALUES ('L9','K4','90x82 54/54','00040',222000,222000,0,0,82,'2026-10-08')")
+    secs = {s["key"]: s for s in cr.contract_report(con, cfg, "K4")["sections"]}
+    assert secs["yarn_in"]["columns"][-1] == "Yarn"                       # combined, not Warp/Weft
+    bal = {r[0]: r[1] for r in secs["balances"]["rows"]}
+    assert any(k.startswith("Yarn received") for k in bal) and not any("Weft yarn received" in k for k in bal)
+    shrink = [r for r in secs["balances"]["rows"] if "Shrinkage" in r[0]][0]
+    pct = float(str(shrink[1]).rstrip("%"))
+    assert -5 < pct < 10 and "panels" in shrink[0]                        # ~1-2%, not -200%
+    for key in ("sizing", "sets", "beams", "fabric_other"):              # totals present on every section
+        assert secs[key]["totals"], key
+
+
+def test_v0181_warp_weft_tag_splits(env):
+    # G retest bug 2: when the ERP tags warp/weft (yarn_movements.warp_weft), the split uses the tag even if counts match.
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.execute("""CREATE TABLE yarn_movements (move_date TEXT, gatepass_no TEXT, doc_no TEXT, move_type TEXT,
+        yarn_code TEXT, yarn_name TEXT, contract_no TEXT, party_code TEXT, party_name TEXT, bags REAL, kg REAL, warp_weft TEXT)""")
+    con.execute("INSERT INTO contracts (contract_no, party_code, warp_count, weft_count) VALUES ('K5','P1',54,54)")
+    con.execute("INSERT INTO yarn_movements (move_date, doc_no, move_type, contract_no, kg, warp_weft) VALUES ('2026-10-01','A','party_receipt','K5',30000,'WARP')")
+    con.execute("INSERT INTO yarn_movements (move_date, doc_no, move_type, contract_no, kg, warp_weft) VALUES ('2026-10-02','B','party_receipt','K5',20000,'WEFT')")
+    secs = {s["key"]: s for s in cr.contract_report(con, cfg, "K5")["sections"]}
+    assert secs["yarn_in"]["columns"][-1] == "Warp/Weft"
+    sides = {r[-1] for r in secs["yarn_in"]["rows"]}
+    assert "warp" in sides and "weft" in sides
+    bal = {r[0]: r[1] for r in secs["balances"]["rows"]}
+    assert bal.get("Warp yarn received kg") == 30000 and bal.get("Weft yarn received kg") == 20000
+
+
 def test_v0180_ack_migration_maps_old_keys():
     # Item I: acks saved under the old volatile keys migrate to the new stable keys so cleared items do not pop back.
     from smart_layer.web.data import _migrate_acks

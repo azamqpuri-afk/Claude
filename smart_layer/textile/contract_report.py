@@ -93,6 +93,22 @@ def _side(code, name, warp_yarn, warp_count, weft_yarn, weft_count):
     return "weft"
 
 
+def _pieces_across(con, contract):
+    """Panels across the beam for this contract (3 for a 3-panel 46" beam, 1 otherwise). Production meters count every
+    panel woven, while the sized length is the warp length of one panel - so shrinkage must divide the woven meters by
+    this. Take the dominant (mode) scoreboard pieces for the contract's looms, else the beam bwidth, else 1."""
+    r = _q(con, """SELECT pieces FROM loom_monitor WHERE pieces IS NOT NULL AND loom_code IN
+                     (SELECT DISTINCT loom_code FROM loom_production WHERE contract_no = ?)
+                   GROUP BY pieces ORDER BY COUNT(*) DESC, pieces DESC LIMIT 1""", (contract,))
+    if r and r[0][0]:
+        return float(r[0][0])
+    r = _q(con, """SELECT bwidth FROM beams WHERE contract_no = ? AND bwidth IS NOT NULL
+                   GROUP BY bwidth ORDER BY COUNT(*) DESC LIMIT 1""", (contract,))
+    if r and r[0][0]:
+        return float(r[0][0])
+    return 1.0
+
+
 def contract_report(con, cfg, contract):
     """All sections for one contract. Returns {header, sections:[{key,title,columns,rows,totals,note}], found}."""
     contract = str(contract)
@@ -116,20 +132,35 @@ def contract_report(con, cfg, contract):
         sections.append({"key": key, "title": title, "columns": columns, "rows": rows,
                          "totals": totals, "note": note, "num_cols": num_cols or []})
 
-    # ---- yarn received (IGP) ----
+    # ---- yarn received (IGP), split warp vs weft ----
+    # Prefer the ERP's own warp/weft tag (yarn_movements.warp_weft). Without it, tell them apart by count - but when
+    # the warp and weft counts are the SAME (e.g. 54/54) they cannot be told apart, so we COMBINE them into one "yarn
+    # received" with one balance rather than guessing (which split differently in the two modes). Both modes use this.
     yr = _q(con, """SELECT move_date, COALESCE(gatepass_no, doc_no), yarn_name, yarn_code, party_name,
-                    COALESCE(bags,0), COALESCE(kg,0) FROM yarn_movements
+                    COALESCE(bags,0), COALESCE(kg,0), warp_weft FROM yarn_movements
                     WHERE contract_no = ? AND move_type = 'party_receipt' ORDER BY move_date""", (contract,))
+    has_tag = any((ww and _norm(ww) in ("WARP", "WEFT")) for *_, ww in yr)
+    try:
+        counts_differ = bool(warp_count and weft_count and abs(float(warp_count) - float(weft_count)) > 0.001)
+    except (TypeError, ValueError):
+        counts_differ = bool(warp_count and weft_count and str(warp_count) != str(weft_count))
+    combined = not (has_tag or counts_differ)
     rows, tb, tk, warp_k, weft_k = [], 0.0, 0.0, 0.0, 0.0
-    for md, gp, yn, yc, party, bags, kg in yr:
-        side = _side(yc, yn, warp_yarn, warp_count, weft_yarn, weft_count)
+    for md, gp, yn, yc, party, bags, kg, ww in yr:
+        if combined:
+            side = "yarn"
+        elif ww and _norm(ww) in ("WARP", "WEFT"):
+            side = _norm(ww).lower()
+        else:
+            side = _side(yc, yn, warp_yarn, warp_count, weft_yarn, weft_count)
         rows.append([md, gp, yn, party, round(bags), round(kg), side])
         tb += bags; tk += kg
-        if side == "warp":
-            warp_k += kg
-        elif side == "weft":
+        if side == "weft":
             weft_k += kg
-    sec("yarn_in", "Yarn received (IGP)", ["Date", "IGP no", "Count", "Mill / party", "Bags", "Kg", "Warp/Weft"],
+        else:
+            warp_k += kg                                 # "warp" or combined "yarn" -> the warp/combined bucket
+    sec("yarn_in", "Yarn received (IGP)",
+        ["Date", "IGP no", "Count", "Mill / party", "Bags", "Kg", ("Yarn" if combined else "Warp/Weft")],
         rows, totals=["", "", "", "TOTAL", round(tb), round(tk), ""], num_cols=[4, 5])
 
     # ---- yarn returned / sold (OGP yarn) ----
@@ -155,8 +186,12 @@ def contract_report(con, cfg, contract):
     for party, s in sorted(siz.items()):
         loss = (100.0 * (s["to"] - s["back"]) / s["to"]) if s["to"] else 0
         rows.append([party, round(s["to"]), round(s["back"]), round(s["gully"], 1), round(s["waste"], 1), f"{loss:.1f}%"])
+    _st, _sb = sum(s["to"] for s in siz.values()), sum(s["back"] for s in siz.values())
+    _sloss = (100.0 * (_st - _sb) / _st) if _st else 0
     sec("sizing", "Yarn to / from sizing (per sizer)",
-        ["Sizer", "Yarn sent kg", "Sized-beam yarn kg", "Gully kg", "Waste kg", "Loss %"], rows, num_cols=[1, 2, 3, 4])
+        ["Sizer", "Yarn sent kg", "Sized-beam yarn kg", "Gully kg", "Waste kg", "Loss %"], rows,
+        totals=["TOTAL", round(_st), round(_sb), round(sum(s["gully"] for s in siz.values()), 1),
+                round(sum(s["waste"] for s in siz.values()), 1), f"{_sloss:.1f}%"], num_cols=[1, 2, 3, 4])
 
     # ---- sets sized ----
     ss = _q(con, """SELECT set_no, set_date, sizer_name, COALESCE(ends,0), COALESCE(set_length_m,0), COALESCE(bags,0),
@@ -167,8 +202,12 @@ def contract_report(con, cfg, contract):
         count = (ends * 1.0936 * length / (840.0 * ysent * 2.2046)) if (ysent and length) else 0
         rows.append([sn, sd, sz, round(ends), round(length), round(bags), round(ysent), round(gully, 1), round(waste, 1),
                      (f"{count:.1f}" if count else "—")])
+    def _col(i):
+        return sum(r[i] for r in rows if isinstance(r[i], (int, float)))
+    sets_tot = (["", "", "TOTAL", round(_col(3)), round(_col(4)), round(_col(5)), round(_col(6)),
+                 round(_col(7), 1), round(_col(8), 1), ""] if rows else None)
     sec("sets", "Sets sized", ["Set", "Date", "Sizer", "Ends", "Length m", "Beams/bags", "Yarn kg", "Gully kg", "Waste kg", "Calc count"],
-        rows, num_cols=[3, 4, 5, 6, 7, 8])
+        rows, totals=sets_tot, num_cols=[3, 4, 5, 6, 7, 8])
 
     # ---- beams, per loom, running vs finished ----
     # A running beam still has warp on it (status on_loom, or length_left_m > 0): short/extra % has no meaning yet,
@@ -217,8 +256,11 @@ def contract_report(con, cfg, contract):
     bnote = None
     if running:
         bnote = f"{running} beam(s) still running - their 'to come' meters are warp not yet woven, not a shortfall."
+    b_setlen = sum(r[3] for r in rows if isinstance(r[3], (int, float)))
+    b_woven = sum(r[4] for r in rows if isinstance(r[4], (int, float)))
     sec("beams", "Beams", ["Beam", "Loom", "Mounted", "Set length m", "Woven m", "State", "Short/extra %"],
-        rows, note=bnote, num_cols=[3, 4])
+        rows, totals=(["", "", "TOTAL", round(b_setlen), round(b_woven), "", ""] if rows else None),
+        note=bnote, num_cols=[3, 4])
 
     # ---- production by loom, with ppi ----
     pr = _q(con, """SELECT loom_code, SUM(meters), SUM(COALESCE(first_quality_m,0)), SUM(COALESCE(second_quality_m,0)),
@@ -267,6 +309,7 @@ def contract_report(con, cfg, contract):
         within_note = ("This contract was woven at more than one picks/inch in the ERP entries - "
                        + ", ".join(w[0] for w in within) + " ppi. Check which is right.")
         sec("picks_within", "Picks check - within this contract", ["PPI (ERP entry)", "Entries", "Meters"], within,
+            totals=["TOTAL", round(sum(w[1] for w in within)), round(sum(w[2] for w in within))],
             note=within_note, num_cols=[1, 2])
 
     rows = []
@@ -280,13 +323,15 @@ def contract_report(con, cfg, contract):
     if rows:
         note = f"Quality '{quality}' ran at {ppi:g} ppi on this contract but at a different ppi elsewhere - check the picks."
     sec("picks_check", "Picks check (same quality, different PPI)", ["Other contract", "Date", "PPI", "Meters"], rows,
-        note=note, num_cols=[3])
+        totals=(["TOTAL", "", "", round(sum(r[3] for r in rows))] if rows else None), note=note, num_cols=[3])
 
     # ---- weft issued to / returned from looms ----
     wf = _q(con, """SELECT move_date, COALESCE(gatepass_no, doc_no), move_type, COALESCE(bags,0), COALESCE(kg,0)
                     FROM yarn_movements WHERE contract_no = ? AND move_type IN ('to_looms','from_looms') ORDER BY move_date""", (contract,))
     rows = [[md, gp, ("issued" if mt == "to_looms" else "returned"), round(bags), round(kg)] for md, gp, mt, bags, kg in wf]
-    sec("weft", "Weft yarn issued / returned", ["Date", "Doc", "Type", "Bags", "Kg"], rows, num_cols=[3, 4])
+    sec("weft", "Weft yarn issued / returned", ["Date", "Doc", "Type", "Bags", "Kg"], rows,
+        totals=(["", "", "TOTAL", round(sum(r[3] for r in rows)), round(sum(r[4] for r in rows))] if rows else None),
+        num_cols=[3, 4])
 
     # ---- fabric dispatched (OGP fabric), split: to the contract party (counts) vs to ANOTHER party (memo only) ----
     fd = _q(con, """SELECT dispatch_date, doc_no, COALESCE(meters,0), COALESCE(fresh_m,0), COALESCE(rejected_m,0),
@@ -314,14 +359,16 @@ def contract_report(con, cfg, contract):
             t_th += thaan or 0
     sec("fabric_out", "Fabric dispatched to the party (OGP)", ["Date", "OGP no", "Dir", "Meters", "Fresh m", "Rejection m", "Thaan"], rows,
         totals=["", "", "net out", round(out_m - in_m), "", "", (round(t_th) if any_th else "—")], num_cols=[3, 4, 5, 6])
-    if oth_rows:
-        # a separate tab: fabric of this contract/quality that went to another account (rejection sale / sold
-        # elsewhere). NOT counted in the summary or the fabric-to-party balance - the memo line below the summary.
-        sec("fabric_other", "Fabric to other parties (not in the contract balance)",
-            ["Date", "OGP no", "Party code", "Deliver to", "Fresh m", "Rejection m", "Total m", "Thaan"], oth_rows,
-            totals=["", "", "", "TOTAL", "", "", round(oth_m), (round(oth_th) if oth_any else "—")],
-            note="These gate passes went to a different account than the contract party, so they are shown here only "
-                 "and are left out of the contract summary and the fabric-to-party balance.", num_cols=[4, 5, 6, 7])
+    # Always show this section (even empty, with a 0 total) so the owner knows it was checked: fabric of this
+    # contract/quality that went to ANOTHER account (rejection sale / sold elsewhere), NOT counted in the summary or
+    # the fabric-to-party balance - a memo line below the summary.
+    sec("fabric_other", "Fabric to other parties (not in the contract balance)",
+        ["Date", "OGP no", "Party code", "Deliver to", "Fresh m", "Rejection m", "Total m", "Thaan"],
+        oth_rows or [["—", "none", "", "", "", "", 0, "—"]],
+        totals=["", "", "", "TOTAL", "", "", round(oth_m), (round(oth_th) if oth_any else "—")],
+        note="Any gate pass here went to a different account than the contract party, so it is shown here only and "
+             "left out of the contract summary and the fabric-to-party balance." if oth_rows else
+             "No fabric of this contract/quality went to another party - checked.", num_cols=[4, 5, 6, 7])
 
     # ---- balances ----
     woven = _q(con, "SELECT SUM(meters) FROM loom_production WHERE contract_no = ?", (contract,))
@@ -335,24 +382,37 @@ def contract_report(con, cfg, contract):
     weft_issued = (weft_issued[0][0] or 0) if weft_issued else 0
     weft_ret = _q(con, "SELECT SUM(COALESCE(kg,0)) FROM yarn_movements WHERE contract_no=? AND move_type='from_looms'", (contract,))
     weft_ret = (weft_ret[0][0] or 0) if weft_ret else 0
-    # Shrinkage = how much shorter the fabric is than the warp it was woven from. It only means anything on a beam
-    # that is FINISHED (fully woven off the loom) - on a running beam the warp is partly unwoven, so set-length vs
-    # woven would read as a huge false "shrinkage". So compute it on finished beams only; while none are finished say
-    # so, rather than print a meaningless number.
-    if finished and fin_set:
-        shrink_item = f"Shrinkage % (finished beams only: {finished})"
-        shrink_val = f"{100.0 * (fin_set - fin_woven) / fin_set:.1f}%"
+    # Shrinkage: finished beams only (a running beam's warp is partly unwoven, so set-length vs woven would read as a
+    # huge false shrinkage). The woven meters count EVERY panel across the loom, while the set length is one panel's
+    # warp length, so divide the woven meters by the panels-across before comparing (else a 3-panel beam reads ~-200%).
+    pieces_x = _pieces_across(con, contract)
+    shrink_pct = (100.0 * (fin_set - fin_woven / (pieces_x or 1)) / fin_set) if (finished and fin_set) else None
+    if shrink_pct is not None:
+        px = f", {pieces_x:g} panels" if pieces_x and pieces_x != 1 else ""
+        shrink_item = f"Shrinkage % (finished beams only: {finished}{px})"
+        shrink_val = f"{shrink_pct:.1f}%"
     elif running:
         shrink_item, shrink_val = "Shrinkage %", f"n/a - all {running} beam(s) still running"
     else:
         shrink_item, shrink_val = "Shrinkage %", "n/a - no finished beams yet"
-    brows = [
-        ["Warp yarn received kg", round(warp_k)],
-        ["Warp yarn sent to sizing kg", round(to_sizing)],
-        ["Warp yarn balance kg", round(warp_k - to_sizing)],
-        ["Weft yarn received kg", round(weft_k)],
-        ["Weft yarn issued to looms kg", round(weft_issued - weft_ret)],
-        ["Weft yarn balance kg", round(weft_k - (weft_issued - weft_ret))],
+    weft_net = weft_issued - weft_ret
+    if combined:                                         # warp and weft are the same yarn - one combined balance
+        brows = [
+            ["Yarn received kg", round(tk)],
+            ["Yarn sent to sizing kg", round(to_sizing)],
+            ["Yarn issued to looms kg", round(weft_net)],
+            ["Yarn balance kg", round(tk - to_sizing - weft_net)],
+        ]
+    else:
+        brows = [
+            ["Warp yarn received kg", round(warp_k)],
+            ["Warp yarn sent to sizing kg", round(to_sizing)],
+            ["Warp yarn balance kg", round(warp_k - to_sizing)],
+            ["Weft yarn received kg", round(weft_k)],
+            ["Weft yarn issued to looms kg", round(weft_net)],
+            ["Weft yarn balance kg", round(weft_k - weft_net)],
+        ]
+    brows += [
         ["Fabric woven m", round(woven)],
         ["Fabric dispatched to the party (net) m", round(out_m - in_m)],
         ["Fabric balance in stock m", round(woven - (out_m - in_m))],
@@ -363,11 +423,12 @@ def contract_report(con, cfg, contract):
         brows.append(["Fabric to other parties (memo, not in the balance) m", round(oth_m)])
     sec("balances", "Summary", ["Item", "Value"], brows)
 
-    summary = {"contract": cno, "warp_recv": round(warp_k), "warp_bal": round(warp_k - to_sizing),
-               "weft_recv": round(weft_k), "weft_bal": round(weft_k - (weft_issued - weft_ret)),
+    summary = {"contract": cno, "combined": combined,
+               "warp_recv": round(tk if combined else warp_k), "warp_bal": round((tk - to_sizing - weft_net) if combined else (warp_k - to_sizing)),
+               "weft_recv": (0 if combined else round(weft_k)), "weft_bal": (0 if combined else round(weft_k - weft_net)),
                "woven": round(woven), "dispatched": round(out_m - in_m), "to_other": round(oth_m),
                "stock": round(woven - (out_m - in_m)), "sized": round(sized_total),
-               "shrink": (round(100.0 * (fin_set - fin_woven) / fin_set, 1) if (finished and fin_set) else None)}
+               "shrink": (round(shrink_pct, 1) if shrink_pct is not None else None)}
     sections.sort(key=lambda s: 0 if s["key"] == "balances" else 1)   # Summary on top (stable: keeps the rest in order)
     return {"found": True, "contract": contract, "header": header, "currency": cur, "mode": "contract",
             "quality": quality, "party": pname or pcode, "party_code": str(pcode or ""),
@@ -434,7 +495,7 @@ def quality_report(con, cfg, party_code, quality):
                         acc += rr[ci]
                 grand[ci] = round((grand[ci] if isinstance(grand[ci], (int, float)) else 0) + acc)
         sections.append({"key": key, "title": blocks[0][1]["title"], "columns": cols, "rows": rows,
-                         "totals": grand, "note": note, "num_cols": numc})
+                         "totals": grand, "note": note, "num_cols": numc, "flat": False})
     return {"found": True, "mode": "quality", "party": party, "party_code": pc, "quality": quality,
             "currency": cfg["company"]["currency"], "header": header, "sections": sections}
 
@@ -442,6 +503,7 @@ def quality_report(con, cfg, party_code, quality):
 # ---- exports ---------------------------------------------------------------------------------
 
 def _xlsx_sheets(rep):
+    from ..reports import xlsx
     sheets = []
     h = rep["header"]
     hv = [["Contract", h.get("contract")], ["Party", h.get("party")], ["Quality", h.get("quality")],
@@ -452,8 +514,19 @@ def _xlsx_sheets(rep):
     sheets.append({"name": "Header", "title": f"Contract {h.get('contract')}", "headers": ["Field", "Value"], "rows": hv})
     for s in rep["sections"]:
         rows = list(s["rows"])
-        if s.get("totals"):
-            rows = rows + [s["totals"]]
+        totals = s.get("totals")
+        if totals:
+            n = len(s["rows"])
+            # LIVE Excel =SUM() totals for the numeric columns of a FLAT section (one row = one record). The merged
+            # by-quality detail sections interleave sub-rows and per-contract sub-totals, so a plain SUM would double
+            # count - those keep their pre-computed numeric totals (flat is False).
+            if n and s.get("flat", True):
+                totals = list(totals)
+                for ci in (s.get("num_cols") or []):
+                    if ci < len(totals) and isinstance(totals[ci], (int, float)):
+                        L = xlsx.colref(ci, "")
+                        totals[ci] = xlsx.Fx(f"=SUM({L}{{r-{n}}}:{L}{{r-1}})")
+            rows = rows + [totals]
         note = [s["note"]] if s.get("note") else None
         sheets.append({"name": s["key"][:28], "title": s["title"], "headers": s["columns"], "rows": rows,
                        "note": note, "money_cols": s.get("num_cols")})
