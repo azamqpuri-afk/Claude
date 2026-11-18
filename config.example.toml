@@ -84,6 +84,13 @@ duplicate_payment_min = 5000
 # rejection_includes_second = "auto"
 # grade_labels = { a = "A-grade", b = "B-grade", reject = "Rejection" }   # rename the columns if the mill uses other names
 
+# Contract report (party-first closing). A fabric OGP whose party_code differs from the contract's party_code is
+# "to another party" (rejection sale or sold elsewhere): it goes to a separate "Fabric to other parties" tab and is
+# kept out of the contract summary and balance. These optional lists pin specific account codes either way.
+[contract_report]
+# other_party_codes = ["300308001", "200105006"]   # always another party (e.g. a rejection buyer account)
+# same_party_codes  = []                            # always the contract party (e.g. a dyer/godown account)
+
 # The mill's own contract-closing method - set these with the owner.
 [closing]
 divisor = 840                      # many mills use 800

@@ -2151,38 +2151,47 @@ function closingBar(withQuality){
     `<button class="btn" id="cc-view">View</button>`;
 }
 /* ---------- contract report (item 10): one contract, every section, PDF + Excel ---------- */
-var _contracts=null;
+var _contracts=null, _parties=null;
 async function openContractReport(){
   $("#rep-msg").textContent=""; $("#rep-out").innerHTML="";
   if(STATIC_DATA){ $("#rep-edit").innerHTML='<div class="cnote">Open from the server to run the contract report.</div>'; return; }
-  if(_contracts===null){ try{ _contracts=(await (await fetch("api/contracts-all")).json()).contracts||[]; }catch(e){ _contracts=[]; } }
-  var opts=_contracts.map(c=>`<option value="${esc(c.contract)}">${esc(c.label)}</option>`).join("");
+  if(_contracts===null){ try{ var jj=await (await fetch("api/contracts-all")).json(); _contracts=jj.contracts||[]; _parties=jj.parties||[]; }catch(e){ _contracts=[]; _parties=[]; } }
+  var popts='<option value="">— pick a party —</option>'+(_parties||[]).map(p=>`<option value="${esc(p.party_code)}">${esc(p.label)}</option>`).join("");
   $("#rep-edit").innerHTML=`<div class="card" style="margin:8px 0;padding:12px 16px"><div class="tools" style="margin:0;align-items:center;gap:10px;flex-wrap:wrap">
-      <b>Contract report</b>
-      <label class="fld">Contract <input id="cr-pick" list="cr-list" placeholder="search contract / party…" style="min-width:240px"><datalist id="cr-list">${opts}</datalist></label>
+      <b>Contract closing</b>
+      <label class="fld">Party <select id="cr-party" style="min-width:220px">${popts}</select></label>
+      <label class="fld">Mode <select id="cr-mode"><option value="contract">Closing by contract</option><option value="quality">Closing by quality</option></select></label>
+      <label class="fld" id="cr-cwrap">Contract <select id="cr-contract" style="min-width:220px"></select></label>
+      <label class="fld" id="cr-qwrap" hidden>Quality <select id="cr-quality" style="min-width:200px"></select></label>
       <button class="btn" id="cr-go">View</button>
       <span class="spacer" style="flex:1"></span>
       <a class="btn ghost" id="cr-pdf">⤓ PDF</a><a class="btn ghost" id="cr-xlsx">⤓ Excel</a>
       <span class="muted" id="cr-msg" style="font-size:12px"></span>
     </div></div>`;
-  $("#rep-out").innerHTML='<div class="cnote">Pick a contract and press View — the report covers yarn, sizing, sets, beams, production, picks, dispatch and balances.</div>';
-  var curId=()=>{
-    var v=$("#cr-pick").value.trim();
-    var m=_contracts.find(c=>c.contract===v) || _contracts.find(c=>c.label===v) ||
-          _contracts.find(c=>v && c.label.toLowerCase().indexOf(v.toLowerCase())>=0);
-    return m?m.contract:v;
-  };
-  var go=()=>{ var id=curId(); if(!id){ $("#cr-msg").textContent="Pick a contract."; return; } renderContractReport(id); };
+  $("#rep-out").innerHTML='<div class="cnote">Pick a party, then a contract — or switch to “Closing by quality” to combine all of that party’s contracts of one quality — and press View.</div>';
+  function fillForParty(){
+    var pc=$("#cr-party").value, cs=_contracts.filter(c=>c.party_code===pc);
+    $("#cr-contract").innerHTML=cs.map(c=>`<option value="${esc(c.contract)}">${esc(c.contract)}${c.quality?(" · "+esc(c.quality)):""}</option>`).join("");
+    var seen={}, qs=[]; cs.forEach(c=>{ if(c.quality&&!seen[c.quality]){ seen[c.quality]=1; qs.push(c.quality); } });
+    $("#cr-quality").innerHTML=qs.map(q=>`<option value="${esc(q)}">${esc(q)}</option>`).join("");
+  }
+  function syncMode(){ var m=$("#cr-mode").value; $("#cr-cwrap").hidden=(m==="quality"); $("#cr-qwrap").hidden=(m!=="quality"); }
+  $("#cr-party").onchange=fillForParty; $("#cr-mode").onchange=syncMode; syncMode();
+  function qp(){
+    var pc=$("#cr-party").value; if(!pc) return null;
+    if($("#cr-mode").value==="quality"){ var q=$("#cr-quality").value; return q?("mode=quality&party="+encodeURIComponent(pc)+"&quality="+encodeURIComponent(q)):null; }
+    var c=$("#cr-contract").value; return c?("mode=contract&contract="+encodeURIComponent(c)):null;
+  }
+  var go=()=>{ var p=qp(); if(!p){ $("#cr-msg").textContent="Pick a party and a contract / quality."; return; } renderContractReport(p); };
   $("#cr-go").onclick=go;
-  $("#cr-pick").addEventListener("keydown",ev=>{ if(ev.key==="Enter") go(); });
-  var dl=(fmt)=>{ var id=curId(); if(!id){ $("#cr-msg").textContent="Pick a contract first."; return; } location.href="api/contract-report?contract="+encodeURIComponent(id)+"&fmt="+fmt; };
+  var dl=(fmt)=>{ var p=qp(); if(!p){ $("#cr-msg").textContent="Pick a party first."; return; } location.href="api/contract-report?"+p+"&fmt="+fmt; };
   $("#cr-pdf").onclick=()=>dl("pdf"); $("#cr-xlsx").onclick=()=>dl("xlsx");
 }
-async function renderContractReport(id){
+async function renderContractReport(p){
   $("#rep-msg").textContent="Loading…"; $("#rep-out").innerHTML="";
   try{
-    var j=await (await fetch("api/contract-report?contract="+encodeURIComponent(id))).json();
-    if(!j.found){ $("#rep-msg").textContent="No contract "+id+"."; $("#rep-out").innerHTML=""; return; }
+    var j=await (await fetch("api/contract-report?"+p)).json();
+    if(!j.found){ $("#rep-msg").textContent="Nothing to show for that selection."; $("#rep-out").innerHTML=""; return; }
     var h=j.header;
     $("#rep-msg").textContent=`Contract ${esc(h.contract)} — ${esc(h.party||"")}` + (h.quality?` · ${esc(h.quality)}`:"");
     var head=`<div class="grid g4" style="margin:4px 0 14px">`+

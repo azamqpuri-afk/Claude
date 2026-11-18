@@ -363,9 +363,80 @@ def contract_report(con, cfg, contract):
         brows.append(["Fabric to other parties (memo, not in the balance) m", round(oth_m)])
     sec("balances", "Summary", ["Item", "Value"], brows)
 
+    summary = {"contract": cno, "warp_recv": round(warp_k), "warp_bal": round(warp_k - to_sizing),
+               "weft_recv": round(weft_k), "weft_bal": round(weft_k - (weft_issued - weft_ret)),
+               "woven": round(woven), "dispatched": round(out_m - in_m), "to_other": round(oth_m),
+               "stock": round(woven - (out_m - in_m)), "sized": round(sized_total),
+               "shrink": (round(100.0 * (fin_set - fin_woven) / fin_set, 1) if (finished and fin_set) else None)}
     sections.sort(key=lambda s: 0 if s["key"] == "balances" else 1)   # Summary on top (stable: keeps the rest in order)
     return {"found": True, "contract": contract, "header": header, "currency": cur, "mode": "contract",
-            "quality": quality, "party": pname or pcode, "party_code": str(pcode or ""), "sections": sections}
+            "quality": quality, "party": pname or pcode, "party_code": str(pcode or ""),
+            "summary": summary, "sections": sections}
+
+
+def quality_report(con, cfg, party_code, quality):
+    """'Closing by quality': all of ONE party's contracts of the SAME quality, combined - a per-contract summary table
+    on top, then each detail section with a sub-row per contract and a grand total. Same section shape as a single
+    contract, so the same renderers serve it."""
+    pc = str(party_code)
+    cons = [c["contract"] for c in contract_list(con) if c["party_code"] == pc and c["quality"] == quality]
+    reps = [r for r in (contract_report(con, cfg, cn) for cn in cons) if r.get("found")]
+    if not reps:
+        return {"found": False, "mode": "quality", "party_code": pc, "party": pc, "quality": quality,
+                "header": {}, "sections": []}
+    party = reps[0]["party"]
+    h0 = reps[0]["header"]
+    header = {"contract": f"{len(reps)} contracts", "party": party, "quality": quality,
+              "warp_count": h0.get("warp_count"), "weft_count": h0.get("weft_count"),
+              "ends_per_inch": h0.get("ends_per_inch"), "picks_per_inch": h0.get("picks_per_inch")}
+    sections = []
+    # per-contract summary table on top
+    s_cols = ["Contract", "Warp recv kg", "Warp bal kg", "Weft recv kg", "Weft bal kg", "Woven m",
+              "Dispatched m", "To other m", "Stock m", "Sized m", "Shrinkage %"]
+    s_rows, tot = [], [0.0] * 9
+    for r in reps:
+        s = r["summary"]
+        vals = [s["warp_recv"], s["warp_bal"], s["weft_recv"], s["weft_bal"], s["woven"], s["dispatched"],
+                s["to_other"], s["stock"], s["sized"]]
+        s_rows.append([s["contract"], *[round(v) for v in vals],
+                       (f"{s['shrink']:.1f}%" if s["shrink"] is not None else "—")])
+        for i, v in enumerate(vals):
+            tot[i] += v or 0
+    sections.append({"key": "summary", "title": "Per-contract summary", "columns": s_cols, "rows": s_rows,
+                     "totals": ["TOTAL", *[round(x) for x in tot], ""], "note": None, "num_cols": list(range(1, 10))})
+    # detail sections, merged by key with a sub-row per contract and a grand total
+    order = ["yarn_in", "yarn_out", "sizing", "sets", "beams", "production", "weft", "fabric_out", "fabric_other",
+             "picks_within", "picks_check"]
+    by_key = {}
+    for r in reps:
+        for s in r["sections"]:
+            if s["key"] == "balances":
+                continue                                 # the per-contract balances roll up into the summary table
+            by_key.setdefault(s["key"], []).append((r["summary"]["contract"], s))
+    for key in order:
+        blocks = by_key.get(key)
+        if not blocks:
+            continue
+        cols = blocks[0][1]["columns"]
+        numc = blocks[0][1].get("num_cols") or []
+        rows, note = [], blocks[0][1].get("note")
+        grand = [""] * len(cols)
+        grand[0] = "GRAND TOTAL"
+        for cn, s in blocks:
+            rows.append([f"— contract {cn} —"] + [""] * (len(cols) - 1))
+            rows.extend(s["rows"])
+            if s.get("totals"):
+                rows.append(s["totals"])
+            for ci in numc:
+                acc = 0.0
+                for rr in s["rows"]:
+                    if ci < len(rr) and isinstance(rr[ci], (int, float)):
+                        acc += rr[ci]
+                grand[ci] = round((grand[ci] if isinstance(grand[ci], (int, float)) else 0) + acc)
+        sections.append({"key": key, "title": blocks[0][1]["title"], "columns": cols, "rows": rows,
+                         "totals": grand, "note": note, "num_cols": numc})
+    return {"found": True, "mode": "quality", "party": party, "party_code": pc, "quality": quality,
+            "currency": cfg["company"]["currency"], "header": header, "sections": sections}
 
 
 # ---- exports ---------------------------------------------------------------------------------
@@ -389,13 +460,13 @@ def _xlsx_sheets(rep):
     return sheets
 
 
-def write_xlsx(con, cfg, contract, folder, name):
+def write_xlsx(con, cfg, contract, folder, name, rep=None):
     from ..reports import xlsx
-    rep = contract_report(con, cfg, contract)
+    rep = rep or contract_report(con, cfg, contract)
     return xlsx.write(Path(folder) / name, _xlsx_sheets(rep), cfg["company"]["name"])
 
 
-def write_pdf(con, cfg, contract, folder, name, product=""):
+def write_pdf(con, cfg, contract, folder, name, product="", rep=None):
     """A multi-section PDF: the contract header, then one table per section."""
     from xml.sax.saxutils import escape
 
@@ -406,7 +477,7 @@ def write_pdf(con, cfg, contract, folder, name, product=""):
     from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, TableStyle
 
     from ..reports import fmt
-    rep = contract_report(con, cfg, contract)
+    rep = rep or contract_report(con, cfg, contract)
     path = Path(folder) / name
     path.parent.mkdir(parents=True, exist_ok=True)
     styles = getSampleStyleSheet()

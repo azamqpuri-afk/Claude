@@ -2566,6 +2566,45 @@ def test_v0180_sensor_twin_counts_no_restart():
     assert eps and eps[0]["twins"] >= 7 and eps[0]["share"] >= 0.9 and eps[0]["confirmed"]
 
 
+def test_v0180_contract_report_party_first(env, tmp_path):
+    # G: party-first picker + by-quality combine. party_list / party_scope are party-scoped; quality_report combines
+    # a party's contracts of one quality with a per-contract summary table; both export to xlsx + pdf.
+    from smart_layer.textile import contract_report as cr
+    cfg, con = env
+    parties = cr.party_list(con)
+    assert parties and all("party_code" in p and "contracts" in p for p in parties)
+    pc = next(p["party_code"] for p in parties if p["contracts"])
+    sc = cr.party_scope(con, pc)
+    assert sc["contracts"] and all(c["party_code"] == pc for c in sc["contracts"])
+    q = next((c["quality"] for c in sc["contracts"] if c["quality"]), None)
+    if q:
+        rep = cr.quality_report(con, cfg, pc, q)
+        assert rep["found"] and rep["mode"] == "quality"
+        assert any(s["key"] == "summary" for s in rep["sections"])
+        px = cr.write_xlsx(con, cfg, None, tmp_path, "q.xlsx", rep=rep)
+        pp = cr.write_pdf(con, cfg, None, tmp_path, "q.pdf", product="SL", rep=rep)
+        assert px.exists() and pp.exists() and pp.stat().st_size > 1500
+
+
+def test_v0180_fabric_to_other_parties(env):
+    # G: a fabric OGP whose party_code differs from the contract's party_code goes to its own "Fabric to other
+    # parties" tab and is kept out of the fabric-to-party section and the balance (a memo line in the summary).
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.execute("""CREATE TABLE fabric_dispatches (dispatch_date TEXT, doc_no TEXT, contract_no TEXT, quality TEXT,
+        party_code TEXT, deliver_to TEXT, direction TEXT, fresh_m REAL, rejected_m REAL, meters REAL, thaan REAL, amount REAL)""")
+    con.execute("INSERT INTO contracts (contract_no, party_code, party_name) VALUES ('K3','P1','QADRI')")
+    ins = ("INSERT INTO fabric_dispatches (dispatch_date, doc_no, contract_no, direction, meters, fresh_m, "
+           "rejected_m, thaan, party_code, deliver_to) VALUES (?,?,?,?,?,?,?,?,?,?)")
+    con.execute(ins, ("2026-10-01", "1", "K3", "out", 1000, 900, 100, None, "P1", "DYER LHR"))   # same party -> counts
+    con.execute(ins, ("2026-10-02", "2", "K3", "out", 500, 0, 500, None, "KHALID", "REJECTION"))  # other party -> memo
+    secs = {s["key"]: s for s in cr.contract_report(con, cfg, "K3")["sections"]}
+    assert "fabric_other" in secs and any("KHALID" in str(r) for r in secs["fabric_other"]["rows"])
+    assert not any("KHALID" in str(r) for r in secs["fabric_out"]["rows"])    # the same-party OGP stays, other is out
+    assert any("other parties" in str(r[0]).lower() for r in secs["balances"]["rows"])   # memo line in the summary
+
+
 def test_v0180_ack_migration_maps_old_keys():
     # Item I: acks saved under the old volatile keys migrate to the new stable keys so cleared items do not pop back.
     from smart_layer.web.data import _migrate_acks

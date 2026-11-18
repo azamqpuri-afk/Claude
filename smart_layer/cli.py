@@ -151,15 +151,25 @@ def cmd_report(cfg, args):
     day = date.fromisoformat(args.date) if args.date else None
     d0 = date.fromisoformat(args.from_) if getattr(args, "from_", None) else None
     d1 = date.fromisoformat(args.to) if getattr(args, "to", None) else None
-    if args.name == "contract":                          # the whole-contract report (own module, not a day report)
+    if args.name == "contract":                          # the closing report (own module, not a day report)
         from .textile import contract_report as cr
         contract = getattr(args, "contract", None)
-        if not contract:
-            print("Give a contract: report contract --contract <no>")
+        quality = getattr(args, "quality", None)
+        party = getattr(args, "party", None)
+        if quality:                                      # by quality: all of one party's contracts of that quality
+            if not party:
+                print("For a by-quality closing give the party too: report contract --party <code> --quality <q>")
+                return 2
+            rep = cr.quality_report(con, cfg, party, quality)
+            contract = f"{party}_{quality}"
+        elif contract:
+            rep = cr.contract_report(con, cfg, contract)
+        else:
+            print("Give a contract (report contract --contract <no>) or a party + quality "
+                  "(report contract --party <code> --quality <q>)")
             return 2
-        rep = cr.contract_report(con, cfg, contract)
         if not rep.get("found"):
-            print(f"No contract {contract}.")
+            print("Nothing found for that selection.")
             return 1
         h = rep["header"]
         print(f"Contract {h.get('contract')} - {h.get('party')} - {h.get('quality') or ''}")
@@ -176,10 +186,12 @@ def cmd_report(cfg, args):
             if s.get("note"):
                 print("  ! " + s["note"])
         out_dir = cfg.output_dir()
+        import re as _re
+        base = "contract_" + _re.sub(r"[^A-Za-z0-9_.-]+", "_", str(contract))[:50]
         if getattr(args, "xlsx", False):
-            print("\nSaved", cr.write_xlsx(con, cfg, contract, out_dir, f"contract_{contract}.xlsx"))
+            print("\nSaved", cr.write_xlsx(con, cfg, None, out_dir, f"{base}.xlsx", rep=rep))
         if args.pdf:
-            print("Saved", cr.write_pdf(con, cfg, contract, out_dir, f"contract_{contract}.pdf", product="Smart Layer"))
+            print("Saved", cr.write_pdf(con, cfg, None, out_dir, f"{base}.pdf", product="Smart Layer", rep=rep))
         return 0
     if args.name == "zero":                              # only the daily push moves the "newly at zero" baseline
         rep = stock.new_zero(con, cfg, day, remember=bool(args.push))
@@ -551,6 +563,8 @@ def main(argv=None):
     r = sub.add_parser("report")
     r.add_argument("name", choices=report_registry.NAMES + ["contract"])
     r.add_argument("--contract", help="for 'report contract': the contract number")
+    r.add_argument("--party", help="for 'report contract' by quality: the party code")
+    r.add_argument("--quality", help="for 'report contract' by quality: combine the party's contracts of this quality")
     r.add_argument("--date")
     r.add_argument("--from", dest="from_", metavar="YYYY-MM-DD", help="range start (for period reports)")
     r.add_argument("--to", metavar="YYYY-MM-DD", help="range end / as-of date")

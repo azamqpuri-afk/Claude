@@ -136,34 +136,45 @@ class App:
             con.close()
 
     def contracts_all(self):
+        """Parties (for the party-first dropdown) and every contract (each carries its party_code + quality, so the
+        contract and quality dropdowns are filtered to the picked party client-side)."""
         from ..textile import contract_report as cr
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
-            return {"contracts": cr.contract_list(con)}
+            return {"contracts": cr.contract_list(con), "parties": cr.party_list(con)}
         finally:
             con.close()
 
-    def contract_report(self, contract):
+    def _report(self, con, mode, key, party):
         from ..textile import contract_report as cr
+        if mode == "quality":
+            return cr.quality_report(con, self.cfg, party, key)
+        return cr.contract_report(con, self.cfg, key)
+
+    def contract_report(self, mode, key, party=""):
+        from ..textile import contract_report as cr   # noqa: F401 (kept for the import side-effect / clarity)
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
-            return cr.contract_report(con, self.cfg, contract)
+            return self._report(con, mode, key, party)
         finally:
             con.close()
 
-    def contract_report_file(self, contract, fmt):
-        """The whole-contract report as a downloadable PDF or Excel (one sheet per section)."""
+    def contract_report_file(self, mode, key, party, fmt):
+        """The report as a downloadable PDF or Excel (one sheet per section), by contract or by quality."""
+        import re as _re
         import tempfile
         from .. import PRODUCT
         from ..textile import contract_report as cr
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
+            rep = self._report(con, mode, key, party)
+            base = _re.sub(r"[^A-Za-z0-9_.-]+", "_", f"{mode}_{key}")[:60]
             with tempfile.TemporaryDirectory() as tmp:
                 if fmt in ("xlsx", "excel"):
-                    p = cr.write_xlsx(con, self.cfg, contract, tmp, f"contract_{contract}.xlsx")
+                    p = cr.write_xlsx(con, self.cfg, None, tmp, f"{base}.xlsx", rep=rep)
                     ctype = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 else:
-                    p = cr.write_pdf(con, self.cfg, contract, tmp, f"contract_{contract}.pdf", product=PRODUCT)
+                    p = cr.write_pdf(con, self.cfg, None, tmp, f"{base}.pdf", product=PRODUCT, rep=rep)
                     ctype = "application/pdf"
                 return Path(p).read_bytes(), ctype, Path(p).name
         finally:
@@ -938,15 +949,17 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.gully_balance(gday), "application/json", {}
         if path == "/api/contracts-all":                  # every contract (open + closed) for the contract-report picker
             return 200, app.contracts_all(), "application/json", {}
-        if path == "/api/contract-report":                # the whole-contract report (json, or a pdf / xlsx download)
-            contract = params.get("contract", "")
-            if not contract:
-                return 400, {"error": "contract required"}, "application/json", {}
+        if path == "/api/contract-report":                # the closing report by contract or by quality (json / pdf / xlsx)
+            mode = params.get("mode", "contract")
+            party = params.get("party", "")
+            key = params.get("quality", "") if mode == "quality" else params.get("contract", "")
+            if not key or (mode == "quality" and not party):
+                return 400, {"error": "contract (or party+quality for mode=quality) required"}, "application/json", {}
             fmt = params.get("fmt", "json")
             if fmt in ("pdf", "xlsx", "excel"):
-                body, ctype, fname = app.contract_report_file(contract, fmt)
+                body, ctype, fname = app.contract_report_file(mode, key, party, fmt)
                 return 200, body, ctype, {"Content-Disposition": f'attachment; filename="{fname}"'}
-            return 200, app.contract_report(contract), "application/json", {}
+            return 200, app.contract_report(mode, key, party), "application/json", {}
         if path == "/api/closing/contracts":             # contracts for the closing picker (optional party filter)
             return 200, app.closing_contracts(params.get("party", "")), "application/json", {}
         if path == "/api/closing/sheet":                 # IGP yarn + OGP fabric date-wise for a party/contract
