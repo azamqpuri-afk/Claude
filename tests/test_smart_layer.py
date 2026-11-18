@@ -2678,6 +2678,42 @@ def test_v0182_set_shrink_divides_by_beam_count(env):
     assert by_set["B"][scol] == "—"                       # running beam -> no shrink yet
 
 
+def test_v0183_set_shrink_is_weighted_mean_of_its_beam_rows(env):
+    # 0.18.3: a set's beams can run on DIFFERENT looms (different panels). The set shrink % must aggregate each finished
+    # beam as the Beams section does - woven_i / panels_of_its_loom - over the summed set lengths, so the Sets section
+    # equals the weighted mean of its own Beams-section rows. Here B1 runs on a 3-panel loom, B2 on a 2-panel loom.
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.execute("CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, meters REAL, pieces REAL)")
+    con.execute("INSERT INTO contracts (contract_no, picks_per_inch) VALUES ('K9', 66)")
+    con.execute("INSERT INTO looms VALUES ('LA','LOOM-A'),('LB','LOOM-B')")
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-10-05','LA',1000,3)")     # LA: 3 panels
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-10-05','LB',1000,2)")     # LB: 2 panels
+    con.execute("INSERT INTO beam_movements VALUES ('2026-10-10','G','B1','from_loom_finished',NULL,'S','K9','LA',3000,9000)")
+    con.execute("INSERT INTO beam_movements VALUES ('2026-10-10','G','B2','from_loom_cut',NULL,'S','K9','LB',3000,6200)")
+    secs = {s["key"]: s for s in cr.contract_report(con, cfg, "K9")["sections"]}
+    # reconstruct the weighted mean from the Beams-section rows themselves (which the ERP side confirmed are correct)
+    bcol = secs["beams"]["columns"]
+    li, wi, pi = bcol.index("Set length m"), bcol.index("Woven m"), bcol.index("Short/extra %")
+    num = den = 0.0
+    for r in secs["beams"]["rows"]:
+        if str(r[pi]).endswith("%"):                     # a finished beam (running/on-record show "—")
+            ew = r[li] * (1 + float(str(r[pi]).rstrip("%")) / 100.0)   # ew_i = length_i x (1 + short/extra%)
+            num += ew
+            den += r[li]
+    expected = 100.0 * (1 - num / den)
+    # the Sets section's Shrink % for set S must equal that weighted mean of its own beam rows (a sized_sets row is
+    # needed for the Sets section to render; tolerance absorbs the one-decimal rounding on both the cell and the rows)
+    con.execute("CREATE TABLE sized_sets (set_no TEXT, set_date TEXT, sizer_name TEXT, contract_no TEXT, ends REAL, "
+                "set_length_m REAL, bags REAL, gullay_kg REAL, waste_kg REAL, yarn_sent_kg REAL)")
+    con.execute("INSERT INTO sized_sets VALUES ('S','2026-09-20','SZ','K9',9000,3000,20,0,0,12000)")
+    srow = next(s for s in cr.contract_report(con, cfg, "K9")["sections"] if s["key"] == "sets")
+    scol = srow["columns"].index("Shrink %")
+    got = float(str(srow["rows"][0][scol]).rstrip("%"))
+    assert abs(got - expected) < 0.2, (got, expected)
+
+
 def test_v0181_quality_summary_combined_columns(env):
     # 0.18.1: in quality mode, when the quality's warp/weft are the same count every contract combines its yarn, so the
     # per-contract summary shows one "Yarn recv/bal" pair and drops the always-zero weft columns.
