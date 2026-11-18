@@ -2648,6 +2648,36 @@ def test_v0181_combined_yarn_and_shrinkage_pieces(env):
     assert -5 < float(str(row[scol]).rstrip("%")) < 10
 
 
+def test_v0182_set_shrink_divides_by_beam_count(env):
+    # 0.18.2: a set has several beams, each of set_length. Set shrink % = 1 - (finished woven / panels) /
+    # (set_length x number of that set's FINISHED beams). Dividing by one beam's length read a huge false shortfall.
+    # Only finished beams count; a set with no finished beam shows "—".
+    from smart_layer.textile import contract_report as cr
+    cfg, _ = env
+    con = _mini_contract_store()
+    con.execute("CREATE TABLE sized_sets (set_no TEXT, set_date TEXT, sizer_name TEXT, contract_no TEXT, ends REAL, "
+                "set_length_m REAL, bags REAL, gullay_kg REAL, waste_kg REAL, yarn_sent_kg REAL)")
+    con.execute("CREATE TABLE loom_monitor (read_date TEXT, loom_code TEXT, meters REAL, pieces REAL)")
+    con.execute("INSERT INTO contracts (contract_no, picks_per_inch) VALUES ('K8', 66)")
+    con.execute("INSERT INTO looms VALUES ('L1','LOOM-1')")
+    con.execute("INSERT INTO loom_monitor VALUES ('2026-10-05','L1',1000,3)")     # 3 panels across
+    # SET A: 3 finished beams, each set_length 3,000; woven across = 3 beams x 3 panels x ~3,000 = 27,090
+    con.execute("INSERT INTO sized_sets VALUES ('A','2026-09-20','SZ','K8',9000,3000,30,0,0,12000)")
+    for b in ("00011", "00012", "00013"):
+        con.execute("INSERT INTO beam_movements VALUES ('2026-10-10','GP','%s','from_loom_cut',NULL,'A','K8','L1',3000,9030)" % b)
+    # SET B: one beam still running (no finished movement) -> shrink shows "—"
+    con.execute("INSERT INTO sized_sets VALUES ('B','2026-09-22','SZ','K8',9000,3000,10,0,0,4000)")
+    con.execute("INSERT INTO beams VALUES ('00020','on_loom','B','K8','L1',NULL,9000,3000,0,2000,'2026-09-25',NULL,3)")
+    secs = {s["key"]: s for s in cr.contract_report(con, cfg, "K8")["sections"]}
+    sset = secs["sets"]
+    scol = sset["columns"].index("Shrink %")
+    by_set = {r[0]: r for r in sset["rows"]}
+    # A: 27,090 / 3 panels = 9,030 vs 3,000 x 3 beams = 9,000 -> ~ -0.3%, NOT a 3x-inflated shortfall
+    pct_a = float(str(by_set["A"][scol]).rstrip("%"))
+    assert -5 < pct_a < 5, pct_a
+    assert by_set["B"][scol] == "—"                       # running beam -> no shrink yet
+
+
 def test_v0181_quality_summary_combined_columns(env):
     # 0.18.1: in quality mode, when the quality's warp/weft are the same count every contract combines its yarn, so the
     # per-contract summary shows one "Yarn recv/bal" pair and drops the always-zero weft columns.

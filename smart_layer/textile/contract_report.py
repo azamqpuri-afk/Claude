@@ -204,32 +204,48 @@ def contract_report(con, cfg, contract):
     ss = _q(con, """SELECT set_no, set_date, sizer_name, COALESCE(ends,0), COALESCE(set_length_m,0), COALESCE(bags,0),
                     COALESCE(gullay_kg,0), COALESCE(waste_kg,0), COALESCE(yarn_sent_kg,0) FROM sized_sets
                     WHERE contract_no = ? ORDER BY set_date, set_no""", (contract,))
-    # Woven metres per set. A set's beams come off the loom and leave the beams snapshot, so its snapshot woven_m
-    # reads 0 - beam_movements keeps the REAL woven metres of finished beams (and their set_no). Merge both per beam
-    # (keep the larger woven, and a non-blank set), then total by set, so Sets 'Woven m' ties to what was woven.
-    bw_by_beam = {}                                       # _norm(beam_no) -> {"set": set_no, "woven": m}
+    # Woven metres and shrinkage inputs per set. A finished set's beams come off the loom and leave the beams snapshot
+    # (snapshot woven_m reads 0), so woven and the finished-beam count come from beam_movements; the snapshot still
+    # adds any running beams' woven so the 'Woven m' column ties to the Beams section total. Merge per beam (keep the
+    # larger woven, a non-blank set, and finished if any movement says so), then total by set.
+    bw_by_beam = {}                                       # _norm(beam_no) -> {"set": set_no, "woven": m, "fin": bool}
     for beam, sno, wv in _q(con, "SELECT beam_no, set_no, COALESCE(woven_m,0) FROM beams WHERE contract_no = ?", (contract,)):
-        e = bw_by_beam.setdefault(_norm(beam), {"set": sno, "woven": 0.0})
+        e = bw_by_beam.setdefault(_norm(beam), {"set": sno, "woven": 0.0, "fin": False})
         e["woven"] = max(e["woven"], wv or 0)
         if sno:
             e["set"] = sno
-    for beam, sno, wv in _q(con, """SELECT beam_no, MAX(set_no), MAX(COALESCE(woven_m,0)) FROM beam_movements
-            WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> '' GROUP BY beam_no""", (contract,)):
-        e = bw_by_beam.setdefault(_norm(beam), {"set": sno, "woven": 0.0})
+    for beam, sno, wv, came_off in _q(con, """SELECT beam_no, MAX(set_no), MAX(COALESCE(woven_m,0)),
+            MAX(CASE WHEN move_type IN ('from_loom_finished','from_loom_cut') THEN 1 ELSE 0 END)
+            FROM beam_movements WHERE contract_no = ? AND beam_no IS NOT NULL AND beam_no <> '' GROUP BY beam_no""", (contract,)):
+        e = bw_by_beam.setdefault(_norm(beam), {"set": sno, "woven": 0.0, "fin": False})
         e["woven"] = max(e["woven"], wv or 0)
         if sno and not e.get("set"):
             e["set"] = sno
-    set_woven = {}
+        if came_off:
+            e["fin"] = True
+    set_woven, set_fin = {}, {}                           # set_fin: finished-beam woven + count, for shrinkage
     for e in bw_by_beam.values():
-        set_woven[_norm(e["set"])] = set_woven.get(_norm(e["set"]), 0) + (e["woven"] or 0)
+        k = _norm(e["set"])
+        set_woven[k] = set_woven.get(k, 0) + (e["woven"] or 0)
+        if e["fin"]:
+            f = set_fin.setdefault(k, {"woven": 0.0, "n": 0})
+            f["woven"] += e["woven"] or 0
+            f["n"] += 1
     rows = []
     for sn, sd, sz, ends, length, bags, gully, waste, ysent in ss:
         count = (ends * 1.0936 * length / (840.0 * ysent * 2.2046)) if (ysent and length) else 0
         bw = set_woven.get(_norm(sn), 0)                 # fabric woven from this set's beams (counts every panel)
-        shrink = (100.0 * (1 - (bw / (pieces_x or 1)) / length)) if (length and bw) else None
+        # Shrinkage uses FINISHED beams only. set_length is the warp length of ONE beam, and a set has several beams,
+        # so the set's warp length is length x (number of that set's finished beams); divide the finished woven by the
+        # panels-across before comparing. "—" until at least one beam is finished (a running beam would read short).
+        f = set_fin.get(_norm(sn))
+        if f and f["n"] and length:
+            shrink = 100.0 * (1 - (f["woven"] / (pieces_x or 1)) / (length * f["n"]))
+            shrink_cell = f"{shrink:.1f}%"
+        else:
+            shrink_cell = "—"
         rows.append([sn, sd, sz, round(ends), round(length), round(bags), round(ysent), round(gully, 1),
-                     round(waste, 1), round(bw), (f"{shrink:.1f}%" if shrink is not None else "—"),
-                     (f"{count:.1f}" if count else "—")])
+                     round(waste, 1), round(bw), shrink_cell, (f"{count:.1f}" if count else "—")])
 
     def _col(i):
         return sum(r[i] for r in rows if isinstance(r[i], (int, float)))
