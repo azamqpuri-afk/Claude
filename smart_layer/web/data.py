@@ -438,6 +438,7 @@ def build(con, cfg, as_of=None):
         "purchasing_installed": _purchasing_installed(con),  # show the Indents & POs view only when those entities are mapped
         "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound", "colour_scheme")},
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
+        "push_failures": _push_failures(con),            # item B1: alerts the outbox could not deliver in the last 24h
         "kpis": {
             "meters": round(today[1] or 0) if today else 0,
             "dispatched_month": round(disp_month or 0), "woven_month": round(woven_month or 0),
@@ -583,6 +584,17 @@ def production_day(con, cfg, pd):
                     "ccp": (round(ccp) if ccp is not None else None), "rej": round(rej or 0),
                     "rej_pct": (round(100.0 * (rej or 0) / tot, 1) if tot else 0.0)})
     return {"date": str(pd), "label": _dmon(pd), "rows": out, "summary": summ}
+
+
+def _push_failures(con):
+    """The push outbox's recent failures, for the Overview 'pushes not delivered' warning (item B1)."""
+    try:
+        from .. import outbox
+        rows = outbox.failed_recent(con, hours=24)
+        return {"count": len(rows), "items": [{"title": r["title"], "attempts": r["attempts"],
+                                               "error": r["last_error"]} for r in rows[:8]]}
+    except Exception:
+        return {"count": 0, "items": []}
 
 
 def feed_day(con, cfg, day=None):

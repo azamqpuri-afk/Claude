@@ -14,7 +14,7 @@ cursor is not advanced while quiet, so the next run outside the window sends the
 import json
 from datetime import date, datetime, timedelta
 
-from . import notify, store
+from . import notify, outbox, store
 
 
 def _lnum(code):
@@ -73,9 +73,9 @@ def notify_changes(cfg, con):
             doc = str(e.get("doc_no") or e.get("gatepass_id") or "?")
             if key and key not in ogp_done:
                 m = e.get("meters")
-                notify.send(cfg, f"Fabric out · OGP {doc}",
-                            f"OGP {doc}: {m:,} m → {e.get('party') or '?'}" if m else f"OGP {doc} → {e.get('party') or '?'}",
-                            tags="truck")
+                outbox.queue(con, f"ogp-{key}", f"Fabric out · OGP {doc}",
+                             f"OGP {doc}: {m:,} m → {e.get('party') or '?'}" if m else f"OGP {doc} → {e.get('party') or '?'}",
+                             tags="truck")
                 ogp_done.add(key); sent += 1
     # one production push per NEW production date, with that date's own ERP vs scoreboard figures
     for ds in sorted(prod_dates):
@@ -85,8 +85,9 @@ def notify_changes(cfg, con):
             d = date.fromisoformat(ds)
         except (ValueError, TypeError):
             continue
-        notify.send(cfg, f"Production entered {d:%d-%b}", _production_line(con, d, cfg), tags="bar_chart")
+        outbox.queue(con, f"prod-{ds}", f"Production entered {d:%d-%b}", _production_line(con, d, cfg), tags="bar_chart")
         prod_done.add(ds); sent += 1
+    outbox.flush(con, cfg)
     store.set_state(con, "ogp_pushed", sorted(ogp_done)[-5000:])
     store.set_state(con, "prod_pushed", sorted(prod_done)[-400:])
     store.set_state(con, "push_cursor", maxid)
@@ -182,8 +183,9 @@ def edit_pushes(cfg, con):
         lines.append(f"• {what} {f['area']} {f['doc']}{when} by {f['user']}")
     if len(flagged) > 10:
         lines.append(f"… and {len(flagged) - 10} more")
-    notify.send(cfg, title, "\n".join(lines), tags=("warning" if ndel else "pencil"),
-                priority=("high" if ndel else "default"))
+    outbox.queue(con, f"edits-{maxid}", title, "\n".join(lines), tags=("warning" if ndel else "pencil"),
+                 priority=("high" if ndel else "default"))
+    outbox.flush(con, cfg)
     return 1
 
 
@@ -218,7 +220,9 @@ def morning_summary(cfg, con, d=None):
     edits_line = _edits_by_user_line(con, d, cfg)          # item 31: one "edits by user" line when the history layer is on
     if edits_line:
         body += f"\n{edits_line}"
-    notify.send(cfg, f"Morning summary {d:%d-%b}", body, tags="sunrise")
+    outbox.queue(con, f"morning-{d.isoformat()}", f"Morning summary {d:%d-%b}", body, tags="sunrise")
+    outbox.flush(con, cfg)
+    outbox.prune(con)                                      # keep the outbox from growing forever (daily)
     return body
 
 
@@ -250,7 +254,8 @@ def night_sensor(cfg, con, d=None):
         title = f"Night sensor {d:%d-%b}: {len(eps)} possible"
     else:
         body, title = "All clear - no two looms stopped together on the night shift.", f"Night sensor {d:%d-%b}: all clear"
-    notify.send(cfg, title, body, tags=("warning" if conf else "white_check_mark"))
+    outbox.queue(con, f"nightsensor-{d.isoformat()}", title, body, tags=("warning" if conf else "white_check_mark"))
+    outbox.flush(con, cfg)
     return body
 
 
@@ -277,6 +282,7 @@ def weft_check(cfg, con, d=None):
     pct = (diff / scb_kg * 100) if scb_kg else 0
     flag = abs(pct) > 10
     body = f"{d:%d-%b}: expected weft {scb_kg:,.0f} kg (from production) vs issued {issued:,.0f} kg ({diff:+,.0f} kg, {pct:+.0f}%)."
-    notify.send(cfg, f"Weft check {d:%d-%b}" + (" - check" if flag else ""), body, tags=("warning" if flag else "scales"),
-                priority=("high" if flag else "default"))
+    outbox.queue(con, f"weftcheck-{d.isoformat()}", f"Weft check {d:%d-%b}" + (" - check" if flag else ""), body,
+                 tags=("warning" if flag else "scales"), priority=("high" if flag else "default"))
+    outbox.flush(con, cfg)
     return body

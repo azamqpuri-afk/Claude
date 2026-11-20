@@ -3104,3 +3104,42 @@ def test_vO_store_location_shown_everywhere(env):
     # item ledger + issue-slip lines carry location
     assert st.issue_history(con, "6202", as_of=asof)["location"] == "A-01"
     assert se.slip_lines(con, "S1")["rows"][0]["location"] == "A-01"
+
+
+def test_vB1_notify_channel_isolation(monkeypatch):
+    # Q + B1: one channel's failure must NOT block the others; raise only when EVERY channel failed.
+    from smart_layer import notify
+    cfg = {"notify": {"channels": ["console", "ntfy"], "ntfy_topic": "x" * 20}}
+    monkeypatch.setattr(notify, "_send_ntfy", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("DNS down")))
+    sent = notify.send(cfg, "Title", "body with an arrow → inside")   # ntfy fails, console still delivers
+    assert sent == ["console"]
+    cfg2 = {"notify": {"channels": ["ntfy"], "ntfy_topic": "x" * 20}}
+    import pytest as _pt
+    with _pt.raises(notify.NotifyError):                                    # the only channel failed -> raise so the outbox retries
+        notify.send(cfg2, "T", "b")
+
+
+def test_vB1_outbox_retries_until_sent(monkeypatch):
+    # B1: a push is marked sent ONLY after delivery; a failed send stays pending and is retried; nothing is lost.
+    import sqlite3, datetime as _dt
+    from smart_layer import outbox, notify
+    con = sqlite3.connect(":memory:")
+    cfg = {"notify": {"channels": ["console"]}}
+    calls = {"n": 0}
+
+    def flaky(_cfg, title, body, **k):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise notify.NotifyError("first send fails")
+        return ["console"]
+    monkeypatch.setattr(notify, "send", flaky)
+
+    assert outbox.queue(con, "k1", "Morning", "summary", meta={"keys": ["m1"]}) is True
+    assert outbox.queue(con, "k1", "Morning", "summary") is False          # idempotent on the dedup key
+    t0 = _dt.datetime(2026, 11, 20, 8, 0, 0)
+    r1 = outbox.flush(con, cfg, now=t0)                                     # first try fails -> stays pending
+    assert r1["sent"] == [] and r1["pending"] == 1
+    assert len(outbox.failed_recent(con, now=t0)) == 1                      # shows up in the 24h failed panel
+    r2 = outbox.flush(con, cfg, now=t0 + _dt.timedelta(minutes=10))        # back-off elapsed -> retried, delivered
+    assert r2["sent"] == [{"keys": ["m1"]}] and r2["pending"] == 0
+    assert outbox.failed_recent(con) == []                                 # nothing failing now

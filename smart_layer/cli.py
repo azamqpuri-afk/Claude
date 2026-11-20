@@ -193,8 +193,8 @@ def cmd_report(cfg, args):
         if args.pdf:
             print("Saved", cr.write_pdf(con, cfg, None, out_dir, f"{base}.pdf", product="Smart Layer", rep=rep))
         return 0
-    if args.name == "zero":                              # only the daily push moves the "newly at zero" baseline
-        rep = stock.new_zero(con, cfg, day, remember=bool(args.push))
+    if args.name == "zero":                              # the baseline moves only AFTER the alert is queued (item B1)
+        rep = stock.new_zero(con, cfg, day, remember=False)
     else:
         rep = report_registry.build(con, cfg, args.name, day, d0, d1)
     print(rep.text())
@@ -210,8 +210,15 @@ def cmd_report(cfg, args):
         pdf_path = delivery.save(cfg, rep, args.name, tag)
         delivery.prune(cfg)
         print("Saved", pdf_path)
-    if args.push and (rep.rows or args.name != "zero"):
-        body = "\n".join(rep.summary) + ("\n\n" + rep.text(limit=15) if args.name == "zero" else "")
+    if args.name == "zero" and args.push:                # route through the durable outbox, THEN move the baseline (B1)
+        from . import outbox
+        if rep.rows:
+            body = "\n".join(rep.summary) + "\n\n" + rep.text(limit=15)
+            outbox.queue(con, f"zero-{tag}", rep.title, body)
+            outbox.flush(con, cfg)
+        stock.commit_zero_baseline(con, cfg, day)        # the alert is now safely queued -> safe to advance the baseline
+    elif args.push and (rep.rows or args.name != "zero"):
+        body = "\n".join(rep.summary)
         attach = pdf_path.read_bytes() if (pdf_path and delivery.attach_enabled(cfg, args.name)) else None
         notify.send(cfg, rep.title, body, attach=attach, filename=(pdf_path.name if attach else None))
     return 0
@@ -233,17 +240,26 @@ def cmd_audit(cfg, args):
     if args.pdf:
         print("Saved", rep.write_pdf(cfg.output_dir(), f"audit_{d0}_{d1}.pdf", cfg["company"]["name"], PRODUCT))
     if args.push and args.urgent:                    # the 5-minute task: each urgent finding, once, with a tap-to-open link
-        for f in a.new_alerts(urgent_only=True):
-            notify.send(cfg, f"{f.section}: {f.title[:80]}", (f.title + ("\n" + f.detail if f.detail else "")),
-                        priority="urgent", click=_dashboard_link(cfg, f))
+        from . import outbox
+        for f in a.new_alerts(remember=False, urgent_only=True):   # mark pushed only AFTER delivery (item B1)
+            outbox.queue(a.con, f"urgent-{f.key}", f"{f.section}: {f.title[:80]}",
+                         (f.title + ("\n" + f.detail if f.detail else "")), priority="urgent",
+                         click=_dashboard_link(cfg, f), meta={"keys": [f.key]})
+        res = outbox.flush(a.con, cfg)
+        a.mark_pushed([k for m in res["sent"] for k in m.get("keys", [])])
     elif args.push:                                  # the daily summary: everything else new, batched
-        fresh = a.new_alerts()
+        from . import outbox
+        fresh = a.new_alerts(remember=False)
         if fresh:
+            keys = [f.key for f in fresh]
             body = "\n".join(f"[{f.severity}] {f.title}" for f in fresh[:25])
             if len(fresh) > 25:
                 body += f"\n... and {len(fresh) - 25} more in the report"
-            notify.send(cfg, f"ERP audit {d1:%d-%b}: {len(fresh)} new", body, priority="high",
-                        click=(cfg["notify"].get("dashboard_url") or cfg["serve"].get("url") or None))
+            outbox.queue(a.con, f"audit-{d1}-{min(keys)}-{len(keys)}", f"ERP audit {d1:%d-%b}: {len(fresh)} new", body,
+                         priority="high", meta={"keys": keys},
+                         click=(cfg["notify"].get("dashboard_url") or cfg["serve"].get("url") or None))
+        res = outbox.flush(a.con, cfg)
+        a.mark_pushed([k for m in res["sent"] for k in m.get("keys", [])])
     return 0
 
 
@@ -551,6 +567,7 @@ def _start_windows_tasks(cfg_path):
 
 
 def main(argv=None):
+    notify.force_utf8_stdout()                            # item Q: a redirected cp1252 console must not crash a push
     p = argparse.ArgumentParser(prog="smart_layer", description=PRODUCT)
     p.add_argument("-c", "--config", default="config.toml")
     sub = p.add_subparsers(dest="cmd", required=True)

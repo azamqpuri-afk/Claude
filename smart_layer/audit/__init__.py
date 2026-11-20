@@ -101,13 +101,22 @@ class Audit:
                        f"{n['INFO']} dismissed as normal practice.", *self.summary])
 
     def new_alerts(self, remember=True, urgent_only=False):
-        """ACTION / CONFIRMED findings not pushed before (optionally only the urgent ones)."""
+        """ACTION / CONFIRMED findings not pushed before (optionally only the urgent ones). Prefer remember=False +
+        mark_pushed() AFTER the outbox confirms delivery (item B1): marking before the send is what lost 90 pushes."""
         seen = set(get_state(self.con, "audit_pushed", []))
         fresh = [f for f in self.findings if f.severity in ("ACTION", "CONFIRMED") and f.key not in seen
                  and (not urgent_only or is_urgent(f, self.t))]
         if remember:
             set_state(self.con, "audit_pushed", sorted(seen | {f.key for f in fresh})[-20000:])
         return fresh
+
+    def mark_pushed(self, keys):
+        """Record these finding keys as pushed - called ONLY after a confirmed send (item B1), never before."""
+        keys = [k for k in keys if k]
+        if not keys:
+            return
+        seen = set(get_state(self.con, "audit_pushed", []))
+        set_state(self.con, "audit_pushed", sorted(seen | set(keys))[-20000:])
 
 
 def is_urgent(f, audit_cfg=None):

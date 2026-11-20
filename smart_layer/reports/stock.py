@@ -214,6 +214,14 @@ def new_zero(con, cfg, as_of=None, remember=False):
                   ["Item", "Code", "Stock", "Avg use / month", "Last bought", "From", "Rate"], rows, summary)
 
 
+def commit_zero_baseline(con, cfg, as_of=None):
+    """Move the zero-stock baseline to the current stock. Called only AFTER the newly-at-zero alert has been safely
+    queued to the push outbox (item B1): moving it before a confirmed queue was how a failed send 'used up' an alert."""
+    as_of = as_of or date.today()
+    items = _status_rows(con, as_of, int(cfg["reports"]["tracked_issue_days"]))
+    set_state(con, "stock_snapshot", {r["item_code"]: r["stock"] for r in items})
+
+
 def demand_list(con, cfg, as_of=None):
     """Items the store should be buying now, on usage not on the ERP's reorder levels (often unmaintained). An item
     is listed when ANY of: (a) it was issued in the last `demand_used_days` and stock is now <= 0; (b) stock is
