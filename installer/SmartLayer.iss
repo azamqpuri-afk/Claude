@@ -69,6 +69,7 @@ Filename: "schtasks.exe"; Parameters: "/End /TN ""Smart Layer Dashboard"""; Flag
 Filename: "taskkill.exe"; Parameters: "/IM SmartLayer.exe /F /T";           Flags: runhidden; RunOnceId: "KillExe"
 ; Then remove the scheduled tasks and the firewall rule (keeps the folder, data and licence).
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Daily"" /F";     Flags: runhidden; RunOnceId: "DelDaily"
+Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Morning"" /F";   Flags: runhidden; RunOnceId: "DelMorning"
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Live"" /F";      Flags: runhidden; RunOnceId: "DelLive"
 Filename: "schtasks.exe"; Parameters: "/Delete /TN ""Smart Layer Dashboard"" /F"; Flags: runhidden; RunOnceId: "DelDash"
 Filename: "powershell.exe"; Parameters: "-NoProfile -Command ""Get-NetFirewallRule -DisplayName 'Smart Layer Dashboard' -ErrorAction SilentlyContinue | Remove-NetFirewallRule"""; Flags: runhidden; RunOnceId: "DelFw"
