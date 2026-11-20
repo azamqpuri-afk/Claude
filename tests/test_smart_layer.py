@@ -3149,6 +3149,30 @@ def test_vB1_outbox_retries_until_sent(monkeypatch):
     assert outbox.failed_recent(con) == []                                 # nothing failing now
 
 
+def test_vB5_backup_is_consistent_copy(tmp_path):
+    # B5: the nightly backup is a real, openable SQLite copy (VACUUM INTO), dated, never a half-written file,
+    # and old copies are pruned to `keep`. store.backup must never raise into the daily run.
+    import datetime as _dt
+    src = tmp_path / "smart.db"
+    con = store.open_store(src)
+    con.execute("CREATE TABLE t(x)")
+    con.execute("INSERT INTO t VALUES (42)")
+    con.commit()
+    con.close()
+    bdir = tmp_path / "backups"
+    dest = store.backup(src, bdir, keep=14)
+    assert dest is not None and dest.exists()
+    assert dest.name == f"smart-{_dt.date.today().isoformat()}.db"
+    b = sqlite3.connect(dest)                                   # the copy opens and holds the same data
+    assert b.execute("SELECT x FROM t").fetchone()[0] == 42
+    b.close()
+    for i in range(1, 20):                                      # seed 19 older dated copies, then prune to 3
+        (bdir / f"smart-2020-01-{i:02d}.db").write_bytes(b"x")
+    store.backup(src, bdir, keep=3)
+    assert len(list(bdir.glob("smart-*.db"))) == 3
+    assert store.backup(src, tmp_path / "no" / "such" / "p", keep=0) is not None   # deep dir is created, no raise
+
+
 def test_vV_catchup_entry_is_spread_cut_to_cut(env):
     # Item V: a single catch-up ERP entry that covers many days (keyed in one lump) must be spread over the days since
     # the PREVIOUS cut, not read as one day. Loom ran ~200 m/day steadily; a catch-up lump of ~2000 m keyed on one

@@ -60,6 +60,11 @@ unused_stock_months = 6            # the Unused-stock tab flags items in stock b
 # OneDrive / Google-Drive-for-desktop folder to get the files in the cloud; Smart Layer uses no cloud API.
 output_dir = ""
 retention_weeks = 26               # delete saved report files older than this (0 = keep everything)
+# backup: a dated, power-loss-safe copy of the whole store after each daily sync (SQLite VACUUM INTO, not a raw
+# file copy). Off by default. Point backup_dir at a synced OneDrive / Drive folder to get an off-PC copy.
+# backup = false
+# backup_dir = ""                  # blank = a "backups" folder beside the store database
+# backup_keep = 14                 # how many dated copies to keep
 attach_pdf = true                  # attach the report PDF to its ntfy push (the owner gets it on the phone)
 # attach_pdf_by_report = { weekly-beams = true, demand = false }   # per-report override
 # demand_used_days = 180           # store demand: "still in use" window

@@ -63,8 +63,38 @@ def open_store(path):
     con = sqlite3.connect(path, timeout=30)            # wait, don't error, if another process is writing
     con.execute("PRAGMA journal_mode=WAL")             # readers (the dashboard) never block the 5-minute sync
     con.execute("PRAGMA busy_timeout=30000")
+    con.execute("PRAGMA synchronous=FULL")             # item B5: the mill PC loses power often - FULL (not WAL's
+    #                                                    default NORMAL) stops a recent commit being rolled back
     create(con)
     return con
+
+
+def backup(path, backups_dir, keep=14):
+    """A safe nightly backup using SQLite's own backup (VACUUM INTO) - a consistent copy even while the store is in
+    use, never a raw file copy (item B5). Writes <store>-YYYY-MM-DD.db into backups_dir and keeps the last `keep`.
+    Returns the backup path, or None if it could not be made (never raises into the daily run)."""
+    import datetime
+    try:
+        path = Path(path)
+        bdir = Path(backups_dir)
+        bdir.mkdir(parents=True, exist_ok=True)
+        dest = bdir / f"{path.stem}-{datetime.date.today().isoformat()}.db"
+        if dest.exists():
+            dest.unlink()                                # VACUUM INTO refuses an existing target; replace today's
+        con = sqlite3.connect(path, timeout=30)
+        try:
+            con.execute("VACUUM INTO ?", (str(dest),))   # atomic, consistent copy of the live store
+        finally:
+            con.close()
+        kept = sorted(bdir.glob(f"{path.stem}-*.db"))
+        for old in kept[:-int(keep)] if keep else []:
+            try:
+                old.unlink()
+            except OSError:
+                pass
+        return dest
+    except Exception:
+        return None
 
 
 def open_read_only(path, deny_functions=(), timeout_sec=None):

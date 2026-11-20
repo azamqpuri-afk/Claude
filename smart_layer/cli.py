@@ -131,7 +131,21 @@ def _cmd_sync(cfg, args):
     print(f"Syncing from {e.mapping.name} (last {cfg['sync']['history_days']} days; full history for yarn and fabric)")
     res = store.sync(_store(cfg), e, cfg["sync"]["history_days"], entities=args.entities,
                      full_history=cfg["sync"].get("full_history", store.FULL_HISTORY), short_history=short)
+    _nightly_backup(cfg)                               # item B5: a consistent copy once a day, after the daily sync
     return _sync_exit(res)
+
+
+def _nightly_backup(cfg):
+    """Item B5: keep a dated, power-loss-safe copy of the store after each daily sync. Off by default; the mill turns
+    it on with [reports] backup = true. Never blocks the day's work (store.backup swallows its own errors)."""
+    rep = cfg.get("reports", {}) if hasattr(cfg, "get") else cfg["reports"]
+    if not rep.get("backup", False):
+        return
+    store_path = cfg.path(cfg["store"]["path"])
+    bdir = rep.get("backup_dir")
+    bdir = cfg.path(bdir) if bdir else store_path.parent / "backups"
+    dest = store.backup(store_path, bdir, keep=int(rep.get("backup_keep", 14)))
+    print(f"Backup written to {dest}" if dest else "Backup could not be made (the daily sync still succeeded).")
 
 
 def _sync_exit(res):
