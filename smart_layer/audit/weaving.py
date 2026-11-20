@@ -119,12 +119,22 @@ def run(a):
     except Exception:
         pass
     mon_ppi = {}    # item V: loom number -> [(read_date, picks_per_inch)] - when the loom PHYSICALLY changed quality,
+    mon_eff = {}    # and loom number -> [(read_date, efficiency, meters)] - whether it is actually running well
     try:            # from the scoreboard, so a late ERP entry does not pin the change to the wrong (later) date
-        for rd, lc, p in a.q("""SELECT read_date, loom_code, picks_per_inch FROM loom_monitor
-                                WHERE read_date > ? AND picks_per_inch IS NOT NULL""", before_from):
-            mon_ppi.setdefault(_lnum(lc), []).append((rd, p))
+        for rd, lc, p, e, m in a.q("""SELECT read_date, loom_code, picks_per_inch, efficiency_pct, meters
+                                      FROM loom_monitor WHERE read_date > ?""", before_from):
+            if p is not None:
+                mon_ppi.setdefault(_lnum(lc), []).append((rd, p))
+            mon_eff.setdefault(_lnum(lc), []).append((rd, e, m))
     except Exception:
         pass
+
+    def recent_eff(ln, d_from, d_to):
+        """Average scoreboard efficiency for a loom over a window, on RUNNING days only (meters > 0) and skipping
+        set-up days (efficiency below 50%), per the peer's rule - so a few ramp-up days after a quality change do not
+        drag the figure down. None when there is no scoreboard efficiency to go on."""
+        good = [e for rd, e, m in mon_eff.get(ln, []) if d_from < rd <= d_to and (m or 0) > 0 and e is not None and e >= 50]
+        return (sum(good) / len(good)) if good else None
 
     def run_avg(code, contract, d_from, d_to):
         # Meters per RUNNING day. ERP production is booked in lumps - one entry per roll cut, every 3-5 days - so the
@@ -208,6 +218,15 @@ def run(a):
             seen = [rd for rd, p in mon_ppi.get(_lnum(code), []) if p and abs(p - np_) < 1]   # the ERP entry, the
             if seen and min(seen) < qcd:                   # loom really changed earlier - use that (ERP entry was late)
                 qcd = min(seen)
+        # Peer live fix: do NOT raise an UNDER-production alarm when the loom is actually running at healthy efficiency
+        # on the scoreboard. A low ERP metres/day vs the ppi-rescaled expectation then means the expected figure is
+        # wrong (a different width/panel set-up, or ramp-up days diluting the ERP cut-to-cut average) - not a real
+        # shortfall. Only the ERP-vs-scoreboard gap (the cut-to-cut check in monitor.py) should flag entry problems.
+        eff_floor = float(t.get("under_production_eff_floor_pct", 75))
+        if expected and ratio < 0.75:                      # materially below the (ppi-adjusted) expectation
+            reff = recent_eff(_lnum(code), recent_from, d1)
+            if reff is not None and reff >= eff_floor:
+                continue                                   # loom is weaving fine - the expectation, not the loom, is off
         if adjusted and 0.75 <= ratio <= 1.25:
             # the quality change FULLY explains the output - INFO only, not Needs Attention
             a.add("INFO", "Weaving", key,

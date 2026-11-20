@@ -99,6 +99,10 @@ duplicate_payment_min = 5000
 # keep the three separate (Total = A + B + Rejection). "auto" works it out per contract; set true or false to force.
 # rejection_includes_second = "auto"
 # grade_labels = { a = "A-grade", b = "B-grade", reject = "Rejection" }   # rename the columns if the mill uses other names
+# under_production_eff_floor_pct: the daily audit never flags a loom as UNDER-producing (vs its picks/inch-adjusted
+# usual) while the scoreboard shows it running at or above this efficiency - a low ERP metres figure then reflects a
+# different width/panel set-up, not a real shortfall. Only the ERP-vs-scoreboard cut-to-cut check flags entry gaps.
+# under_production_eff_floor_pct = 75
 # Scoreboard-vs-ERP weft check (the Weaving "Weft: scoreboard vs ERP" panel and the contract-report summary line):
 # weft used (kg) = scoreboard picks x reed width (m) x (1 + waste) / (weft count x metres-per-kg). The constants live
 # here so a denier/tex mill can change them without touching the code.

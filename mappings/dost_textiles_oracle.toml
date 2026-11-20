@@ -11,7 +11,7 @@
 
 [mapping]
 name = "Dost Textiles ERP (Oracle, DOSTEX)"
-version = "1.0.0"            # this mapping's own revision (item S: bump when the mill's SQL changes)
+version = "1.1.0"            # this mapping's own revision (item S: bump when the mill's SQL changes)
 app_version = "0.20.0"      # the Smart Layer release this mapping was built/verified for
 
 # DOSTEX.I is keyed on (ic, uc); like the existing stock scripts, items are taken per item code (ic)
@@ -494,6 +494,33 @@ SELECT l.loan_code AS loan_code, TRUNC(l.loan_date) AS loan_date, l.emp_code AS 
           AND d.allowance_deduction = 'D') AS repaid,
        l.loan_completed AS completed, l.remarks AS remarks
 FROM payroll.emp_loans l WHERE l.loan_date >= :since
+"""
+
+# Item T: each payroll employee's balance in THEIR OWN loan GL account (head 300401 "LOANS & ADVANCES TO EMPLOYEES").
+# Account names are "<EMP NAME> S/O <FATHER>(<DESIG>)", but names repeat (rehires) and father spellings differ, so a
+# name match alone is unreliable (45 of 88 accounts share a name). Each account is anchored to the LOAN PAYMENT: a
+# same-name account DEBITED with one of the employee's loan amounts within 20 days of the loan date. Only unique
+# emp<->account pairs are emitted; the rest stay "open" on the salary-deduction (SALD) logic. The loans report marks a
+# loan "settled in accounts (JV)" when this balance is <= 0 (a journal voucher cleared it, not a salary deduction).
+# Verified read-only on live 20-Nov-2026: 39 employees mapped; emp 109 -> 300401020 balance 0 (loan 243 settled by
+# JV 31-Oct-24). Note: do NOT name a CTE "emp" (Oracle ORA-32039 next to payroll.emp).
+[entities.employee_loan_balance]
+sql = """
+WITH la AS (
+  SELECT a.ac, UPPER(TRIM(REGEXP_SUBSTR(a.an, '^(.*?)(\\s+S\\s*/\\s*O\\s|\\()', 1, 1, 'i', 1))) AS nm
+  FROM dostex.ach a WHERE a.ac LIKE '300401%' AND LENGTH(a.ac) > 6),
+cand AS (
+  SELECT DISTINCT e.emp_code, a.ac
+  FROM payroll.emp e
+  JOIN la a ON a.nm = UPPER(TRIM(e.emp_name))
+  JOIN payroll.emp_loans l ON l.emp_code = e.emp_code
+  WHERE EXISTS (SELECT 1 FROM dostex.acl g WHERE g.ac = a.ac AND g.amt = l.loan_amount
+                  AND ABS(TRUNC(g.vd) - TRUNC(l.loan_date)) <= 20)),
+u AS (
+  SELECT emp_code, ac, COUNT(*) OVER (PARTITION BY emp_code) n_acc, COUNT(*) OVER (PARTITION BY ac) n_emp FROM cand)
+SELECT u.emp_code AS emp_code,
+       (SELECT NVL(SUM(g.amt), 0) FROM dostex.acl g WHERE g.ac = u.ac) AS balance
+FROM u WHERE u.n_acc = 1 AND u.n_emp = 1
 """
 
 # The gate register: GATE_REG_V (store / fabric / yarn / sizing, the 10 types) UNION the beam gate passes that the

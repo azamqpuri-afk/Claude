@@ -2576,35 +2576,47 @@ def test_v0180_ack_persists_until_escalation(env):
         _store.set_state(con, "acked", {})
 
 
-def test_v0180_over_production_ppi_and_running_days(env):
-    # Item V: "now" is metres per RUNNING day over the window (lumpy ERP cuts spread cut-to-cut over the active span),
-    # not per ERP entry. Item R: a PPI change scales expected ERP metres/day; a PANELS change does NOT (ERP metres are
-    # per loom length), so pieces never multiplies the expected figure. Loom-4: usual 453, ppi 42->66 -> expected 288;
-    # a real drop to ~104/running-day is NOT explained by ppi alone -> WATCH, and "pieces" is never cited.
+def _loom4_store(new_eff):
+    # Loom-4: OLD quality ~453 m/day at 42 ppi; NEW quality at 66 ppi booked in lumpy ERP cuts ~104 m/running-day.
+    # The scoreboard efficiency on the new quality is `new_eff`. Item R: a PANELS change must never rescale ERP metres.
+    import sqlite3
     from datetime import date as _d, timedelta as _td
-    from smart_layer.audit import weaving as wv
-    cfg, _ = env
     con = _weaving_store()
     end = _d(2026, 11, 17)
     con.execute("INSERT INTO looms VALUES ('L4','LOOM # 4')")
     con.execute("INSERT INTO contracts VALUES ('67','50x42',42),('74','76x66',66)")
-    for k in range(16, 70):                               # OLD quality daily ~453 m/running-day, scoreboard pieces 3
+    for k in range(16, 70):
         d = (end - _td(days=k)).isoformat()
         con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     (d, "L4", "A", "67", "50x42", "B1", 453, 453, 0, 0, 80, None))
         con.execute("INSERT INTO loom_monitor (read_date,loom_code,meters,efficiency_pct,picks_per_inch,pieces,style) "
                     "VALUES (?,?,?,?,?,?,?)", (d, "L4", 453, 80, 42, 3, "VA"))
-    for k in range(0, 14):                                # NEW quality on the scoreboard: pieces 1 (must NOT rescale)
+    for k in range(0, 14):
         d = (end - _td(days=k)).isoformat()
         con.execute("INSERT INTO loom_monitor (read_date,loom_code,meters,efficiency_pct,picks_per_inch,pieces,style) "
-                    "VALUES (?,?,?,?,?,?,?)", (d, "L4", 104, 90, 66, 1, "MHK"))
-    for k, m in {1: 215, 4: 387, 7: 306, 10: 222, 13: 227}.items():   # ERP booked in lumpy cuts, ~104/running-day
+                    "VALUES (?,?,?,?,?,?,?)", (d, "L4", 104, new_eff, 66, 1, "MHK"))
+    for k, m in {1: 215, 4: 387, 7: 306, 10: 222, 13: 227}.items():
         con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    ((end - _td(days=k)).isoformat(), "L4", "A", "74", "76x66", "B2", m, m, 0, 0, 90, None))
+                    ((end - _td(days=k)).isoformat(), "L4", "A", "74", "76x66", "B2", m, m, 0, 0, new_eff, None))
+    return con, end
+
+
+def test_v0180_under_production_suppressed_when_running_well(env):
+    # Peer live fix: when the scoreboard efficiency on the new quality is HEALTHY (90%), a low ERP metres/day vs the
+    # ppi-rescaled expectation is NOT a real shortfall (different width/set-up) - no WATCH is raised. When the loom is
+    # genuinely struggling (low efficiency), the under-production WATCH stays. Item R: pieces never cited either way.
+    from smart_layer.audit import weaving as wv
+    cfg, _ = env
+    con, end = _loom4_store(new_eff=90)                   # loom weaving fine at 90%
     a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
     wv.run(a)
-    lh = [f for f in a.findings if f.key == "lhist-L4"]
-    assert lh and lh[0].severity == "WATCH"              # ppi explains 453->288, but 104 is still far below -> WATCH
+    assert [f for f in a.findings if f.key == "lhist-L4"] == []      # suppressed - the expectation, not the loom, is off
+
+    con2, end2 = _loom4_store(new_eff=38)                 # loom genuinely under-running (38% efficiency)
+    a2 = _AuditStub(con2, cfg, end2.isoformat(), end2.isoformat())
+    wv.run(a2)
+    lh = [f for f in a2.findings if f.key == "lhist-L4"]
+    assert lh and lh[0].severity == "WATCH"              # real shortfall -> WATCH
     blob = lh[0].title + lh[0].detail
     assert "104 m a day" in blob and "288 expected" in blob and "ppi 42->66" in blob
     assert "pieces" not in blob                          # a panels change never scales or explains ERP metres (item R)
