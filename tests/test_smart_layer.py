@@ -189,6 +189,29 @@ def test_vT_loan_settled_by_jv():
     assert "25,000 still to recover" in rep.summary[0] and "1 shown settled" in rep.summary[0]
 
 
+def test_vT_loan_settled_by_gl_balance():
+    # T (peer live fix): when the mapping provides employee_loan_balance (the accounts side), a loan whose GL account
+    # is cleared (balance <= 0) is "settled in accounts (JV)", even though it still looks open in employee_loans.
+    import sqlite3
+    from smart_layer.reports import payroll
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE employees (emp_code TEXT, name TEXT);
+        CREATE TABLE employee_loans (loan_code TEXT, loan_date TEXT, emp_code TEXT, loan_type TEXT, amount REAL,
+                                     installment REAL, opening REAL, repaid REAL, completed TEXT, remarks TEXT);
+        CREATE TABLE employee_loan_balance (emp_code TEXT, balance REAL);
+    """)
+    con.executemany("INSERT INTO employees VALUES (?,?)", [("109", "NOOR MUHAMMAD"), ("200", "Owing Omar")])
+    con.executemany("INSERT INTO employee_loans (loan_code,loan_date,emp_code,loan_type,amount,repaid) VALUES (?,?,?,?,?,?)",
+                    [("243", "2024-10-01", "109", "advance", 7283, 0),     # cleared in the GL by a JV -> balance 0
+                     ("250", "2024-11-01", "200", "loan", 30000, 5000)])   # GL still owes -> open
+    con.executemany("INSERT INTO employee_loan_balance VALUES (?,?)", [("109", 0), ("200", 25000)])
+    rep = payroll.loans(con, {"payroll": {}}, None)
+    by_code = {r[0]: r for r in rep.rows}
+    assert by_code["109"][-1] == "settled in accounts (JV)"
+    assert by_code["200"][-1] == "open"
+
+
 def test_payslips_show_designation(env):
     cfg, con = env
     rep = payroll.payslips(con, cfg, END)

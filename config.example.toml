@@ -73,10 +73,14 @@ attach_pdf = true                  # attach the report PDF to its ntfy push (the
 
 [payroll]
 # item T: a loan can be cleared in the accounts by a journal voucher (JV) instead of salary deduction. Such a loan
-# still looks open in the loan table, so the loans report cross-checks the ledger: journal-type vouchers whose
-# narration names the employee are treated as settling the balance ("settled in accounts (JV)").
-# loan_jv_check = true             # set false to switch the cross-check off
-# jv_kinds = ["journal", "jv", "adjustment"]   # voucher type/kind words that count as a settling voucher
+# still looks open in the loan table ("repaid" counts only salary deductions), so the loans report marks it
+# "settled in accounts (JV)" when the accounts show it cleared. Two ways, in order:
+#   1. BEST: the mapping provides the optional `employee_loan_balance` entity (each employee's own loan GL account
+#      balance). A balance <= 0 means settled. This is how a mill with per-employee loan accounts should wire it.
+#   2. FALLBACK (only when that entity is not mapped): scan the ledger for journal-type vouchers whose narration
+#      names the employee. Needs the narration to carry the employee code, which many ERPs do not.
+# loan_jv_check = true             # set false to switch the narration fallback off
+# jv_kinds = ["journal", "jv", "adjustment"]   # voucher type/kind words that count as a settling voucher (fallback)
 
 [audit]
 large_payment = 500000

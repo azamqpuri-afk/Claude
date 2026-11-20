@@ -72,6 +72,16 @@ def _sec(cfg, name):
         return {}
 
 
+def _gl_balances(con):
+    """Item T: each employee's net loan/advance GL account balance, if the mapping provides the optional
+    employee_loan_balance entity. Empty when it is not mapped (the ERP has no per-employee loan account), so the
+    loans report falls back to narration matching."""
+    try:
+        return {c: b for c, b in con.execute("SELECT emp_code, balance FROM employee_loan_balance")}
+    except Exception:
+        return {}
+
+
 def _jv_settlements(con, cfg):
     """Item T: employees whose loan/advance was cleared by a JOURNAL voucher (JV) in the accounts rather than by
     salary deduction - e.g. written off, adjusted against final settlement, or moved to another head. The loan
@@ -109,7 +119,8 @@ def loans(con, cfg, as_of=None):
     rows = con.execute("""SELECT l.emp_code, e.name, l.loan_type, l.loan_date, l.amount, l.repaid
                           FROM employee_loans l LEFT JOIN employees e ON e.emp_code = l.emp_code
                           ORDER BY l.loan_date DESC""").fetchall()
-    jv = _jv_settlements(con, cfg)
+    gl = _gl_balances(con)                             # the accounts side: each employee's loan GL account balance
+    jv = {} if gl else _jv_settlements(con, cfg)       # narration fallback only when the GL link is not mapped
     out = []
     to_recover = 0
     settled_n = 0
@@ -117,8 +128,11 @@ def loans(con, cfg, as_of=None):
         bal = round((a or 0) - (r or 0))
         if bal <= 1:                                   # fully (or over-) recovered by salary deduction - not open
             continue
-        jv_amt = jv.get(c, 0)
-        if jv_amt and jv_amt >= bal * 0.9:             # a JV covers (most of) the balance -> settled in accounts
+        if c in gl:                                    # best signal: the employee's own loan GL account is cleared
+            settled = (gl[c] or 0) <= 1
+        else:                                          # no GL link for this employee -> narration JV fallback
+            settled = bool(jv.get(c, 0) and jv[c] >= bal * 0.9)
+        if settled:
             out.append([c, n, t, d, round(a or 0), round(r or 0), bal, "settled in accounts (JV)"])
             settled_n += 1
         else:

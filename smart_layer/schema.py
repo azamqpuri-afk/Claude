@@ -465,6 +465,18 @@ ENTITIES += (
         key=("loan_code",),
     ),
     Entity(
+        "employee_loan_balance",
+        "Optional (item T). Each employee's net balance in their own loan/advance GL account - the ACCOUNTS side. It "
+        "lets a loan that was cleared by a journal voucher in the ledger (not by salary deduction) be shown as "
+        "'settled in accounts (JV)': such a loan still looks open in employee_loans (repaid counts only salary "
+        "deductions) but its GL account balance is <= 0. The mapping links the employee to their GL account however "
+        "the ERP allows (an explicit code, or a unique name match within the loans-and-advances head). Omit this "
+        "entity if the ERP has no per-employee loan account - the loans report then falls back to narration matching.",
+        (C("emp_code", "TEXT", "Employee (employees.emp_code)", True),
+         C("balance", "REAL", "Net balance of that employee's loan/advance GL account (<= 0 = settled in the accounts)")),
+        key=("emp_code",),
+    ),
+    Entity(
         "gate_passes",
         "The gate register: every gate pass in and out of the mill - fabric, yarn, beams, store - one row per item line. "
         "Numbers repeat across types and over time, so each slip is identified by gatepass_id, not the bare number.",
