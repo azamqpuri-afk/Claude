@@ -3173,6 +3173,35 @@ def test_vB5_backup_is_consistent_copy(tmp_path):
     assert store.backup(src, tmp_path / "no" / "such" / "p", keep=0) is not None   # deep dir is created, no raise
 
 
+def test_vB4_weekly_monthly_catchup():
+    # B4: weekly (Friday) and monthly (1st/10th) jobs must catch up a day the PC was switched off, and never
+    # double-run within the same period.
+    import sqlite3, datetime as _dt
+    from smart_layer import jobs
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)")
+
+    fri = _dt.date(2026, 11, 20)                                   # a Friday
+    assert jobs.trigger_date("weekly", fri) == fri
+    sun = _dt.date(2026, 11, 22)                                   # PC was off Fri+Sat, first run Sunday
+    assert jobs.trigger_date("weekly", sun) == fri                 # the missed Friday is still the due date
+
+    # First run on Sunday: weekly + monthly-1 (1st already passed) are due; monthly-10 (10th passed) too.
+    assert set(jobs.due(con, sun)) == {"weekly", "monthly-1", "monthly-10"}
+    for s in jobs.due(con, sun):
+        jobs.mark(con, s, sun)
+    assert jobs.due(con, sun) == []                                # nothing due again the same day
+    assert jobs.due(con, _dt.date(2026, 11, 23)) == []            # Monday: still nothing (weekly already ran)
+
+    nxt_fri = _dt.date(2026, 11, 27)
+    assert jobs.due(con, nxt_fri) == ["weekly"]                    # next Friday: weekly is due again, monthlies not
+    first = _dt.date(2026, 12, 1)
+    assert set(jobs.due(con, first)) >= {"monthly-1"}             # the 1st of next month
+    tenth = _dt.date(2026, 12, 10)
+    jobs.mark(con, "monthly-1", first)
+    assert "monthly-10" in jobs.due(con, tenth)                    # the 10th of next month
+
+
 def test_vV_catchup_entry_is_spread_cut_to_cut(env):
     # Item V: a single catch-up ERP entry that covers many days (keyed in one lump) must be spread over the days since
     # the PREVIOUS cut, not read as one day. Loom ran ~200 m/day steadily; a catch-up lump of ~2000 m keyed on one

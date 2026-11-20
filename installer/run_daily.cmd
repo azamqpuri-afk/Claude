@@ -13,15 +13,6 @@ SmartLayer.exe audit --csv --pdf --push >> "%LOG%" 2>&1
 SmartLayer.exe report zero --push >> "%LOG%" 2>&1
 SmartLayer.exe report production --csv --pdf >> "%LOG%" 2>&1
 SmartLayer.exe report beams --csv --pdf >> "%LOG%" 2>&1
-for /f %%d in ('powershell -NoProfile -Command "(Get-Date).DayOfWeek"') do set DOW=%%d
-for /f %%d in ('powershell -NoProfile -Command "(Get-Date).Day"') do set DOM=%%d
-if "%DOW%"=="Friday" (
-  for %%r in (stock reorder demand closing pilferage sizers yarn-stock fabric-stock) do SmartLayer.exe report %%r --csv --pdf >> "%LOG%" 2>&1
-  SmartLayer.exe report weekly-beams --pdf --push >> "%LOG%" 2>&1
-)
-if "%DOM%"=="1" (
-  for %%r in (pnl balances parties store-recon) do SmartLayer.exe report %%r --csv --pdf >> "%LOG%" 2>&1
-)
-if "%DOM%"=="10" (
-  for /f %%m in ('powershell -NoProfile -Command "(Get-Date).AddMonths(-1).ToString('yyyy-MM')"') do SmartLayer.exe audit --month %%m --csv --pdf --push >> "%LOG%" 2>&1
-)
+rem Weekly (Friday) and monthly (1st / 10th) jobs, with catch-up if the PC was off on the due day (item B4).
+rem The schedule lives in the app now, not in this script - so a missed Friday still runs on the next daily run.
+SmartLayer.exe run-scheduled --push >> "%LOG%" 2>&1

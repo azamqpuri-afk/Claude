@@ -277,6 +277,55 @@ def cmd_audit(cfg, args):
     return 0
 
 
+# Item B4: which reports each weekly/monthly slot runs. Kept here (not in run_daily.cmd) so a missed Friday/1st/10th
+# catches up automatically. The plain reports are saved only; the push flag below marks the ones the owner gets pushed.
+_SLOT_REPORTS = {
+    "weekly": [("stock", False), ("reorder", False), ("demand", False), ("sized-closing", False), ("pilferage", False),
+               ("sizers", False), ("yarn-stock", False), ("fabric-stock", False), ("weekly-beams", True)],
+    "monthly-1": [("pnl", False), ("balances", False), ("parties", False), ("store-recon", False)],
+}
+
+
+def _report_ns(name, push):
+    return argparse.Namespace(name=name, date=None, from_=None, to=None, csv=True, pdf=True, xlsx=False,
+                              push=push, contract=None, quality=None, party=None)
+
+
+def _run_slot(cfg, slot, push):
+    """Run one scheduled slot's reports. One report failing never stops the rest (nor the catch-up marker)."""
+    if slot in _SLOT_REPORTS:
+        for name, pushed in _SLOT_REPORTS[slot]:
+            try:
+                cmd_report(cfg, _report_ns(name, push and pushed))
+            except Exception as ex:                       # a single bad report must not sink the whole weekly run
+                print(f"  ! {name} report failed: {ex}")
+    elif slot == "monthly-10":                            # the previous-month ERP audit
+        prev = (date.today().replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+        try:
+            cmd_audit(cfg, argparse.Namespace(month=prev, date=None, csv=True, pdf=True, push=push, urgent=False))
+        except Exception as ex:
+            print(f"  ! previous-month audit failed: {ex}")
+
+
+def cmd_run_scheduled(cfg, args):
+    """Run every weekly/monthly job that is due today, including any whose trigger day was missed while the PC was off
+    (item B4). Idempotent: a job that already ran this period is skipped."""
+    from . import jobs
+    con = _store(cfg)
+    today = date.fromisoformat(args.date) if getattr(args, "date", None) else date.today()
+    slots = jobs.due(con, today)
+    if not slots:
+        print("No weekly/monthly jobs are due today.")
+        return 0
+    for slot in slots:
+        trig = jobs.trigger_date(slot, today)
+        extra = f" - CATCH-UP for the one due {trig:%d-%b}" if trig < today else ""
+        print(f"Running {jobs.SLOTS[slot]}{extra}")
+        _run_slot(cfg, slot, bool(getattr(args, "push", False)))
+        jobs.mark(con, slot, today)                        # mark done so it will not run again until its next due date
+    return 0
+
+
 def _dashboard_link(cfg, f):
     """Dashboard URL that opens the record a finding is about (needs [notify] dashboard_url or [serve] url)."""
     import re
@@ -613,6 +662,9 @@ def main(argv=None):
     q = sub.add_parser("ask")
     q.add_argument("question", nargs="*")
     q.add_argument("--show-sql", action="store_true")
+    rs = sub.add_parser("run-scheduled")                 # item B4: weekly/monthly jobs with catch-up
+    rs.add_argument("--date", help="treat this as 'today' (for testing / a manual catch-up)")
+    rs.add_argument("--push", action="store_true")
     sub.add_parser("serve")
     sub.add_parser("notify-changes")                     # live-sync pushes: new production + OGP fabric
     mg = sub.add_parser("morning")
@@ -690,12 +742,14 @@ def main(argv=None):
         input("\nPress Enter to close this window.")      # keep the console open so the owner can read the result
         return rc
     cfg = config.load(args.config)
-    if args.cmd in ("sync", "report", "audit", "ask", "notify-changes", "morning", "night-sensor", "weft-check"):
+    if args.cmd in ("sync", "report", "audit", "ask", "notify-changes", "morning", "night-sensor", "weft-check",
+                    "run-scheduled"):
         from .licence import require                      # licence can be installed from its own Licence screen
         require(cfg)
     return {"check": cmd_check, "sync": cmd_sync, "report": cmd_report, "audit": cmd_audit, "ask": cmd_ask, "serve": cmd_serve,
             "dashboard": cmd_dashboard, "autoprofile": cmd_autoprofile, "notify-changes": cmd_notify_changes,
             "morning": cmd_morning, "night-sensor": cmd_night_sensor, "weft-check": cmd_weft_check,
+            "run-scheduled": cmd_run_scheduled,
             "status": cmd_status, "grants": cmd_grants, "licence": cmd_licence,
             "set-password": cmd_set_password}[args.cmd](cfg, args)
 
