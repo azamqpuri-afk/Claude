@@ -122,11 +122,13 @@ def unused_stock(con, cfg, as_of=None):
         value = round((qty or 0) * rate) if rate else None
         rows.append([names.get(code, code), locs.get(code) or "—", code, heads.get(code, ""), round(qty, 2),
                      li or "never", lp[0] if lp else None, round(rate) if rate else None, value])
-    # grouped by location so the store man can walk rack by rack (blank locations last), biggest value within a rack
-    rows.sort(key=lambda x: (x[1] == "—", str(x[1]), -(x[8] or 0)))
+    # item U: show the most dead stock first - items NEVER issued, then those unused the longest (oldest last-issue),
+    # biggest value breaking ties. Location stays a column so the store man can still find each item on its rack.
+    rows.sort(key=lambda x: (x[5] != "never", x[5], -(x[8] or 0)))
     total = sum((r[8] or 0) for r in rows)
+    never = sum(1 for r in rows if r[5] == "never")
     summary = [f"{len(rows)} item(s) in stock with no issue for {months}+ months, tying up about {cur} {total:,.0f}. "
-               f"Sorted by store location (rack by rack)."]
+               f"{never} never issued. Most dead first (never issued, then unused longest)."]
     if heads:
         by_head = {}
         for rr in rows:

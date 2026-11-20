@@ -3110,6 +3110,36 @@ def test_vO_store_location_shown_everywhere(env):
     assert se.slip_lines(con, "S1")["rows"][0]["location"] == "A-01"
 
 
+def test_vU_unused_stock_most_dead_first():
+    # U: default sort is never-issued first, then unused longest (oldest last issue); Location stays a column.
+    import sqlite3
+    from datetime import date as _d
+    from smart_layer.reports import store_extra as se
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE items (item_code TEXT, item_name TEXT, unit TEXT, category TEXT, a TEXT, b TEXT, location TEXT);
+        CREATE TABLE stock_balances (item_code TEXT, qty REAL, location TEXT);
+        CREATE TABLE store_issues (doc_no TEXT, doc_date TEXT, item_code TEXT, qty REAL, amount REAL, issued_to TEXT, entered_by TEXT, entered_at TEXT);
+        CREATE TABLE store_receipts (doc_no TEXT, doc_date TEXT, item_code TEXT, qty REAL, rate REAL, supplier_name TEXT);
+    """)
+    con.executemany("INSERT INTO items VALUES (?,?,?,?,?,?,?)",
+                    [("NEVER", "Never issued spare", "pcs", None, None, None, "Z-9"),
+                     ("OLD", "Old issue", "pcs", None, None, None, "A-1"),
+                     ("RECENTOLD", "Older-but-after-old", "pcs", None, None, None, "A-2")])
+    con.executemany("INSERT INTO stock_balances VALUES (?,?,?)",
+                    [("NEVER", 10, None), ("OLD", 10, None), ("RECENTOLD", 10, None)])
+    con.executemany("INSERT INTO store_issues VALUES (?,?,?,?,?,?,?,?)",
+                    [("I1", "2024-01-01", "OLD", 1, 0, "LOOM", None, None),
+                     ("I2", "2024-06-01", "RECENTOLD", 1, 0, "LOOM", None, None)])
+    con.executemany("INSERT INTO store_receipts VALUES (?,?,?,?,?,?)",
+                    [("G1", "2023-01-01", "NEVER", 10, 100, "S"), ("G2", "2023-01-01", "OLD", 10, 100, "S"),
+                     ("G3", "2023-01-01", "RECENTOLD", 10, 100, "S")])
+    cfg = {"reports": {"unused_stock_months": 6}, "company": {"currency": "PKR"}}
+    us = se.unused_stock(con, cfg, _d(2026, 11, 18))
+    assert "Location" in us.columns
+    assert [r[2] for r in us.rows] == ["NEVER", "OLD", "RECENTOLD"]   # never, then oldest last-issue first
+
+
 def test_vB1_notify_channel_isolation(monkeypatch):
     # Q + B1: one channel's failure must NOT block the others; raise only when EVERY channel failed.
     from smart_layer import notify
