@@ -415,6 +415,7 @@ def cmd_notify_changes(cfg, args):
     from . import pushes
     con = _store(cfg)
     try:
+        pushes.heartbeat(cfg, con)                        # item B3: data-gap push + external dead-man's-switch ping
         n = pushes.notify_changes(cfg, con) + pushes.edit_pushes(cfg, con)
         print(f"{n} push(es)")
     finally:

@@ -3266,6 +3266,27 @@ def test_vS_install_mapping_backs_up_and_replaces(tmp_path):
     assert len(backups) == 1 and erp.Mapping(backups[0]).version == "1.0.0"   # old one is recoverable
 
 
+def test_vB3_restart_gap_push(monkeypatch):
+    # B3: a long gap since the last live run (PC off / rebooted) pushes once; a normal 5-min cadence does not;
+    # the external dead-man's-switch URL is pinged every run.
+    import sqlite3, datetime as _dt
+    from smart_layer import pushes, store, notify
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)")
+    sent = []
+    monkeypatch.setattr(notify, "send", lambda cfg, title, body, **k: (sent.append(title) or ["console"]))
+    pinged = []
+    monkeypatch.setattr(pushes, "_ping_external", lambda url: pinged.append(url))
+    cfg = {"monitor": {"restart_gap_minutes": 30, "heartbeat_url": "http://hc/x"},
+           "notify": {"channels": ["console"]}}
+    t0 = _dt.datetime(2026, 11, 20, 8, 0, 0)
+    assert pushes.heartbeat(cfg, con, now=t0) == 0                  # first run: no previous time, no push
+    assert pushes.heartbeat(cfg, con, now=t0 + _dt.timedelta(minutes=5)) == 0   # normal 5-min cadence: no push
+    back = pushes.heartbeat(cfg, con, now=t0 + _dt.timedelta(hours=3))          # 3h gap: PC was off -> push once
+    assert back == 1 and any("server was off" in s for s in sent)
+    assert pinged == ["http://hc/x", "http://hc/x", "http://hc/x"]  # pinged on every run
+
+
 def test_vB4_weekly_monthly_catchup():
     # B4: weekly (Friday) and monthly (1st/10th) jobs must catch up a day the PC was switched off, and never
     # double-run within the same period.

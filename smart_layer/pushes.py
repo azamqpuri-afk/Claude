@@ -37,6 +37,52 @@ def _quiet(cfg, now=None):
     return (a <= h < b) if a <= b else (h >= a or h < b)     # handles a window crossing midnight
 
 
+def heartbeat(cfg, con, now=None):
+    """Item B3 (reboot blindness). The live sync runs every ~5 minutes. Each run:
+      1. If the gap since the previous run is large, the PC was off / asleep / rebooted - push ONCE that the server
+         was down over X-Y so the owner knows the live data (and any alert that would have fired) has a gap.
+      2. Ping an external dead-man's-switch (e.g. healthchecks.io) so an OUTSIDE service raises the alarm if the
+         whole PC or app dies and this code stops running altogether - the app cannot warn about its own death.
+    Both are off unless configured sensibly; the gap check needs only the stored last-run time. now is injectable
+    for tests."""
+    now = now or datetime.now()
+    try:
+        m = cfg["monitor"] or {}
+    except Exception:
+        m = {}
+    gap_min = int(m.get("restart_gap_minutes", 30) or 0)
+    pushed = 0
+    last = store.get_state(con, "last_heartbeat")
+    if last and gap_min:
+        try:
+            last_dt = datetime.fromisoformat(last)
+        except (TypeError, ValueError):
+            last_dt = None
+        if last_dt and (now - last_dt).total_seconds() >= gap_min * 60:
+            hrs = (now - last_dt).total_seconds() / 3600
+            body = (f"The server appears to have been off from {last_dt:%d-%b %H:%M} to {now:%d-%b %H:%M} "
+                    f"(about {hrs:.1f} hours). Live data has a gap for that time - it is catching up now.")
+            if outbox.queue(con, f"restart-{last_dt:%Y%m%d%H%M}", "Smart Layer: server was off", body, priority="high"):
+                outbox.flush(con, cfg)
+                pushed = 1
+    store.set_state(con, "last_heartbeat", now.isoformat(timespec="seconds"))
+    _ping_external(m.get("heartbeat_url"))
+    return pushed
+
+
+def _ping_external(url):
+    """Best-effort GET to an external heartbeat / dead-man's-switch URL (healthchecks.io, Uptime Kuma push, ...).
+    Never raises or blocks the sync for long."""
+    if not url:
+        return
+    try:
+        import urllib.request
+        with urllib.request.urlopen(str(url), timeout=10) as r:   # noqa: S310 - owner-configured monitoring URL
+            r.read(0)
+    except Exception:
+        pass
+
+
 def notify_changes(cfg, con):
     """Push new production (each production DATE, once, with that date's own scoreboard figures) and each new OGP
     fabric gate pass, from the change_log. Quiet-hours aware.

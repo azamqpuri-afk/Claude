@@ -183,6 +183,14 @@ heads = {}
 # permanently-idle looms whose 0% would drag the shed figure down the way the physical scoreboard does not.
 # exclude_looms = [10, 12]
 auto_exclude_idle = true   # also drop looms with no production AND stopped the whole shift from the LIVE tile
+# item B3 (reboot blindness): the live sync runs every ~5 min and records its time. If the gap since the last run
+# is this many minutes or more, the PC was off / asleep / rebooted, and the owner gets one "server was off from
+# X to Y - data gap" push. Set 0 to switch the gap push off.
+restart_gap_minutes = 30
+# An external dead-man's-switch URL pinged every live run (e.g. a healthchecks.io check). If the whole PC or app
+# dies, the pings stop and that outside service alerts you - the app cannot warn about its own death. Leave blank
+# to disable. heartbeat_url = "https://hc-ping.com/your-uuid-here"
+# heartbeat_url = ""
 
 [edits]
 # ERP edit history -> the Edits tab. Needs the optional change-history entities (erp_change_events,
