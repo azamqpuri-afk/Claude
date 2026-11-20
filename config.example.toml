@@ -71,6 +71,13 @@ attach_pdf = true                  # attach the report PDF to its ntfy push (the
 # demand_avg_days = 90             # ... average-use window
 # demand_zero_days = 60            # ... zero-quantity demand-slip window
 
+[payroll]
+# item T: a loan can be cleared in the accounts by a journal voucher (JV) instead of salary deduction. Such a loan
+# still looks open in the loan table, so the loans report cross-checks the ledger: journal-type vouchers whose
+# narration names the employee are treated as settling the balance ("settled in accounts (JV)").
+# loan_jv_check = true             # set false to switch the cross-check off
+# jv_kinds = ["journal", "jv", "adjustment"]   # voucher type/kind words that count as a settling voucher
+
 [audit]
 large_payment = 500000
 duplicate_payment_min = 5000

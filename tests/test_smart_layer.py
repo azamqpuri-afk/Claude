@@ -157,9 +157,36 @@ def test_open_loans_use_amount_minus_repaid(env):
     cfg, con = env
     rep = payroll.loans(con, cfg, END)
     rows = rep.rows
-    assert rep.columns[-1] == "Balance"
+    assert rep.columns[6] == "Balance" and rep.columns[-1] == "Status"
     for r in rows:
-        assert r[-1] == r[4] - r[5] and r[-1] > 1                 # Balance = Amount - Repaid, and only open loans listed
+        assert r[6] == r[4] - r[5] and r[6] > 1                   # Balance = Amount - Repaid, and only open loans listed
+
+
+def test_vT_loan_settled_by_jv():
+    # T: a loan still "open" by salary-deduction maths but cleared by a journal voucher in the accounts is shown
+    # as settled (JV) and dropped from the amount-to-recover, while a genuinely open loan stays open.
+    import sqlite3
+    from smart_layer.reports import payroll
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE employees (emp_code TEXT, name TEXT);
+        CREATE TABLE employee_loans (loan_code TEXT, loan_date TEXT, emp_code TEXT, loan_type TEXT, amount REAL,
+                                     installment REAL, opening REAL, repaid REAL, completed TEXT, remarks TEXT);
+        CREATE TABLE ledger_entries (voucher_id TEXT, voucher_no TEXT, voucher_type TEXT, voucher_kind TEXT,
+                                     voucher_date TEXT, entered_at TEXT, account_code TEXT, amount REAL,
+                                     narration TEXT, entered_by TEXT);
+    """)
+    con.executemany("INSERT INTO employees VALUES (?,?)", [("E1001", "Settled Sattar"), ("E1002", "Owing Omar")])
+    con.executemany("INSERT INTO employee_loans (loan_code,loan_date,emp_code,loan_type,amount,repaid) VALUES (?,?,?,?,?,?)",
+                    [("L1", "2026-01-01", "E1001", "advance", 50000, 10000),    # bal 40000, but settled by JV
+                     ("L2", "2026-02-01", "E1002", "loan", 30000, 5000)])       # bal 25000, genuinely open
+    con.execute("""INSERT INTO ledger_entries (voucher_type,voucher_kind,voucher_date,account_code,amount,narration)
+                   VALUES ('JV','Journal','2026-09-01','ADV','40000','Adjustment of advance for E1001 final settlement')""")
+    rep = payroll.loans(con, {"payroll": {}}, None)
+    by_code = {r[0]: r for r in rep.rows}
+    assert by_code["E1001"][-1] == "settled in accounts (JV)"
+    assert by_code["E1002"][-1] == "open"
+    assert "25,000 still to recover" in rep.summary[0] and "1 shown settled" in rep.summary[0]
 
 
 def test_payslips_show_designation(env):

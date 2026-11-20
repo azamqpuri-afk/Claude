@@ -65,23 +65,73 @@ def payslips(con, cfg, as_of=None):
                   [f"Pay period {ps} to {pe}: {len(out)} employees, total net pay {net:,}."])
 
 
+def _sec(cfg, name):
+    try:
+        return cfg[name] or {}
+    except Exception:
+        return {}
+
+
+def _jv_settlements(con, cfg):
+    """Item T: employees whose loan/advance was cleared by a JOURNAL voucher (JV) in the accounts rather than by
+    salary deduction - e.g. written off, adjusted against final settlement, or moved to another head. The loan
+    table's 'repaid' only counts salary deductions, so such a loan still looks open there. We detect it ERP-agnostically
+    from the ledger: journal vouchers whose narration names the employee code. Returns {emp_code: total JV amount}.
+    A mill tunes which voucher kinds count via [payroll] jv_kinds (default: journal / JV)."""
+    p = _sec(cfg, "payroll")
+    if not p.get("loan_jv_check", True):
+        return {}
+    kinds = [str(k).lower() for k in (p.get("jv_kinds") or ["journal", "jv", "adjustment"])]
+    try:
+        rows = con.execute("""SELECT voucher_type, voucher_kind, amount, narration FROM ledger_entries
+                              WHERE narration IS NOT NULL""").fetchall()
+    except Exception:
+        return {}
+    codes = [str(c) for (c,) in con.execute("SELECT emp_code FROM employees") if c and len(str(c)) >= 3]
+    out = {}
+    for vt, vk, amt, narr in rows:
+        kind = f"{vt or ''} {vk or ''}".lower()
+        if not any(k in kind for k in kinds):          # only journal-type vouchers, not salary/cash entries
+            continue
+        text = str(narr)
+        for code in codes:
+            if code in text:                           # the JV narration names this employee
+                out[code] = out.get(code, 0) + abs(amt or 0)
+                break
+    return out
+
+
 def loans(con, cfg, as_of=None):
     """Open employee loans and advances. The ERP's 'completed' flag is unreliable, so a loan is open when
-    amount - repaid (repaid = salary deductions booked against it) is still positive."""
-    cols = ["Code", "Name", "Type", "Given", "Amount", "Repaid", "Balance"]
+    amount - repaid (repaid = salary deductions booked against it) is still positive. Item T: a loan whose balance
+    was instead cleared by a journal voucher in the accounts is shown as 'settled in accounts (JV)', not chased."""
+    cols = ["Code", "Name", "Type", "Given", "Amount", "Repaid", "Balance", "Status"]
     rows = con.execute("""SELECT l.emp_code, e.name, l.loan_type, l.loan_date, l.amount, l.repaid
                           FROM employee_loans l LEFT JOIN employees e ON e.emp_code = l.emp_code
                           ORDER BY l.loan_date DESC""").fetchall()
+    jv = _jv_settlements(con, cfg)
     out = []
+    to_recover = 0
+    settled_n = 0
     for c, n, t, d, a, r in rows:
         bal = round((a or 0) - (r or 0))
-        if bal <= 1:                                   # fully (or over-) recovered - not open
+        if bal <= 1:                                   # fully (or over-) recovered by salary deduction - not open
             continue
-        out.append([c, n, t, d, round(a or 0), round(r or 0), bal])
-    total = sum(x[6] for x in out)
-    return Report("Employee loans and advances (open)", cols, out,
-                  [f"{len(out)} open loans / advances, balance {total:,} still to recover." if out
-                   else "No open loans or advances."])
+        jv_amt = jv.get(c, 0)
+        if jv_amt and jv_amt >= bal * 0.9:             # a JV covers (most of) the balance -> settled in accounts
+            out.append([c, n, t, d, round(a or 0), round(r or 0), bal, "settled in accounts (JV)"])
+            settled_n += 1
+        else:
+            out.append([c, n, t, d, round(a or 0), round(r or 0), bal, "open"])
+            to_recover += bal
+    open_n = len(out) - settled_n
+    if out:
+        msg = f"{open_n} open loans / advances, balance {to_recover:,} still to recover."
+        if settled_n:
+            msg += f" {settled_n} shown settled in the accounts by journal voucher (not a salary deduction)."
+    else:
+        msg = "No open loans or advances."
+    return Report("Employee loans and advances (open)", cols, out, [msg])
 
 
 def staff(con, cfg, as_of=None):
