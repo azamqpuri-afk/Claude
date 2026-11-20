@@ -121,35 +121,34 @@ def run(a):
         if not pds:
             return 0.0
         first, last = pds[0], pds[-1]
-        stoppage, d = 0, first
+        # CUT TO CUT (item V): the meters booked on an entry were woven SINCE THE PREVIOUS CUT, not on that one day.
+        # One catch-up entry (e.g. 10 days of cloth keyed on 17-Nov) would otherwise read as a single day -> a huge
+        # false rate. Start the span the day after the previous ERP entry for this loom+contract, so the meters spread
+        # over the real days. If there is no previous cut (a brand-new contract), fall back to the scoreboard's own
+        # running days in the window rather than 1.
+        prev = a.q("""SELECT MAX(prod_date) FROM loom_production WHERE loom_code = ? AND contract_no = ?
+                      AND prod_date < ?""", code, contract, first.isoformat())
+        span_start = first
+        if prev and prev[0][0]:
+            try:
+                pc = date.fromisoformat(str(prev[0][0])[:10])
+                if pc < first:
+                    span_start = pc + timedelta(days=1)
+            except ValueError:
+                pass
+        stoppage, d = 0, span_start
         while d <= last:
             eff = eff_by.get(f"{code}|{d.isoformat()}")
             if eff is not None and eff < floor:
                 stoppage += 1
             d += timedelta(days=1)
-        days = max(1, ((last - first).days + 1) - stoppage)
-        return tot / days
-
-    def pieces_for(code, contract, d_from, d_to):
-        # Panels across: the scoreboard's DOMINANT pieces (its meters already count all pieces). Use the mode, not the
-        # mean, so the few transition days just after a style change - still tagged with the old piece count - do not
-        # skew it (2.6 -> 3). Else the beam's bwidth, else 1.
-        try:
-            r = a.q("""SELECT pieces FROM loom_monitor WHERE loom_code = ? AND pieces IS NOT NULL
-                       AND read_date > ? AND read_date <= ? GROUP BY pieces ORDER BY COUNT(*) DESC, pieces DESC LIMIT 1""",
-                    code, d_from, d_to)
-            if r and r[0][0]:
-                return r[0][0]
-        except Exception:
-            pass
-        try:
-            r = a.q("""SELECT bwidth FROM beams WHERE contract_no = ? AND bwidth IS NOT NULL
-                       GROUP BY bwidth ORDER BY COUNT(*) DESC LIMIT 1""", contract)
-            if r and r[0][0]:
-                return r[0][0]
-        except Exception:
-            pass
-        return 1.0
+        span_days = ((last - span_start).days + 1) - stoppage
+        if span_days <= 1:                                 # no previous cut to span from -> use scoreboard running days
+            scb = a.q("""SELECT COUNT(DISTINCT read_date) FROM loom_monitor WHERE loom_code = ?
+                         AND read_date > ? AND read_date <= ? AND COALESCE(meters,0) > 0""", code, d_from, d_to)
+            if scb and scb[0][0] and scb[0][0] > 1:
+                span_days = scb[0][0]
+        return tot / max(1, span_days)
 
     names2 = dict(a.q("SELECT loom_code, loom_name FROM looms"))
     for (code,) in a.q("SELECT DISTINCT loom_code FROM loom_production WHERE prod_date > ? AND prod_date <= ?", before_from, d1):
@@ -167,17 +166,18 @@ def run(a):
         changed = rc != bc
         op, np_ = _ppi(bc), _ppi(rc)
         ppi_r = (op / np_) if (op and np_) else 1.0
-        old_pieces, new_pieces = pieces_for(code, bc, before_from, before_to), pieces_for(code, rc, recent_from, d1)
-        pieces_r = (new_pieces / old_pieces) if (old_pieces and new_pieces) else 1.0
-        adjusted = changed and (abs(ppi_r - 1) > 0.01 or abs(pieces_r - 1) > 0.01)
-        expected = usual * ppi_r * pieces_r
+        # item R: a picks/inch change DOES scale ERP meters/day (more picks per inch = fewer linear metres for the same
+        # loom speed). A PANELS change does NOT: ERP meters are per loom length, so weaving 1 vs 3 panels gives the same
+        # metres/day. So pieces must never multiply the expected ERP figure, and an unknown piece count is never
+        # defaulted to 1 (that stale "pieces 1 -> 3" was the loom-27 false alarm). Panels are checked on the scoreboard
+        # side in audit/monitor.py, not here.
+        adjusted = changed and abs(ppi_r - 1) > 0.01
+        expected = usual * ppi_r
         ratio = (now / expected) if expected else 0
         key = f"lhist-{code}"   # stable per loom: the changing figures live in the title/detail, not the ack key
         adj = []
         if abs(ppi_r - 1) > 0.01 and op and np_:
             adj.append(f"ppi {op:g}->{np_:g}")
-        if abs(pieces_r - 1) > 0.01:
-            adj.append(f"pieces {old_pieces:g}->{new_pieces:g}")
         qcr = a.q("SELECT MIN(prod_date) FROM loom_production WHERE loom_code = ? AND contract_no = ?", code, rc) if changed else None
         qcd = (qcr[0][0] if qcr and qcr[0][0] else recent_from) if changed else None
         if adjusted and 0.75 <= ratio <= 1.25:
@@ -191,10 +191,10 @@ def run(a):
                   f"{loom}: {now:,.0f} m a day vs {expected:,.0f} expected after the quality change ({ratio:.1f}x of expected)",
                   f"even allowing for the quality change on {qcd} ({', '.join(adj)}, so about {expected:,.0f} m expected) the output is {ratio:.1f}x of that - check it")
         elif changed:
-            # the quality changed but the picks/inch and pieces are unchanged, so it cannot explain the swing
+            # the quality changed but the picks/inch is unchanged, so it cannot explain the swing in ERP metres/day
             a.add("WATCH", "Weaving", key,
                   f"{loom}: {now:,.0f} m a day vs its usual {usual:,.0f} ({now / usual:.1f}x)",
-                  f"the quality changed on {qcd} but the picks/inch and pieces are the same, so it does not explain the {now / usual:.1f}x - check it")
+                  f"the quality changed on {qcd} but the picks/inch is the same, so it does not explain the {now / usual:.1f}x - check it")
         else:
             # same quality throughout - a real swing in the loom's own output
             a.add("WATCH", "Weaving", key,

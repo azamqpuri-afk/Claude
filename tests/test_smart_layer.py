@@ -2397,7 +2397,7 @@ def test_v0176_same_ppi_quality_change_stays_watch(env):
     wv.run(a)
     lh = [f for f in a.findings if f.key.startswith("lhist-L1")]
     assert lh and lh[0].severity == "WATCH"
-    assert "does not explain" in lh[0].detail and "picks/inch and pieces are the same" in lh[0].detail
+    assert "does not explain" in lh[0].detail and "picks/inch is the same" in lh[0].detail
 
 
 def test_v0176_fabric_thaan_null_shows_blank(env):
@@ -2493,9 +2493,11 @@ def test_v0180_ack_persists_until_escalation(env):
         _store.set_state(con, "acked", {})
 
 
-def test_v0180_over_production_pieces_and_running_days(env):
-    # harness bug 2: "now" is meters per RUNNING day over the window (ERP cuts spread over the active span), not per
-    # ERP entry; pieces uses the dominant (mode) scoreboard value. Loom-4 case: 453 × 42/66 × 1/3 ≈ 96 vs ~104 → INFO.
+def test_v0180_over_production_ppi_and_running_days(env):
+    # Item V: "now" is metres per RUNNING day over the window (lumpy ERP cuts spread cut-to-cut over the active span),
+    # not per ERP entry. Item R: a PPI change scales expected ERP metres/day; a PANELS change does NOT (ERP metres are
+    # per loom length), so pieces never multiplies the expected figure. Loom-4: usual 453, ppi 42->66 -> expected 288;
+    # a real drop to ~104/running-day is NOT explained by ppi alone -> WATCH, and "pieces" is never cited.
     from datetime import date as _d, timedelta as _td
     from smart_layer.audit import weaving as wv
     cfg, _ = env
@@ -2509,7 +2511,7 @@ def test_v0180_over_production_pieces_and_running_days(env):
                     (d, "L4", "A", "67", "50x42", "B1", 453, 453, 0, 0, 80, None))
         con.execute("INSERT INTO loom_monitor (read_date,loom_code,meters,efficiency_pct,picks_per_inch,pieces,style) "
                     "VALUES (?,?,?,?,?,?,?)", (d, "L4", 453, 80, 42, 3, "VA"))
-    for k in range(0, 14):                                # NEW quality: scoreboard every day, pieces 1, 66 ppi
+    for k in range(0, 14):                                # NEW quality on the scoreboard: pieces 1 (must NOT rescale)
         d = (end - _td(days=k)).isoformat()
         con.execute("INSERT INTO loom_monitor (read_date,loom_code,meters,efficiency_pct,picks_per_inch,pieces,style) "
                     "VALUES (?,?,?,?,?,?,?)", (d, "L4", 104, 90, 66, 1, "MHK"))
@@ -2519,8 +2521,10 @@ def test_v0180_over_production_pieces_and_running_days(env):
     a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
     wv.run(a)
     lh = [f for f in a.findings if f.key == "lhist-L4"]
-    assert lh and lh[0].severity == "INFO"               # fully explained by ppi + pieces -> INFO, not Needs Attention
-    assert "pieces 3->1" in (lh[0].title + lh[0].detail)
+    assert lh and lh[0].severity == "WATCH"              # ppi explains 453->288, but 104 is still far below -> WATCH
+    blob = lh[0].title + lh[0].detail
+    assert "104 m a day" in blob and "288 expected" in blob and "ppi 42->66" in blob
+    assert "pieces" not in blob                          # a panels change never scales or explains ERP metres (item R)
 
 
 def test_v0180_alert_c_uses_ppi_not_style(env):
@@ -3143,3 +3147,30 @@ def test_vB1_outbox_retries_until_sent(monkeypatch):
     r2 = outbox.flush(con, cfg, now=t0 + _dt.timedelta(minutes=10))        # back-off elapsed -> retried, delivered
     assert r2["sent"] == [{"keys": ["m1"]}] and r2["pending"] == 0
     assert outbox.failed_recent(con) == []                                 # nothing failing now
+
+
+def test_vV_catchup_entry_is_spread_cut_to_cut(env):
+    # Item V: a single catch-up ERP entry that covers many days (keyed in one lump) must be spread over the days since
+    # the PREVIOUS cut, not read as one day. Loom ran ~200 m/day steadily; a catch-up lump of ~2000 m keyed on one
+    # date, 10 days after the previous cut, is ~200/day - NOT a 10x over-production false alarm.
+    from datetime import date as _d, timedelta as _td
+    from smart_layer.audit import weaving as wv
+    cfg, _ = env
+    con = _weaving_store()
+    end = _d(2026, 11, 17)
+    con.execute("INSERT INTO looms VALUES ('L9','LOOM # 9')")
+    con.execute("INSERT INTO contracts VALUES ('70','90x82',82)")
+    # steady old baseline ~200 m/day over the 'before' window, booked daily
+    for k in range(15, 74):
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "L9", "A", "70", "90x82", "B1", 200, 200, 0, 0, 85, None))
+    # recent window: a single catch-up lump of 2000 m keyed on end-3, with the previous cut on end-13 (10 days earlier)
+    con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                ((end - _td(days=13)).isoformat(), "L9", "A", "70", "90x82", "B2", 200, 200, 0, 0, 85, None))
+    con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                ((end - _td(days=3)).isoformat(), "L9", "A", "70", "90x82", "B2", 2000, 2000, 0, 0, 85, None))
+    a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    wv.run(a)
+    # 2200 m over ~11 cut-to-cut days ≈ 200/day ≈ the usual -> no over/under finding for this loom
+    lh = [f for f in a.findings if f.key == "lhist-L9"]
+    assert not lh, lh and (lh[0].title)
