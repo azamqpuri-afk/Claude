@@ -140,4 +140,18 @@ def run(con, cfg, d0, d1=None, persist=False):
     a = Audit(con, cfg, d0, d1 or d0, persist=persist)
     for rules in (finance, store, weaving, yarn, beams, monitor, sensor, edits):
         rules.run(a)
+    _mapping_age(a)
     return a
+
+
+def _mapping_age(a):
+    """Item S: flag (once, as a WATCH in the daily report) that the mill's ERP mapping was built for an older app."""
+    try:
+        from .. import __version__, erp
+        m = erp.Mapping(a.cfg.path(a.cfg["erp"]["mapping"]))
+        if m.is_older_than(__version__):
+            a.add("WATCH", "Setup", "mapping-outdated",
+                  f"ERP mapping was built for Smart Layer {m.app_version}; this app is {__version__}",
+                  m.age_warning(__version__))
+    except Exception:
+        pass

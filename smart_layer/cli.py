@@ -25,7 +25,7 @@ import os
 import sys
 from datetime import date, timedelta
 
-from . import PRODUCT, config, erp, notify, schema, store
+from . import PRODUCT, __version__, config, erp, notify, schema, store
 
 
 def _open_erp(cfg):
@@ -326,6 +326,54 @@ def cmd_run_scheduled(cfg, args):
     return 0
 
 
+def cmd_install_mapping(cfg, args):
+    """Item S: install an updated ERP mapping package. Backs up the current mapping (both the plain .toml and the
+    sealed .map for this mill), then puts the new file in its place, so an update never loses the working mapping and
+    can be rolled back from mappings_backup/. Accepts a .map (what a mill is sent) or a .toml (in-house)."""
+    import datetime
+    import shutil
+    from pathlib import Path
+    src = Path(args.file)
+    if not src.exists():
+        print(f"No such mapping file: {src}")
+        return 1
+    if src.suffix not in (".toml", ".map"):
+        print("The mapping file must be a .toml or a sealed .map")
+        return 2
+    target = cfg.path(cfg["erp"]["mapping"])
+    folder, stem = target.parent, target.stem
+    old_ver = _mapping_version_of(target)
+    bdir = folder / "mappings_backup"
+    bdir.mkdir(parents=True, exist_ok=True)
+    ts = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    backed = []
+    for ext in (".toml", ".map"):                          # back up, then clear, BOTH forms so only the new one is used
+        cur = folder / (stem + ext)
+        if cur.exists():
+            dest = bdir / f"{stem}-{old_ver or 'prev'}-{ts}{ext}"
+            shutil.copy2(cur, dest)
+            cur.unlink()
+            backed.append(dest.name)
+    shutil.copy2(src, folder / (stem + src.suffix))        # the new mapping takes the mill's configured name
+    new_ver = _mapping_version_of(folder / (stem + src.suffix))
+    print(f"Installed mapping '{stem}{src.suffix}'  (was version {old_ver or '?'}, now {new_ver or '?'}).")
+    if backed:
+        print(f"Previous mapping backed up to mappings_backup/ ({', '.join(backed)}).")
+    w = _mapping_age_warning(cfg)
+    if w:
+        print("WARNING: " + w)
+    print("Run  SmartLayer.exe check  to confirm every entity still reads from the ERP.")
+    return 0
+
+
+def _mapping_version_of(path):
+    try:
+        m = erp.Mapping(path)
+        return m.version or (m.app_version and f"app {m.app_version}") or ""
+    except Exception:
+        return ""
+
+
 def _dashboard_link(cfg, f):
     """Dashboard URL that opens the record a finding is about (needs [notify] dashboard_url or [serve] url)."""
     import re
@@ -572,7 +620,19 @@ def _config_warnings(cfg):
     if "ntfy" in (n.get("channels") or []) and len(str(n.get("ntfy_topic") or "")) < 16:
         out.append("NTFY_TOPIC missing (or too short) in .env - push alerts are enabled but will fail, so pushes are "
                    "disabled. Set NTFY_TOPIC in .env to a long random name (or remove 'ntfy' from [notify] channels).")
+    mw = _mapping_age_warning(cfg)                        # item S: mill mapping older than the app
+    if mw:
+        out.append(mw)
     return out
+
+
+def _mapping_age_warning(cfg):
+    """Item S: warn when the mill's ERP mapping was built for an older Smart Layer release than the one running."""
+    try:
+        m = erp.Mapping(cfg.path(cfg["erp"]["mapping"]))
+        return m.age_warning(__version__)
+    except Exception:                                     # never let a mapping-load hiccup hide the real warnings
+        return None
 
 
 def cmd_status(cfg, args):
@@ -665,6 +725,8 @@ def main(argv=None):
     rs = sub.add_parser("run-scheduled")                 # item B4: weekly/monthly jobs with catch-up
     rs.add_argument("--date", help="treat this as 'today' (for testing / a manual catch-up)")
     rs.add_argument("--push", action="store_true")
+    im = sub.add_parser("install-mapping")               # item S: back up + replace the mill's ERP mapping
+    im.add_argument("file", help="the new mapping package (.map that the mill was sent, or a .toml)")
     sub.add_parser("serve")
     sub.add_parser("notify-changes")                     # live-sync pushes: new production + OGP fabric
     mg = sub.add_parser("morning")
@@ -751,6 +813,7 @@ def main(argv=None):
             "morning": cmd_morning, "night-sensor": cmd_night_sensor, "weft-check": cmd_weft_check,
             "run-scheduled": cmd_run_scheduled,
             "status": cmd_status, "grants": cmd_grants, "licence": cmd_licence,
+            "install-mapping": cmd_install_mapping,
             "set-password": cmd_set_password}[args.cmd](cfg, args)
 
 

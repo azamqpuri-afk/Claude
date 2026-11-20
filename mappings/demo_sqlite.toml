@@ -7,6 +7,8 @@
 
 [mapping]
 name = "MillPro ERP (demo) - Sitara Weaving"
+version = "1.0.0"
+app_version = "0.20.0"
 
 [entities.items]
 sql = """

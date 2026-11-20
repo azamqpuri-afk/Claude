@@ -53,11 +53,21 @@ jobs:
         run: |
           test -n "$SMARTLAYER_MAPPING_KEY" || { echo "::error::Add the repository secret SMARTLAYER_MAPPING_KEY (python tools/issue_license.py mapkey shows it)."; exit 1; }
           printf 'MAPPING_KEY = "%s"\n' "$SMARTLAYER_MAPPING_KEY" > smart_layer/_buildkey.py
-          # A mill's own ERP mapping is delivered to that mill's install; it must NOT ship in the general build to
-          # every customer. Keep only the demo here; drop each real mill's mapping before sealing.
+          # Item S: first seal EACH mill's mapping into its own versioned package (dist/mill-mappings/*.map). These are
+          # uploaded as a separate artifact below and delivered per mill via 'install-mapping' - never bundled here.
+          python tools/pack_mill_mappings.py
+          # A mill's own ERP mapping must NOT ship in the general build to every customer. Keep only the demo here;
+          # drop each real mill's mapping before sealing the bundle that goes into the installer.
           rm -f mappings/dost_textiles_oracle.toml
           python tools/pack_mappings.py
           rm -f mappings/*.toml                        # ship only the sealed .map, never the plain SQL
+
+      - name: Upload the per-mill mapping packages (separate artifact, not in the installer)   # item S
+        uses: actions/upload-artifact@v4
+        with:
+          name: mill-mappings-${{ steps.ver.outputs.version }}
+          path: dist/mill-mappings/*.map
+          if-no-files-found: warn
 
       - name: Compile with Nuitka (standalone)
         run: |

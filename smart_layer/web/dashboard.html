@@ -885,6 +885,8 @@ function renderSync(){
   var warn = s.stale ? ' <b style="color:var(--red)">— data may be stale</b>' : '';
   var pf=(D&&D.push_failures)||{count:0};
   if(pf.count){ warn += ` <b style="color:var(--amber)" title="${esc((pf.items||[]).map(x=>x.title+' ('+(x.error||'')+')').join('\n'))}">— ⚠ ${pf.count} push(es) not delivered (24h)</b>`; }
+  var mw=(D&&D.mapping_warning)||null;
+  if(mw){ warn += ` <b style="color:var(--amber)" title="${esc(mw)}">— ⚠ ERP mapping needs updating</b>`; }
   var btns = STATIC_DATA ? "" : `<button class="hbtn" id="ov-sync-btn" style="margin-left:8px">⟳ Sync now</button> <button class="hbtn" id="ov-fullsync-btn" title="Deep sync of all history (slower)">⟳ Full sync</button>`;
   var cd = STATIC_DATA ? "" : ` · <span id="ov-countdown" class="muted" style="font-size:12px"></span>`;
   el.innerHTML = `${dot} <span${liveC}>${esc(live)}</span> · <span${fullC}>${esc(full)}</span>${cd}${warn} ${btns}`;

@@ -44,6 +44,8 @@ class Mapping:
         meta = data.get("mapping", {})
         self.name = meta.get("name", self.path.stem)
         self.notes = meta.get("notes", "")
+        self.version = str(meta.get("version", "")).strip()          # the mapping's own revision (item S)
+        self.app_version = str(meta.get("app_version", "")).strip()  # the Smart Layer release it was built/verified for
         self.entities = {}
         self.source = {}                             # entity -> source name ("erp" = the main ERP connection)
         for name, spec in data.get("entities", {}).items():
@@ -54,6 +56,24 @@ class Mapping:
 
     def missing(self):
         return [e.name for e in schema.ENTITIES if e.name not in self.entities]
+
+    def is_older_than(self, app_version):
+        """True when this mapping declares the app release it was built for and that release is OLDER than the
+        running app (item S) - a sign the mill's mapping has not been updated to match the new app, so newer
+        reports may be blank. A mapping with no app_version is treated as current (never nags)."""
+        return bool(self.app_version) and _ver_tuple(self.app_version) < _ver_tuple(app_version)
+
+    def age_warning(self, app_version):
+        if self.is_older_than(app_version):
+            return (f"The ERP mapping '{self.name}' was built for Smart Layer {self.app_version}, but this app is "
+                    f"{app_version}. Newer reports can be blank until the mill's mapping is updated - ask your "
+                    f"Smart Layer supplier for the matching mapping.")
+        return None
+
+
+def _ver_tuple(s):
+    """A dotted version as a comparable tuple, e.g. '0.20.0' -> (0, 20, 0). Non-numbers are ignored."""
+    return tuple(int(x) for x in re.findall(r"\d+", str(s)))
 
 
 def connect(erp_cfg, base_dir="."):

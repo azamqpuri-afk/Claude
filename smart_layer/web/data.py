@@ -439,6 +439,7 @@ def build(con, cfg, as_of=None):
         "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound", "colour_scheme")},
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "push_failures": _push_failures(con),            # item B1: alerts the outbox could not deliver in the last 24h
+        "mapping_warning": _mapping_warning(cfg),         # item S: mill ERP mapping older than the app
         "kpis": {
             "meters": round(today[1] or 0) if today else 0,
             "dispatched_month": round(disp_month or 0), "woven_month": round(woven_month or 0),
@@ -595,6 +596,15 @@ def _push_failures(con):
                                                "error": r["last_error"]} for r in rows[:8]]}
     except Exception:
         return {"count": 0, "items": []}
+
+
+def _mapping_warning(cfg):
+    """Item S: a one-line warning when the mill's ERP mapping was built for an older Smart Layer release."""
+    try:
+        from .. import __version__, erp
+        return erp.Mapping(cfg.path(cfg["erp"]["mapping"])).age_warning(__version__)
+    except Exception:
+        return None
 
 
 def feed_day(con, cfg, day=None):

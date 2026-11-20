@@ -3173,6 +3173,42 @@ def test_vB5_backup_is_consistent_copy(tmp_path):
     assert store.backup(src, tmp_path / "no" / "such" / "p", keep=0) is not None   # deep dir is created, no raise
 
 
+def test_vS_mapping_version_and_age():
+    # S: a mapping declares the app version it was built for; the app flags it when it has moved on.
+    from smart_layer import erp
+    m = type("M", (), {})()
+    m.name = "Test ERP"
+    m.app_version = "0.19.0"
+    m.is_older_than = erp.Mapping.is_older_than.__get__(m)
+    m.age_warning = erp.Mapping.age_warning.__get__(m)
+    assert m.is_older_than("0.20.0") is True
+    assert m.is_older_than("0.19.0") is False                 # same version is current
+    assert m.is_older_than("0.18.5") is False                 # app is older than the mapping - never nag
+    assert "0.19.0" in m.age_warning("0.20.0") and "0.20.0" in m.age_warning("0.20.0")
+    m.app_version = ""                                        # a mapping with no declared version never warns
+    assert m.is_older_than("9.9.9") is False
+    assert m.age_warning("9.9.9") is None
+
+
+def test_vS_install_mapping_backs_up_and_replaces(tmp_path):
+    # S: installing an updated mapping backs up the current one, then puts the new one in place (rollback-safe).
+    import argparse
+    from smart_layer import cli, config
+    maps = tmp_path / "mappings"
+    maps.mkdir()
+    cur = maps / "mymill.toml"
+    cur.write_text('[mapping]\nname = "My Mill"\nversion = "1.0.0"\napp_version = "0.20.0"\n', encoding="utf-8")
+    new = tmp_path / "mymill-new.toml"
+    new.write_text('[mapping]\nname = "My Mill"\nversion = "2.0.0"\napp_version = "0.20.0"\n', encoding="utf-8")
+    cfg = config.Config({"erp": {"mapping": "mappings/mymill.toml"}}, tmp_path)
+    rc = cli.cmd_install_mapping(cfg, argparse.Namespace(file=str(new)))
+    assert rc == 0
+    from smart_layer import erp
+    assert erp.Mapping(cur).version == "2.0.0"                # the live mapping is now the new one
+    backups = list((maps / "mappings_backup").glob("mymill-*.toml"))
+    assert len(backups) == 1 and erp.Mapping(backups[0]).version == "1.0.0"   # old one is recoverable
+
+
 def test_vB4_weekly_monthly_catchup():
     # B4: weekly (Friday) and monthly (1st/10th) jobs must catch up a day the PC was switched off, and never
     # double-run within the same period.
