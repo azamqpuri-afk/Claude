@@ -47,11 +47,32 @@ function New-RunAction($prin, $cmd) {
     return New-ScheduledTaskAction -Execute $cmd -WorkingDirectory $AppDir
 }
 
+# Register a task idempotently (item P). On a FRESH install it uses the given trigger. On an UPGRADE (the task
+# already exists and we are not forcing -AsSystem) it KEEPS the task's current trigger, so a mill that moved the
+# daily run to, say, 06:00 is not silently reset to the default every upgrade; only the action (the new run
+# scripts) and settings are refreshed. For a signed-in-user (Interactive) task it first tries an S4U logon, which
+# lets the task run even when that user is not currently logged on and still needs no stored password; if this PC
+# refuses S4U (some local accounts lack the right) it falls back to the Interactive principal unchanged.
+function Save-Task($name, $cmd, $prin, $freshTrigger, $settings) {
+    $ex = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+    $trigger = if ($ex -and $ex.Triggers -and -not $AsSystem) { $ex.Triggers } else { $freshTrigger }
+    $action = New-RunAction $prin $cmd
+    if ("$($prin.LogonType)" -eq "Interactive") {
+        try {
+            $s4u = New-ScheduledTaskPrincipal -UserId $prin.UserId -LogonType S4U -RunLevel $prin.RunLevel
+            Register-ScheduledTask -TaskName $name -Action (New-RunAction $s4u $cmd) -Principal $s4u -Force `
+                -Trigger $trigger -Settings $settings -ErrorAction Stop | Out-Null
+            return
+        } catch { Write-Host "$name: S4U logon not available on this PC, using interactive logon ($_)." }
+    }
+    Register-ScheduledTask -TaskName $name -Action $action -Principal $prin -Force `
+        -Trigger $trigger -Settings $settings | Out-Null
+}
+
 $dailyPrin = Resolve-Principal "Smart Layer Daily"
-Register-ScheduledTask -TaskName "Smart Layer Daily" -Action (New-RunAction $dailyPrin "$AppDir\run_daily.cmd") `
-    -Principal $dailyPrin -Force `
-    -Trigger (New-ScheduledTaskTrigger -Daily -At $at) `
-    -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 3)) | Out-Null
+Save-Task "Smart Layer Daily" "$AppDir\run_daily.cmd" $dailyPrin `
+    (New-ScheduledTaskTrigger -Daily -At $at) `
+    (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Hours 3))
 
 # Live sync every 5 minutes, repeating INDEFINITELY. A bounded RepetitionDuration overflows the Task Scheduler XML
 # (New-TimeSpan -Days 3650 registered as ~9 days, then stopped for good) and [TimeSpan]::MaxValue is REJECTED on
@@ -62,8 +83,7 @@ $liveTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval
 $liveTrigger.Repetition.Duration = ''
 $liveSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 4) `
     -MultipleInstances IgnoreNew
-Register-ScheduledTask -TaskName "Smart Layer Live" -Action (New-RunAction $livePrin "$AppDir\run_live.cmd") `
-    -Principal $livePrin -Force -Trigger $liveTrigger -Settings $liveSettings | Out-Null
+Save-Task "Smart Layer Live" "$AppDir\run_live.cmd" $livePrin $liveTrigger $liveSettings
 
 # Safety net: confirm the repetition registered as indefinite; if a bounded duration slipped through, clear it.
 try {
@@ -77,9 +97,9 @@ try {
 
 # Morning push (~06:20): the morning production summary, the night-shift sensor report and the weft check.
 $mornPrin = Resolve-Principal "Smart Layer Morning" $dailyPrin
-Register-ScheduledTask -TaskName "Smart Layer Morning" -Action (New-RunAction $mornPrin "$AppDir\run_morning.cmd") `
-    -Principal $mornPrin -Force -Trigger (New-ScheduledTaskTrigger -Daily -At "06:20") `
-    -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10)) | Out-Null
+Save-Task "Smart Layer Morning" "$AppDir\run_morning.cmd" $mornPrin `
+    (New-ScheduledTaskTrigger -Daily -At "06:20") `
+    (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10))
 
 # Dashboard: always on. AtStartup fires for SYSTEM (runs with no session); an Interactive principal has no session
 # at boot, so it must start AtLogOn instead - otherwise the dashboard never comes up on an Interactive install.
@@ -88,10 +108,9 @@ $dashPrin = Resolve-Principal "Smart Layer Dashboard" $dailyPrin
 # fire at ANY user's logon. SYSTEM has no logon session, so it starts AtStartup instead.
 $dashTrigger = if ("$($dashPrin.LogonType)" -eq "Interactive") { New-ScheduledTaskTrigger -AtLogOn -User $dashPrin.UserId } `
                else { New-ScheduledTaskTrigger -AtStartup }
-Register-ScheduledTask -TaskName "Smart Layer Dashboard" -Action (New-RunAction $dashPrin "$AppDir\run_dashboard.cmd") `
-    -Principal $dashPrin -Force -Trigger $dashTrigger `
-    -Settings (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) `
-               -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1)) | Out-Null
+Save-Task "Smart Layer Dashboard" "$AppDir\run_dashboard.cmd" $dashPrin $dashTrigger `
+    (New-ScheduledTaskSettingsSet -StartWhenAvailable -ExecutionTimeLimit ([TimeSpan]::Zero) `
+     -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1))
 
 if ($Start) {                                        # setup has written config.toml - safe to start now
     Stop-ScheduledTask -TaskName "Smart Layer Dashboard" -ErrorAction SilentlyContinue
