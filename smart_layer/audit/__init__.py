@@ -58,6 +58,8 @@ class Audit:
         return self.d0.isoformat(), self.d1.isoformat()
 
     def add(self, severity, section, key, title, detail="", meta=None):
+        if any(f.key == key for f in self.findings):     # a key identifies one finding - never list it twice
+            return
         for rule in self.t.get("dismiss", []):
             if re.search(rule.get("match", "^$"), f"{key} {title}", re.I):
                 severity, detail = "INFO", f"{detail} [normal practice: {rule.get('why', '')}]".strip()

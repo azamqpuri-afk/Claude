@@ -313,6 +313,10 @@ def cmd_run_scheduled(cfg, args):
     from . import jobs
     con = _store(cfg)
     today = date.fromisoformat(args.date) if getattr(args, "date", None) else date.today()
+    if not jobs.seeded(con):                              # first ever run: set the baseline, run nothing (item B4)
+        jobs.seed(con, today)
+        print("First run - recorded the weekly/monthly schedule baseline; jobs will run on their next due date.")
+        return 0
     slots = jobs.due(con, today)
     if not slots:
         print("No weekly/monthly jobs are due today.")

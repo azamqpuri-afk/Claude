@@ -15,9 +15,15 @@ import urllib.request
 
 NTFY_MAX_BYTES = 15 * 1024 * 1024        # ntfy.sh allows ~15 MB attachments; our PDFs are far under this
 
+# Channels that actually reach the owner away from the PC. 'console' is only a local log line, so it must NOT count
+# as delivery of a phone alert (item B1): if ntfy is configured and fails, the push is NOT delivered and the outbox
+# must keep retrying, even though console "succeeded".
+REMOTE_CHANNELS = {"ntfy"}
+
 
 class NotifyError(Exception):
-    """Raised when NONE of the configured channels could deliver (so the caller/outbox can retry)."""
+    """Raised when delivery to the owner failed (so the caller/outbox can retry). This means either no channel at all
+    delivered, or a configured REMOTE channel (the phone push) failed - a local console print is not a delivery."""
 
 
 def force_utf8_stdout():
@@ -78,8 +84,9 @@ def send(cfg, title, body, priority="default", click=None, attach=None, filename
     """Send an alert on every configured channel. Each channel is ISOLATED (item Q): one channel's failure - a cp1252
     console crash, or a DNS error on ntfy - can no longer stop the others. `attach` (bytes) + `filename` attaches a
     file to the ntfy push; on failure or an over-size file it falls back to a text-only push that names the file.
-    Returns the channels that delivered; raises NotifyError only when EVERY configured channel failed, so the outbox
-    can retry the whole thing later."""
+    Returns the channels that delivered. Raises NotifyError when the alert did not reach the owner - either no channel
+    delivered at all, OR a configured remote channel (ntfy) failed while only the local console succeeded (item B1) -
+    so the outbox keeps the push pending and retries rather than losing a phone alert."""
     n = cfg["notify"]
     channels = n.get("channels", ["console"])
     sent, failed = [], []
@@ -94,6 +101,8 @@ def send(cfg, title, body, priority="default", click=None, attach=None, filename
             sent.append(ch)
         except Exception as exc:
             failed.append((ch, str(exc).splitlines()[0][:200]))
-    if not sent and failed:
+    failed_names = {c for c, _ in failed}
+    remote_failed = [c for c in channels if c in REMOTE_CHANNELS and c in failed_names]
+    if remote_failed or (not sent and failed):       # a phone channel failed, or nothing delivered at all
         raise NotifyError("; ".join(f"{c}: {e}" for c, e in failed))
     return sent

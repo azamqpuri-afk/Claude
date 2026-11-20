@@ -2404,6 +2404,39 @@ def test_v0176_quality_change_date_is_first_new_contract_date(env):
     assert (end - _td(days=13)).isoformat() not in text       # NOT the first date inside the recent window
 
 
+def test_vV_dedupe_and_scoreboard_change_date(env):
+    # V (peer live findings): (1) if the ERP has two loom codes for one physical loom (18 and 18.0), the output-change
+    # finding is listed ONCE, not twice. (2) when the ERP quality entry is late, the change date comes from the
+    # scoreboard's earlier picks/inch change, not the late ERP entry date.
+    from datetime import date as _d, timedelta as _td
+    from smart_layer.audit import weaving as wv
+    cfg, _ = env
+    con = _weaving_store()
+    end = _d(2026, 11, 17)
+    con.execute("INSERT INTO looms VALUES ('18','LOOM # 18')")
+    con.execute("INSERT INTO contracts VALUES ('C-OLD','50x42',42),('C-NEW','76x82',82)")
+    for k in range(15, 74):                               # old quality, 'before' window, ~240 m/day
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "18", "A", "C-OLD", "50x42", "B1", 240, 240, 0, 0, 80, None))
+        con.execute("INSERT INTO loom_monitor (read_date,loom_code,meters,efficiency_pct,picks_per_inch,pieces,style) "
+                    "VALUES (?,?,?,?,?,?,?)", ((end - _td(days=k)).isoformat(), "18.0", 240, 80, 42, 1, "OLD"))
+    for k in range(0, 11):                                # scoreboard shows the NEW ppi (82) from 10 days ago
+        con.execute("INSERT INTO loom_monitor (read_date,loom_code,meters,efficiency_pct,picks_per_inch,pieces,style) "
+                    "VALUES (?,?,?,?,?,?,?)", ((end - _td(days=k)).isoformat(), "18.0", 95, 85, 82, 1, "NEW"))
+    for k in range(0, 4):                                 # but the ERP entry of the new contract is LATE (3 days ago)
+        con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                    ((end - _td(days=k)).isoformat(), "18", "A", "C-NEW", "76x82", "B2", 95, 95, 0, 0, 85, None))
+    con.execute("INSERT INTO loom_production VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",   # 2nd ERP code for the SAME loom
+                ((end - _td(days=1)).isoformat(), "18.0", "A", "C-NEW", "76x82", "B2", 95, 95, 0, 0, 85, None))
+    a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    wv.run(a)
+    lh = [f for f in a.findings if f.key.startswith("lhist-")]
+    assert len(lh) == 1                                   # ONE finding for the physical loom, not two
+    text = lh[0].title + " " + (lh[0].detail or "")
+    assert (end - _td(days=10)).isoformat() in text       # scoreboard change date (10 days ago), not the late ERP one
+    assert (end - _td(days=3)).isoformat() not in text
+
+
 def test_v0176_same_ppi_quality_change_stays_watch(env):
     # Second retest item 1: a quality change that leaves the picks/inch the SAME cannot explain a meters swing,
     # so it stays WATCH (not a soft "not enough history" INFO). Loom 21: 238 -> ~114 m/day at ppi 82 -> 82.
@@ -3168,16 +3201,20 @@ def test_vU_unused_stock_most_dead_first():
 
 
 def test_vB1_notify_channel_isolation(monkeypatch):
-    # Q + B1: one channel's failure must NOT block the others; raise only when EVERY channel failed.
+    # Q: a cp1252 console crash must not stop ntfy. B1: a FAILED phone channel (ntfy) must NOT be masked by the
+    # local console - send() raises so the outbox keeps retrying rather than losing the phone alert.
+    import pytest as _pt
     from smart_layer import notify
+    # console alone + a stray arrow: delivers, no raise (console is a valid channel when it is the only one)
+    assert notify.send({"notify": {"channels": ["console"]}}, "T", "arrow → ok") == ["console"]
+    # console + ntfy, ntfy fails: console printed, but the phone push failed -> raise so the outbox retries
     cfg = {"notify": {"channels": ["console", "ntfy"], "ntfy_topic": "x" * 20}}
     monkeypatch.setattr(notify, "_send_ntfy", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("DNS down")))
-    sent = notify.send(cfg, "Title", "body with an arrow → inside")   # ntfy fails, console still delivers
-    assert sent == ["console"]
-    cfg2 = {"notify": {"channels": ["ntfy"], "ntfy_topic": "x" * 20}}
-    import pytest as _pt
-    with _pt.raises(notify.NotifyError):                                    # the only channel failed -> raise so the outbox retries
-        notify.send(cfg2, "T", "b")
+    with _pt.raises(notify.NotifyError):
+        notify.send(cfg, "Title", "body with an arrow → inside")
+    # ntfy only, fails: raise
+    with _pt.raises(notify.NotifyError):
+        notify.send({"notify": {"channels": ["ntfy"], "ntfy_topic": "x" * 20}}, "T", "b")
 
 
 def test_vB1_outbox_retries_until_sent(monkeypatch):
@@ -3285,6 +3322,22 @@ def test_vB3_restart_gap_push(monkeypatch):
     back = pushes.heartbeat(cfg, con, now=t0 + _dt.timedelta(hours=3))          # 3h gap: PC was off -> push once
     assert back == 1 and any("server was off" in s for s in sent)
     assert pinged == ["http://hc/x", "http://hc/x", "http://hc/x"]  # pinged on every run
+
+
+def test_vB4_first_run_seeds_no_backlog():
+    # B4: the very first run must NOT dump last period's weekly/monthly reports - it seeds the baseline and runs
+    # nothing; catch-up then applies only to days missed AFTER that baseline.
+    import sqlite3, datetime as _dt
+    from smart_layer import jobs
+    con = sqlite3.connect(":memory:")
+    con.execute("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT)")
+    assert jobs.seeded(con) is False
+    day = _dt.date(2026, 11, 22)                                   # a Sunday, 1st and 10th already past
+    jobs.seed(con, day)
+    assert jobs.seeded(con) is True
+    assert jobs.due(con, day) == []                                # baseline set -> nothing due now (no backlog dump)
+    assert jobs.due(con, _dt.date(2026, 11, 27)) == ["weekly"]    # the next Friday IS caught up
+    assert set(jobs.due(con, _dt.date(2026, 12, 1))) >= {"monthly-1"}   # and the next 1st
 
 
 def test_vB4_weekly_monthly_catchup():

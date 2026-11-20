@@ -69,3 +69,17 @@ def due(con, today):
 def mark(con, slot, today):
     from . import store
     store.set_state(con, f"job:{slot}", today.isoformat())
+
+
+def seeded(con):
+    """True once any job has a recorded last-run - i.e. this is not the very first run on this store."""
+    row = con.execute("SELECT 1 FROM state WHERE key LIKE 'job:%' LIMIT 1").fetchone()
+    return row is not None
+
+
+def seed(con, today):
+    """First run (fresh install or first 0.20.0 upgrade): stamp every slot as 'done today' WITHOUT running anything,
+    so we never dump last period's weekly/monthly reports in one burst. Catch-up then applies only to days MISSED
+    after this baseline (mirrors how the live-push cursor is seeded past the pre-upgrade backlog)."""
+    for slot in SLOTS:
+        mark(con, slot, today)

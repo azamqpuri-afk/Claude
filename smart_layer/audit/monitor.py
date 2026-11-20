@@ -65,9 +65,11 @@ def run(a):
         m = a.q(f"SELECT SUM(meters) FROM loom_monitor WHERE loom_code IN ({ph}) AND {bound}",
                 *codes, lo_label, last_cut)[0][0] or 0
         if m > 0 and abs(e - m) > max(500, 0.25 * m):
+            case = ("ERP is LOWER than the loom's own count - rolls likely not entered" if e < m
+                    else "ERP is HIGHER than the loom's own count - production likely over-entered or booked to this loom")
             a.add("WATCH", "Looms", f"monitor-{k}",
                   f"{names.get(k, k)} {lo_label} to {last_cut} (cut to cut): ERP {e:,.0f} m, loom monitor {m:,.0f} m ({100 * (e - m) / m:+.0f}%)",
-                  "ERP lower than the loom's own count = rolls not entered; higher = production over-entered or booked to this loom")
+                  case)
 
     # Quality change not entered in the ERP (alert C): the scoreboard shows a new PICKS/INCH on a loom, but the ERP's
     # current contract/beam on that loom still has the OLD ppi and no new beam was issued - so production on the new

@@ -1,8 +1,20 @@
 """Weaving checks on loom production."""
 
+import re
 from datetime import date, timedelta
 
 from ..reports.production import EFF_AGG, EFF_SQL
+
+
+def _lnum(code):
+    """The loom number inside a loom code: '18.0' -> 18 (monitor floats), 'L07' -> 7, '12' -> 12; None if none.
+    Lets the ERP loom code and the scoreboard's (often float) loom code be matched to the same physical loom."""
+    s = str(code or "").strip()
+    try:
+        return int(float(s))
+    except ValueError:
+        m = re.findall(r"\d+", s)
+        return int(m[-1]) if m else None
 
 
 def run(a):
@@ -106,6 +118,13 @@ def run(a):
             eff_by[lk] = le
     except Exception:
         pass
+    mon_ppi = {}    # item V: loom number -> [(read_date, picks_per_inch)] - when the loom PHYSICALLY changed quality,
+    try:            # from the scoreboard, so a late ERP entry does not pin the change to the wrong (later) date
+        for rd, lc, p in a.q("""SELECT read_date, loom_code, picks_per_inch FROM loom_monitor
+                                WHERE read_date > ? AND picks_per_inch IS NOT NULL""", before_from):
+            mon_ppi.setdefault(_lnum(lc), []).append((rd, p))
+    except Exception:
+        pass
 
     def run_avg(code, contract, d_from, d_to):
         # Meters per RUNNING day. ERP production is booked in lumps - one entry per roll cut, every 3-5 days - so the
@@ -151,7 +170,12 @@ def run(a):
         return tot / max(1, span_days)
 
     names2 = dict(a.q("SELECT loom_code, loom_name FROM looms"))
+    seen_looms = set()                                     # one finding per PHYSICAL loom (item V dedupe): if the ERP
     for (code,) in a.q("SELECT DISTINCT loom_code FROM loom_production WHERE prod_date > ? AND prod_date <= ?", before_from, d1):
+        ln = _lnum(code)                                   # has two codes for one loom (e.g. 18 and 18.0) only the
+        if ln is not None and ln in seen_looms:            # first is reported, not the same finding twice
+            continue
+        seen_looms.add(ln)
         loom = names2.get(code, code)
         rc = _dom_contract(code, recent_from, d1)          # the loom's current (new) contract
         bc = _dom_contract(code, before_from, before_to)   # its previous (old) contract
@@ -180,6 +204,10 @@ def run(a):
             adj.append(f"ppi {op:g}->{np_:g}")
         qcr = a.q("SELECT MIN(prod_date) FROM loom_production WHERE loom_code = ? AND contract_no = ?", code, rc) if changed else None
         qcd = (qcr[0][0] if qcr and qcr[0][0] else recent_from) if changed else None
+        if changed and np_ and qcd:                        # item V: if the scoreboard shows the new picks/inch BEFORE
+            seen = [rd for rd, p in mon_ppi.get(_lnum(code), []) if p and abs(p - np_) < 1]   # the ERP entry, the
+            if seen and min(seen) < qcd:                   # loom really changed earlier - use that (ERP entry was late)
+                qcd = min(seen)
         if adjusted and 0.75 <= ratio <= 1.25:
             # the quality change FULLY explains the output - INFO only, not Needs Attention
             a.add("INFO", "Weaving", key,
