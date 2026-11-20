@@ -157,7 +157,24 @@ the mapping/config, never the core).
 | # | What it does | Where |
 |---|--------------|-------|
 | O+ | **Location-wise filter in the Store tab.** A location dropdown (every rack/shelf in the store, natural-sorted so A-2 is before A-10, plus "(no location)") next to the search box filters the item list to one rack; it combines with the free-text search, and the count line updates to "N item(s) shown in location X" | Store · `web/dashboard.html` |
-| O | **Store item location (rack/shelf) everywhere.** A new `items.location` column (Dost `DOSTEX.I.LOC`) shows the bin/rack code (e.g. A-01, O-112) next to the item name in the Store stock tab and its PDF, the unused-stock report (now **sorted by location** so the store man can walk rack by rack), the store-demand and draft-order reports, the issue-slip lines and the item ledger drawer — and the store search box matches on location too. NULL when the ERP has none, shown as "—" | Store · `schema.py` (`items.location`), `reports/stock.py`, `reports/store_extra.py`, `web/data.py`, `web/dashboard.html` · mapping `items.location` |
+| O | **Store item location (rack/shelf) everywhere.** A new `items.location` column (Dost `DOSTEX.I.LOC`) shows the bin/rack code (e.g. A-01, O-112) next to the item name in the Store stock tab and its PDF, the unused-stock report (Location column; default sort became most-dead-first in 0.20.0, item U), the store-demand and draft-order reports, the issue-slip lines and the item ledger drawer — and the store search box matches on location too. NULL when the ERP has none, shown as "—" | Store · `schema.py` (`items.location`), `reports/stock.py`, `reports/store_extra.py`, `web/data.py`, `web/dashboard.html` · mapping `items.location` |
+
+## New in 0.20.0 (reliability, data safety, mapping packaging)
+
+| # | What it does | Where |
+|---|--------------|-------|
+| B1 | **Push outbox - no lost alerts.** Alerts are queued durably and marked sent only after delivery is confirmed, with per-channel isolation and backoff retry; the dashboard shows pushes not delivered in the last 24h | `outbox.py`, `audit.mark_pushed`, `cli.py`, Overview warning |
+| Q | **UTF-8 console.** A redirected cp1252 console no longer crashes the first push channel (non-ASCII in a title/body); channels are isolated | `notify.force_utf8_stdout`, `notify.send` |
+| B5 | **Nightly backup + power-loss safety.** A dated, consistent copy of the store after each daily sync (SQLite `VACUUM INTO`, kept to N); `synchronous=FULL` so a recent commit is never rolled back on power loss | `store.backup`, `cli._nightly_backup` · `[reports] backup` |
+| B4 | **Weekly/monthly jobs with catch-up.** Friday / 1st / 10th jobs run even if the PC was off on the due day; the schedule lives in the app, not a PowerShell date test | `jobs.py`, `run-scheduled` |
+| B2 | **Daily-run fixes.** Dropped the non-existent `closing` report; Morning task added to the uninstaller and `status` | `run_daily.cmd`, `SmartLayer.iss`, `cli.cmd_status` |
+| B6 | **CI gate.** pytest runs before the Nuitka compile; the built exe is smoke-tested with stdout redirected under code page 1252 | `.github/workflows/build-windows.yml` |
+| S | **Versioned mill mappings.** Each mapping declares the app version it was built for; `install-mapping` backs up then replaces the live mapping; CI seals each mill mapping as its own versioned artifact; the dashboard/status/audit warn when the mapping is older than the app | `erp.Mapping`, `cli.install-mapping`, `tools/pack_mill_mappings.py` |
+| R/V/B7 | **Over/under-production accuracy.** ERP metres are per-loom-length (panels don't scale them); a single catch-up entry is spread cut-to-cut, not read as one day | `audit/weaving.py` |
+| U | **Unused-stock most-dead-first.** Default sort is never-issued first, then unused longest; Location stays a column | `reports/store_extra.unused_stock` |
+| T | **Loans settled by journal voucher.** A loan cleared in the accounts by a JV (not salary deduction) shows "settled in accounts (JV)" and drops out of "to recover" | `reports/payroll.loans` · `[payroll] jv_kinds` |
+| P | **Idempotent installer tasks.** On upgrade a mill's customized trigger is kept; a signed-in-user task tries an S4U logon (runs when the user is not logged on) and falls back to Interactive | `installer/install_tasks.ps1` |
+| B3 | **Reboot-blindness heartbeat.** A large gap since the last live run pushes once "server was off from X to Y - data gap"; every live run pings an external dead-man's-switch so an outside service alerts if the whole PC/app dies | `pushes.heartbeat` · `[monitor] restart_gap_minutes` / `heartbeat_url` |
 
 ## Not in the product, and why
 
