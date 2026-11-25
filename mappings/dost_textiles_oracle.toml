@@ -49,7 +49,7 @@ WHERE r.dd >= :since
 [entities.store_issues]
 sql = """
 SELECT v.dno AS doc_no, TRUNC(v.dd) AS doc_date, m.feedd AS entered_at, v.ic AS item_code, v.qty AS qty,
-       v.amount AS amount, v.cn AS issued_to
+       v.amount AS amount, v.cn AS issued_to, v.sr_no AS line_no
 FROM dostex.store_issue_v v JOIN dostex.dmn m ON m.trans_no = v.trans_no
 WHERE v.dd >= :since
 """
