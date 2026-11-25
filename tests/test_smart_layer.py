@@ -3338,6 +3338,28 @@ def test_vS_install_mapping_backs_up_and_replaces(tmp_path):
     assert len(backups) == 1 and erp.Mapping(backups[0]).version == "1.0.0"   # old one is recoverable
 
 
+def test_v0200_frozen_config_falls_back_to_exe_dir(tmp_path, monkeypatch):
+    # 0.20.0 install fix: when run as the compiled exe from another directory (e.g. an Admin PowerShell at
+    # system32), a relative config.toml that is not in the cwd falls back to the exe's own folder instead of failing.
+    import sys as _sys
+    from smart_layer import cli
+    exe = tmp_path / "app" / "SmartLayer.exe"
+    exe.parent.mkdir(parents=True)
+    exe.write_bytes(b"")
+    (exe.parent / "config.toml").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(_sys, "executable", str(exe))
+    # from source: a relative path is returned unchanged even if missing (dev behaviour)
+    monkeypatch.setattr(cli, "_frozen", lambda: False)
+    assert cli._resolve_config("config.toml") == "config.toml"
+    # frozen + relative + not in cwd -> resolved next to the exe
+    monkeypatch.setattr(cli, "_frozen", lambda: True)
+    monkeypatch.chdir(tmp_path)                                   # cwd has no config.toml
+    assert cli._resolve_config("config.toml") == str(exe.parent / "config.toml")
+    # an absolute path is never rewritten
+    ap = str(tmp_path / "somewhere" / "config.toml")
+    assert cli._resolve_config(ap) == ap
+
+
 def test_vB3_restart_gap_push(monkeypatch):
     # B3: a long gap since the last live run (PC off / rebooted) pushes once; a normal 5-min cadence does not;
     # the external dead-man's-switch URL is pinged every run.

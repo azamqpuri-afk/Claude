@@ -34,6 +34,23 @@ def _open_erp(cfg):
     return erp.ERP(con, style, mapping, cfg["sources"], cfg.base_dir)
 
 
+def _frozen():
+    """True when running as the compiled product (Nuitka standalone / a frozen exe), not from source."""
+    return bool(getattr(sys, "frozen", False)) or "__compiled__" in globals()
+
+
+def _resolve_config(path):
+    """Find config.toml. From source, a relative path is resolved against the current directory as usual. In the
+    compiled product the config lives next to SmartLayer.exe, but a task or an Admin PowerShell may run the exe from
+    another directory (e.g. C:\\Windows\\system32) - so for a relative path that is not in the current directory,
+    fall back to the exe's own folder instead of failing with 'config.toml not found'."""
+    from pathlib import Path
+    p = Path(path)
+    if p.is_absolute() or p.exists() or not _frozen():
+        return path
+    return str(Path(sys.executable).resolve().parent / p.name)
+
+
 def _store(cfg):
     return store.open_store(cfg.path(cfg["store"]["path"]))
 
@@ -666,9 +683,20 @@ def cmd_status(cfg, args):
     chat = bool(os.environ.get("ANTHROPIC_API_KEY"))
     print(f"  Chat        : {'ready' if chat else 'not set up (no ANTHROPIC_API_KEY in .env)'}")
     if os.name == "nt":
+        import ctypes
+        try:
+            is_admin = bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            is_admin = False
         for task in ("Smart Layer Daily", "Smart Layer Morning", "Smart Layer Live", "Smart Layer Dashboard"):
             r = subprocess.run(["schtasks", "/query", "/tn", task, "/fo", "list"], capture_output=True, text=True)
-            state = next((ln.split(":", 1)[1].strip() for ln in r.stdout.splitlines() if ln.startswith("Status")), "not installed")
+            if r.returncode == 0 and r.stdout:
+                state = next((ln.split(":", 1)[1].strip() for ln in r.stdout.splitlines() if ln.startswith("Status")), "unknown")
+            elif not is_admin:
+                # the tasks run at Highest level, so a non-elevated query cannot see them - don't cry "not installed"
+                state = "can't check - run 'status' as administrator"
+            else:
+                state = "not installed"
             print(f"  Task        : {task} - {state}")
     for w in _config_warnings(cfg):
         print(f"  WARNING     : {w}")
@@ -763,6 +791,7 @@ def main(argv=None):
     spw = sub.add_parser("set-password")
     spw.add_argument("--var", default="ERP_PASSWORD", help="the .env variable to set (default ERP_PASSWORD)")
     args = p.parse_args(argv)
+    args.config = _resolve_config(args.config)
     if args.cmd == "schema":
         print(schema.describe())
         return 0

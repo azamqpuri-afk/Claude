@@ -60,8 +60,10 @@ class Mapping:
     def is_older_than(self, app_version):
         """True when this mapping declares the app release it was built for and that release is OLDER than the
         running app (item S) - a sign the mill's mapping has not been updated to match the new app, so newer
-        reports may be blank. A mapping with no app_version is treated as current (never nags)."""
-        return bool(self.app_version) and _ver_tuple(self.app_version) < _ver_tuple(app_version)
+        reports may be blank. A mapping with no app_version is treated as current (never nags). Only the
+        major.minor is compared: a patch release (0.20.0 -> 0.20.1) adds no new entities, so it must not nag every
+        mill to update a mapping that is still complete."""
+        return bool(self.app_version) and _ver_tuple(self.app_version)[:2] < _ver_tuple(app_version)[:2]
 
     def age_warning(self, app_version):
         if self.is_older_than(app_version):
