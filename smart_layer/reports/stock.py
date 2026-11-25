@@ -274,19 +274,24 @@ def demand_list(con, cfg, as_of=None):
         lp = _last_purchase(con, code)
         li = _last_issue(con, code)
         sim = "; ".join(_similar_in_stock(pos, code, name))
-        out.append([name, location or "—", code, unit or "", qty, round(avg, 1),
+        cover = round(qty / avg, 1) if avg > 0 else None   # item AC: months of cover = current stock / avg monthly use
+        out.append([name, location or "—", code, unit or "", qty, round(avg, 1), cover,
                     li[0] if li else None, lp[0] if lp else None,
                     (lp[1] if (lp and lp[1]) else "(no purchase on record)"),
                     lp[3] if (lp and lp[3]) else None, "; ".join(reasons), sim])
+    # item AC default order: items with NO stock first (most-used first), then items with some stock below their
+    # usage (again most-used first). The most urgent, fastest-moving buys are at the top. Other sorts are click-to-sort.
+    out.sort(key=lambda x: (0 if (x[4] or 0) <= 0 else 1, -(x[5] or 0), x[0]))
     summary = [f"{rows} item(s) the store should consider buying, on usage (last {used_days} days) not the ERP's "
-               f"reorder levels. Average use is per 30 days over the last {avg_days} days.",
+               f"reorder levels. Average use is per 30 days over the last {avg_days} days. "
+               f"Most urgent first: out of stock, then low cover - both highest-use first.",
                "DRAFT - review before anything is ordered."]
-    dupes = sum(1 for x in out if x[11])
+    dupes = sum(1 for x in out if x[12])
     if dupes:
         summary.append(f"{dupes} item(s) have a similar-named item still in stock - check the last column first.")
     return Report(f"Store demand - {as_of:%d-%b-%Y}",
-                  ["Item", "Location", "Code", "Unit", "Stock", "Avg use / month", "Last issued", "Last bought", "Last from",
-                   f"Last rate {cur}", "Why listed", "Similar item in stock"], out, summary)
+                  ["Item", "Location", "Code", "Unit", "Stock", "Avg use / month", "Months cover", "Last issued",
+                   "Last bought", "Last from", f"Last rate {cur}", "Why listed", "Similar item in stock"], out, summary)
 
 
 def reorder_list(con, cfg, as_of=None):

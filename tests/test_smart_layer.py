@@ -504,6 +504,23 @@ def test_pilferage_finds_planted_cases(env):
     assert any(z["sizer"] == "Rehman Sizing" for z in byc["CON-42"]["by_sizer"])
 
 
+def test_vAC_demand_sort_cover_and_xlsx(env, tmp_path):
+    # AC: demand default sort = out-of-stock first (highest use first), then below-reorder (highest use first);
+    # a "Months cover" column; an Excel download.
+    import os
+    from smart_layer.reports import stock as st
+    cfg, con = env
+    rep = st.demand_list(con, cfg)
+    assert "Months cover" in rep.columns
+    si, ai = rep.columns.index("Stock"), rep.columns.index("Avg use / month")
+    groups = [0 if (r[si] or 0) <= 0 else 1 for r in rep.rows]
+    assert groups == sorted(groups)                              # all out-of-stock rows come first
+    nil_avg = [r[ai] for r, g in zip(rep.rows, groups) if g == 0]
+    assert nil_avg == sorted(nil_avg, reverse=True)             # highest average use first within the group
+    p = rep.write_xlsx(str(tmp_path), "demand.xlsx", cfg["company"]["name"])
+    assert os.path.exists(p)
+
+
 def test_vAB_edits_compared_per_line(env):
     # AB: adding more lines of the same item to a slip must NOT read as the first line's quantity/value changing
     # (the "gripper 590 -> 1,770" false alarm). Lines are compared per line; a line added to an OLD slip is flagged

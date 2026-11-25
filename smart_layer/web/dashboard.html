@@ -1396,7 +1396,7 @@ function loadStore(){
   $("#store-tiles").innerHTML="";
   if(storeView==="stock"){ renderStoreRoom(); return; }
   if(storeView==="demand"){
-    $("#store-tools").innerHTML = SEARCH_BOX('#store-out','Find item…')+`<span class="countline" style="margin-left:10px">Items to buy, on usage not the ERP's reorder levels: out &amp; still used, below 90-day average use, or a demand slip with no stock.</span><span class="spacer" style="flex:1"></span><button class="btn" onclick="window.print()">🖨 Print</button><a class="btn ghost" href="api/report?name=demand&fmt=pdf${dayq()}">⤓ PDF</a>`;
+    $("#store-tools").innerHTML = SEARCH_BOX('#store-out','Find item…')+`<span class="countline" style="margin-left:10px">Items to buy, on usage not the ERP's reorder levels: out &amp; still used, below 90-day average use, or a demand slip with no stock.</span><span class="spacer" style="flex:1"></span><button class="btn" onclick="window.print()">🖨 Print</button><a class="btn ghost" href="api/report?name=demand&fmt=pdf${dayq()}">⤓ PDF</a><a class="btn ghost" href="api/report?name=demand&fmt=xlsx${dayq()}">⤓ Excel</a>`;
     loadReport("demand", "#store-out", "#store-msg"); return;
   }
   if(storeView==="unused"){
