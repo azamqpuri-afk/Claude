@@ -356,7 +356,7 @@
       <div class="pad"><div class="cmp2" id="wv-cmp"></div></div></div>
     <div class="cols">
       <div class="card" id="wv-trend-card"><div class="hd"><h3>Scoreboard vs ERP efficiency</h3><span class="count">last 30 days</span></div><div class="cwrap"><canvas id="wv1"></canvas></div></div>
-      <div class="card"><div class="hd"><h3>Monthly meters &amp; A-grade</h3><span class="count">ERP · last 12 months</span></div><div class="cwrap"><canvas id="wv2"></canvas></div></div>
+      <div class="card"><div class="hd"><h3>Monthly production by grade</h3><span class="count">ERP · A / B / Rejection · last 12 months</span></div><div class="cwrap"><canvas id="wv2"></canvas></div></div>
     </div>
     <div class="card"><div class="hd"><h3>Loom by loom</h3><span class="count" id="wv-loomcount"></span></div><div class="tscroll"><table id="wv-looms"></table></div></div>
 
@@ -705,16 +705,36 @@ function buildCharts(tab){
     if(w.scoreboard_available) ds.unshift({label:"Scoreboard",data:tr.map(x=>x.scb),borderColor:c.amber,tension:.3,pointRadius:0,borderWidth:2.6,spanGaps:true});
     mk("wv1",{type:"line",data:{labels:tr.map(x=>dshort(x.date)),datasets:ds},
       options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},scales:{x:grid(c),y:Object.assign({min:50,max:100},grid(c))}}});
-    // monthly METERS (bars) with A-grade % on the right axis; the current (partial) month is shaded lighter and labelled "to date".
+    // item AD: ONE stacked bar per month - A-grade / B-grade / Rejection (C+CP). Bar height = total m; total m above
+    // the bar; A% inside the A band; rejection m and % in red. Current (partial) month is lighter and "(to date)".
+    // Hover shows A / B / Rejection m and %. B grade is a saleable second, never counted as rejection.
     var mo=w.monthly||[];
-    var barcol=mo.map(x=>x.current?c.tealSoft||"rgba(45,169,164,.45)":c.blue);
-    mk("wv2",{data:{labels:mo.map(x=>mlabel(x.month)+(x.current?" (to date)":"")),datasets:[
-      {type:"bar",label:"Meters",data:mo.map(x=>x.meters),backgroundColor:barcol,borderRadius:3,maxBarThickness:22,yAxisID:"y"},
-      {type:"line",label:"A-grade %",data:mo.map(x=>x.a_grade),borderColor:c.green,tension:.3,pointRadius:2,borderWidth:2.6,yAxisID:"y1"}]},
-      options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},tooltip:tip(c)},
-        scales:{x:grid(c),
-          y:Object.assign({beginAtZero:true,position:"left",title:{display:true,text:"meters",color:c.muted}},grid(c)),
-          y1:{beginAtZero:true,max:100,position:"right",grid:{drawOnChartArea:false},ticks:{color:c.muted},title:{display:true,text:"A-grade %",color:c.muted}}}}});
+    function hexA(h,a){ if(!h||h[0]!=="#") return h; h=h.slice(1); if(h.length===3) h=h.split("").map(x=>x+x).join(""); var n=parseInt(h,16); return "rgba("+((n>>16)&255)+","+((n>>8)&255)+","+(n&255)+","+a+")"; }
+    function band(col){ return mo.map(x=>x.current?hexA(col,.45):col); }
+    var fmN=n=>Math.round(n||0).toLocaleString();
+    var gradeLabels={id:"gradeLabels",afterDatasetsDraw:function(ch){
+      var ctx=ch.ctx, mA=ch.getDatasetMeta(0).data, mTop=ch.getDatasetMeta(2).data;
+      ctx.save(); ctx.textAlign="center"; ctx.font="600 11px system-ui,-apple-system,sans-serif";
+      mo.forEach(function(x,i){
+        var top=mTop[i]; if(!top) return;
+        ctx.fillStyle=c.ink; ctx.fillText(fmN(x.meters)+" m", top.x, top.y-6);                 // total above the bar
+        var a=mA[i]; if(x.a_grade!=null && a && (a.base-a.y)>18){ ctx.fillStyle="#fff"; ctx.fillText(x.a_grade+"% A", a.x, (a.y+a.base)/2+4); }
+        if(x.rej_m){ ctx.fillStyle=c.red; ctx.fillText(fmN(x.rej_m)+" ("+x.rej_pct+"%)", top.x, top.y+13); }  // rejection in red
+      });
+      ctx.restore();
+    }};
+    mk("wv2",{type:"bar",data:{labels:mo.map(x=>mlabel(x.month)+(x.current?" (to date)":"")),datasets:[
+      {label:"A-grade",data:mo.map(x=>x.a_m),backgroundColor:band(c.green),stack:"g",maxBarThickness:34},
+      {label:"B-grade",data:mo.map(x=>x.b_m),backgroundColor:band(c.amber),stack:"g",maxBarThickness:34},
+      {label:"Rejection (C+CP)",data:mo.map(x=>x.rej_m),backgroundColor:band(c.red),stack:"g",borderRadius:3,maxBarThickness:34}]},
+      options:{responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},
+          tooltip:Object.assign(tip(c),{callbacks:{
+            label:function(it){ var x=mo[it.dataIndex]; var p=it.datasetIndex===0?x.a_grade:it.datasetIndex===1?x.b_pct:x.rej_pct; return it.dataset.label+": "+fmN(it.parsed.y)+" m"+(p!=null?" ("+p+"%)":""); },
+            footer:function(items){ return "Total "+fmN((mo[items[0].dataIndex]||{}).meters)+" m"; }})})},
+        scales:{x:Object.assign({stacked:true},grid(c)),
+          y:Object.assign({stacked:true,beginAtZero:true,title:{display:true,text:"meters",color:c.muted}},grid(c))}},
+      plugins:[gradeLabels]});
   }
   builtTabs[tab]=true;
 }

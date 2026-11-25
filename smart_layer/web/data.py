@@ -181,13 +181,19 @@ def _weaving(con, cfg, as_of):
     trend = [{"date": (as_of - timedelta(days=29 - i)).isoformat(),
               "erp": round(erp_day[x], 1) if (x := (as_of - timedelta(days=29 - i)).isoformat()) in erp_day and erp_day[x] is not None else None,
               "scb": round(scb_day[x], 1) if x in scb_day and scb_day[x] is not None else None} for i in range(30)]
-    # monthly meters & A-grade (ERP), last 12 months. The current month is partial ("to date").
+    # monthly production by grade (ERP), last 12 months, for the stacked A / B / Rejection bar (item AD). Rejection
+    # is C+CP only (rejected_m); B grade (second_quality_m) is a saleable second, shown separately, never a reject.
+    # The current month is partial ("to date").
     this_month = as_of.strftime("%Y-%m")
-    monthly = [{"month": m, "eff": round(e, 1) if e is not None else None,
-                "meters": round(t or 0), "a_grade": round(100.0 * (a or 0) / t, 1) if t else None,
+    monthly = [{"month": m, "eff": round(e, 1) if e is not None else None, "meters": round(t or 0),
+                "a_m": round(a or 0), "b_m": round(b or 0), "rej_m": round(rj or 0),
+                "a_grade": round(100.0 * (a or 0) / t, 1) if t else None,
+                "b_pct": round(100.0 * (b or 0) / t, 1) if t else None,
+                "rej_pct": round(100.0 * (rj or 0) / t, 1) if t else None,
                 "current": m == this_month}
-               for m, e, a, t in con.execute(f"""
-        SELECT strftime('%Y-%m', prod_date), {EFF_AGG}, SUM(COALESCE(first_quality_m, 0)), SUM(meters)
+               for m, e, a, b, rj, t in con.execute(f"""
+        SELECT strftime('%Y-%m', prod_date), {EFF_AGG}, SUM(COALESCE(first_quality_m, 0)),
+               SUM(COALESCE(second_quality_m, 0)), SUM(COALESCE(rejected_m, 0)), SUM(meters)
         FROM loom_production WHERE prod_date >= ? GROUP BY 1 ORDER BY 1""", (_month_ends(as_of, 12)[0].replace(day=1).isoformat(),))]
     return {"scoreboard_available": scb_avail, "shed": shed, "looms": looms, "trend": trend, "monthly": monthly}
 

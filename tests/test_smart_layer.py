@@ -504,6 +504,19 @@ def test_pilferage_finds_planted_cases(env):
     assert any(z["sizer"] == "Rehman Sizing" for z in byc["CON-42"]["by_sizer"])
 
 
+def test_vAD_monthly_grade_bands(env):
+    # AD: the monthly chart payload carries A / B / Rejection meters (and %) per month for the stacked bar.
+    from smart_layer.web import data as web_data
+    cfg, con = env
+    mo = web_data.build(con, cfg)["weaving"]["monthly"]
+    assert mo, "expected monthly rows"
+    r = mo[-1]
+    for k in ("a_m", "b_m", "rej_m", "a_grade", "b_pct", "rej_pct", "meters", "current"):
+        assert k in r
+    # the bands sum to (about) the total meters
+    assert abs((r["a_m"] + r["b_m"] + r["rej_m"]) - r["meters"]) <= max(2, 0.02 * r["meters"])
+
+
 def test_vAC_demand_sort_cover_and_xlsx(env, tmp_path):
     # AC: demand default sort = out-of-stock first (highest use first), then below-reorder (highest use first);
     # a "Months cover" column; an Excel download.
