@@ -20,6 +20,15 @@ def run(a):
         if r["days"] is None or r["backup"] or r["days"] > float(t["warn_days"]):
             continue
         stage = "urgent" if r["days"] <= float(t["urgent_days"]) else "soon"      # pushed once per stage
+        sim = r.get("similar")
+        if sim:
+            # a sized beam of a DIFFERENT contract/quality but similar ends is in stock - not a drop-in replacement,
+            # so WATCH (not an ACTION "no beam waiting", not silence): someone must check it before mounting (item AF)
+            a.add("WATCH", "Beams", f"beamsimilar-{r['beam']}-{r['set_no']}-{stage}",
+                  f"{r['loom_name']}: beam {r['beam']} finishes in about {r['days']:.0f} days - no exact sized beam, but a "
+                  f"similar-ends beam is in stock: beam {sim['beam']} (contract {sim['contract'] or '?'}, ends {sim['ends']}) - check before mounting",
+                  f"contract {r['contract'] or '?'} (ends {r['ends']}), {r['to_come']:,.0f} m to come at {r['rate']:,.0f} m a day")
+            continue
         a.add("ACTION", "Beams", f"beamend-{r['beam']}-{r['set_no']}-{stage}",
               f"{r['loom_name']}: beam {r['beam']} finishes in about {r['days']:.0f} days - no sized beam waiting for it",
               f"contract {r['contract'] or '?'}, {r['to_come']:,.0f} m of fabric to come at {r['rate']:,.0f} m a day; "

@@ -28,11 +28,7 @@ DEFAULTS = {"warn_days": 15, "urgent_days": 5, "rate_days": 30, "ends_tolerance"
             "warn_days_by_type": {},                      # per loom type, e.g. {VA = 7, AIRJET = 7}; matched in the loom name
             # item AF: beam statuses that count as a sized beam WAITING in stock (received, not yet mounted). A mill
             # whose ERP marks in-stock sized beams with another status adds it here so the "no backup" alert sees them.
-            "sized_stock_statuses": ["sized_waiting"],
-            # how a waiting beam is matched to an at-risk loom, in order. "ends" also requires the SAME warp count, so
-            # two cloths with the same ends/inch but different yarn (e.g. 76x66 30/30 vs 31/34) are never swapped. Set
-            # ["contract","quality"] to switch the ends match off entirely.
-            "backup_match": ["contract", "quality", "ends"]}
+            "sized_stock_statuses": ["sized_waiting"]}
 
 
 def warn_days_for(loom_name, t):
@@ -152,35 +148,29 @@ def beams_on_looms(con, cfg, as_of=None):
                          set_length=length, woven=woven, shrinkage=shrink, to_come=to_come, rate=r, mon_rate=mr,
                          days=days, days_erp=days_erp, days_mon=days_mon, finish=finish,
                          last_entry=last_entry.get(loom), over=bool(length and woven > 1.02 * length),
-                         backup=None))
-    # backups: sized beams waiting in stock (item AF - any status the mill marks as in-stock sized, not just the one
-    # literal 'sized_waiting'), matched on contract, else same QUALITY/construction, else ends within tolerance;
-    # earliest-finishing looms first.
-    warpc = {str(c): w for c, w in con.execute("SELECT contract_no, warp_count FROM contracts")}
+                         backup=None, similar=None))
+    # Item AF (owner's rule): a sized beam in stock is a FULL backup only when it is the same contract or the same
+    # quality/construction - then the loom is quiet. A beam with similar ENDS but a different contract/quality is NOT
+    # a full backup: it is offered as "similar-ends beam available - check before mounting" (a WATCH, not silence and
+    # not an ACTION "no sized beam waiting"). Quality names are not parsed for yarn counts - they are unreliable.
+    # Earliest-finishing looms are allocated first (a beam, full or similar, is consumed once).
     pool_statuses = list(t.get("sized_stock_statuses") or ["sized_waiting"])
     ph = ",".join("?" * len(pool_statuses))
-    waiting = [dict(beam=b, set_no=s, contract=c, ends=e, quality=qual.get(c), warp=warpc.get(str(c)))
-               for b, s, c, e in con.execute(
+    waiting = [dict(beam=b, set_no=s, contract=c, ends=e, quality=qual.get(c)) for b, s, c, e in con.execute(
         f"SELECT beam_no, set_no, contract_no, ends FROM beams WHERE status IN ({ph})", pool_statuses)]
     tol = float(t["ends_tolerance"])
-    strategies = [str(s).lower() for s in (t.get("backup_match") or ["contract", "quality", "ends"])]
-
-    def _match(r, strat):
-        rq, rw = qual.get(r["contract"]), warpc.get(str(r["contract"]))
-        if strat == "contract":
-            return next((w for w in waiting if w["contract"] and w["contract"] == r["contract"]), None)
-        if strat == "quality":
-            return next((w for w in waiting if w["quality"] and rq and _norm(w["quality"]) == _norm(rq)), None)
-        if strat == "ends":                              # same ends/inch AND the same warp count - never a different cloth
-            return next((w for w in waiting if w["ends"] and r["ends"] and abs(w["ends"] - r["ends"]) <= tol
-                         and w["warp"] is not None and rw is not None and str(w["warp"]) == str(rw)), None)
-        return None
-
     for r in sorted(rows, key=lambda r: (r["days"] is None, r["days"] or 0)):
-        pick = next((p for strat in strategies if (p := _match(r, strat))), None)
-        if pick:
-            r["backup"] = pick
-            waiting.remove(pick)
+        rq = qual.get(r["contract"])
+        full = (next((w for w in waiting if w["contract"] and w["contract"] == r["contract"]), None)
+                or next((w for w in waiting if w["quality"] and rq and _norm(w["quality"]) == _norm(rq)), None))
+        if full:
+            r["backup"] = full
+            waiting.remove(full)
+            continue
+        sim = next((w for w in waiting if w["ends"] and r["ends"] and abs(w["ends"] - r["ends"]) <= tol), None)
+        if sim:                                          # similar ends, different cloth -> a candidate to check, not a backup
+            r["similar"] = sim
+            waiting.remove(sim)
     return sorted(rows, key=lambda r: (r["days"] is None, r["days"] if r["days"] is not None else 0))
 
 

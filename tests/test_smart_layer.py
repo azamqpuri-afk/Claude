@@ -631,13 +631,15 @@ def test_vAF_beam_backup_matches_quality_in_stock(env):
     # L30 on c75; a sized c76 beam with near-identical ends is in stock - must NOT be used (different warp count)
     con.execute("INSERT INTO beams VALUES ('B75','on_loom','S3','75','L30',NULL,8855,2600,2400,200,?,NULL,1)",
                 ((end - _td(days=5)).isoformat(),))
-    con.execute("INSERT INTO beams VALUES ('B76','sized_waiting','S4','76','L30',NULL,8838,2600,0,2600,NULL,?,1)",
-                ((end - _td(days=2)).isoformat(),))
+    con.execute("INSERT INTO beams VALUES ('B76','sized_waiting','S4','76','L30',NULL,8853,2600,0,2600,NULL,?,1)",
+                ((end - _td(days=2)).isoformat(),))   # ends within the default tolerance of L30's 8855, different cloth
     con.execute("INSERT INTO loom_production VALUES ('L16', ?, 300, '70'),('L30', ?, 300, '75')",
                 ((end - _td(days=1)).isoformat(), (end - _td(days=1)).isoformat()))
     rows = {r["loom_name"]: r for r in bm.beams_on_looms(con, cfg, end)}
-    assert rows["LOOM-16"]["backup"] and rows["LOOM-16"]["backup"]["contract"] == "71"   # matched by quality, not contract no
-    assert rows["LOOM-30"]["backup"] is None   # c76 beam shares ends but has a different warp count -> not a valid backup
+    assert rows["LOOM-16"]["backup"] and rows["LOOM-16"]["backup"]["contract"] == "71"   # same quality -> full backup
+    # c76 beam shares ends but is a different contract/quality -> a "similar-ends" candidate, not a full backup
+    assert rows["LOOM-30"]["backup"] is None
+    assert rows["LOOM-30"]["similar"] and rows["LOOM-30"]["similar"]["contract"] == "76"
 
 
 def test_vAF_negative_fabric_only_active_contracts(env):

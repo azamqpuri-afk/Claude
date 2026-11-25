@@ -246,6 +246,11 @@ sizing_loss_pct = 6
 # Matched as a substring, so a short name here matches the full party name on the gate pass
 # (e.g. "Hiba" matches "HIBA FABRICS").
 # own_beam_sizers = ["Hiba"]
+# A sized beam in stock of the SAME contract or quality is a full backup (the loom stays quiet). A beam with similar
+# ENDS but a different contract/quality is offered as "similar-ends beam available - check before mounting" (a WATCH),
+# within this many ends of the loom's beam. Dost's total-ends figures are large, so it uses 100.
+# ends_tolerance = 100
+# sized_stock_statuses = ["sized_waiting"]   # beam statuses that count as sized-and-waiting in stock
 
 # Loom sensor duplicate-timings (sensor-swap) check. Needs the loom_stops entity mapped (the monitor's raw
 # per-stop log). With no layout it checks EVERY pair of looms on the timing rules alone; add a floor layout to
