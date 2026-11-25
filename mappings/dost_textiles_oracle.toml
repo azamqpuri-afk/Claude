@@ -11,7 +11,7 @@
 
 [mapping]
 name = "Dost Textiles ERP (Oracle, DOSTEX)"
-version = "1.1.0"            # this mapping's own revision (item S: bump when the mill's SQL changes)
+version = "1.2.0"            # this mapping's own revision (item S: bump when the mill's SQL changes)
 app_version = "0.20.0"      # the Smart Layer release this mapping was built/verified for
 
 # DOSTEX.I is keyed on (ic, uc); like the existing stock scripts, items are taken per item code (ic)
@@ -126,8 +126,8 @@ sql = "SELECT lcode AS loom_code, lname AS loom_name FROM dostex.looms"
 # Grades and meters from WV_PROD_V; efficiency from WV_EFF_V as the ERP's Loom Wise Efficiency report computes
 # it (SUM(total_mtr) / SUM(eff_100)), matched on date, loom, shift and quality. Combined efficiency is weighted by
 # eff_100 (meters at 100%), e.g. 1-Oct-2026: 2,223 / 2,805 = 79.25%.
-# Grades as the ERP's own Daily Production report counts them: first = A + A2; rejection = everything else
-# (B + C + CP, i.e. 100 - "Grade %"); second = B is kept separately for reference.
+# Grades: first = A + A2; second = B (kept separate, NEVER counted as rejection); rejection = C + CP only
+# (owner-confirmed 25-Nov-2026). B grade is a saleable second, not a reject.
 [entities.loom_production]
 # Efficiency (WV_EFF_V) is joined on date + loom + shift ONLY, never quality. On a weft change the production row
 # and the efficiency row carry different quality strings (e.g. 30/30 vs 31/34); joining on quality silently dropped
@@ -148,7 +148,7 @@ FROM (
          e.m100 AS m100, e.eff AS eff
   FROM (SELECT TRUNC(v.td) td, v.lcode, NVL(TO_CHAR(v.shift), '-') shift, v.quality, MAX(v.cont_no) cont_no,
                MAX(TO_CHAR(v.ref_tno)) beam, SUM(NVL(v.total_mtr, 0)) meters, SUM(NVL(v.a, 0) + NVL(v.a2, 0)) first_q,
-               SUM(NVL(v.b, 0)) second_q, SUM(NVL(v.b, 0) + NVL(v.c, 0) + NVL(v.cp, 0)) rej
+               SUM(NVL(v.b, 0)) second_q, SUM(NVL(v.c, 0) + NVL(v.cp, 0)) rej
         FROM dostex.wv_prod_v v WHERE v.tt = 'PRODUCTION' AND v.td >= :since
         GROUP BY TRUNC(v.td), v.lcode, NVL(TO_CHAR(v.shift), '-'), v.quality) p
   LEFT JOIN (SELECT TRUNC(td) td, lcode, NVL(TO_CHAR(shift), '-') shift, SUM(eff_100) m100,

@@ -497,9 +497,67 @@ def test_pilferage_finds_planted_cases(env):
     assert "no production" in f[("CON-39", "2026-09-20")] and "outside working hours" in f[("CON-39", "2026-09-20")]
     assert "kg needed" in f[("CON-41", "2026-10-02")] and "outside working hours" in f[("CON-41", "2026-10-02")]
     assert "11 days after" in f[("CON-42", "2026-09-12")]
-    loss = {(s["sizer"], s["contract"]): s["loss_pct"] for s in sizing}
-    assert loss[("Rehman Sizing", "CON-42")] == pytest.approx(9.0, abs=0.2)
-    assert loss[("Ali Sizing", "CON-41")] < 5
+    loss = {s["contract"]: s["loss_pct"] for s in sizing}       # item AF: sizing loss is now per CONTRACT (netted across sizers)
+    assert loss["CON-42"] == pytest.approx(9.0, abs=0.2)
+    assert loss["CON-41"] < 5
+    byc = {s["contract"]: s for s in sizing}                     # per-sizer breakdown kept as detail
+    assert any(z["sizer"] == "Rehman Sizing" for z in byc["CON-42"]["by_sizer"])
+
+
+def test_vAF_beam_backup_matches_quality_in_stock(env):
+    # AF: a sized beam IN STOCK of the same QUALITY (different contract number) counts as the backup for an
+    # at-risk loom, so "no sized beam waiting" is not a false alarm. Pool statuses are configurable.
+    import sqlite3
+    from datetime import date as _d, timedelta as _td
+    from smart_layer.textile import beams as bm
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE looms (loom_code TEXT, loom_name TEXT);
+        CREATE TABLE contracts (contract_no TEXT, quality TEXT);
+        CREATE TABLE beams (beam_no TEXT, status TEXT, set_no TEXT, contract_no TEXT, loom_code TEXT, sizer_name TEXT,
+                            ends INT, set_length_m REAL, woven_m REAL, length_left_m REAL, mounted_date TEXT,
+                            received_date TEXT, bwidth INT);
+        CREATE TABLE beam_movements (move_date TEXT, doc_no TEXT, beam_no TEXT, move_type TEXT, party_name TEXT,
+                            set_no TEXT, contract_no TEXT, loom_code TEXT, length_m REAL, woven_m REAL);
+        CREATE TABLE loom_production (loom_code TEXT, prod_date TEXT, meters REAL, contract_no TEXT);
+        CREATE TABLE loom_monitor (loom_code TEXT, read_date TEXT, meters REAL);
+    """)
+    end = _d(2026, 11, 24)
+    con.execute("INSERT INTO looms VALUES ('L16','LOOM-16')")
+    con.execute("INSERT INTO contracts VALUES ('70','90X82 CTN-70'),('71','90X82 CTN-70')")
+    con.execute("INSERT INTO beams VALUES ('B70','on_loom','S1','70','L16',NULL,82,2600,2400,200,?,NULL,1)",
+                ((end - _td(days=5)).isoformat(),))
+    con.execute("INSERT INTO beams VALUES ('B71','sized_waiting','S2','71','L16',NULL,82,2600,0,2600,NULL,?,1)",
+                ((end - _td(days=2)).isoformat(),))
+    con.execute("INSERT INTO loom_production VALUES ('L16', ?, 300, '70')", ((end - _td(days=1)).isoformat(),))
+    rows = {r["loom_name"]: r for r in bm.beams_on_looms(con, cfg, end)}
+    assert rows["LOOM-16"]["backup"] and rows["LOOM-16"]["backup"]["contract"] == "71"   # matched by quality, not contract no
+
+
+def test_vAF_negative_fabric_only_active_contracts(env):
+    # AF: legacy migration contracts (negative opening, no movement) must not be flagged daily; only contracts with
+    # real movement in the last fabric_stale_days are flagged.
+    import sqlite3
+    from datetime import date as _d
+    from smart_layer.audit import yarn as yarnmod
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE fabric_stock (contract_no TEXT, meters REAL);
+        CREATE TABLE loom_production (contract_no TEXT, prod_date TEXT, meters REAL);
+        CREATE TABLE fabric_dispatches (contract_no TEXT, dispatch_date TEXT, meters REAL);
+        CREATE TABLE yarn_movements (x);
+    """)
+    end = _d(2026, 11, 24)
+    con.execute("INSERT INTO fabric_stock VALUES ('10', -326000)")    # legacy, no movement -> skip
+    con.execute("INSERT INTO fabric_stock VALUES ('99', -5000)")      # active, negative -> flag
+    con.execute("INSERT INTO loom_production VALUES ('99', ?, 500)", (end.isoformat(),))
+    a = _AuditStub(con, cfg, end.isoformat(), end.isoformat())
+    yarnmod.run(a)
+    keys = {f.key for f in a.findings}
+    assert any(k.startswith("fabneg-99") for k in keys)
+    assert not any(k.startswith("fabneg-10") for k in keys)
 
 
 def test_daily_audit_pushes_yarn_action(env):

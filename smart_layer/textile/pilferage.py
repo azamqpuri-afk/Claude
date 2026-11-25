@@ -156,8 +156,11 @@ def analyse(con, cfg, d0, d1):
                           reasons=[f"weft {w['issued']} issued, but contract {cno} calls for {w['contract']} - "
                                    f"check which count is right"]))
 
-    # Sizing loss per sizer and contract over the contract's whole history (so beams are matched with the yarn
-    # they were made from); yarn sent after the last sized beams came back is still at the sizer and left out.
+    # Sizing loss per CONTRACT (item AF). Yarn sent to one sizer often comes back as beams from ANOTHER, so a
+    # per-sizer figure is a false alarm - the loss must be netted across sizers at the contract level. Yarn sent
+    # after the last sized beams came back is still at the sizer and left out. Each contract also carries a
+    # per-sizer breakdown (detail only), and a flag for whether it actually moved within the audit window - a
+    # long-closed contract is not put on the daily list.
     sizing = []
     moves = con.execute("""SELECT COALESCE(party_name, party_code), contract_no, move_type, move_date, kg FROM yarn_movements
                            WHERE move_type IN ('to_sizer', 'from_sizer', 'sized_beams_received') AND move_date <= ?""",
@@ -173,10 +176,22 @@ def analyse(con, cfg, d0, d1):
             back[key] += kg or 0
         elif key in last_back and d <= last_back[key]:
             sent[key] += (kg or 0) * (1 if mt == "to_sizer" else -1)
-    for key, s in sent.items():
-        b = back.get(key, 0)
+    by_contract = defaultdict(lambda: {"sent": 0.0, "back": 0.0, "sizers": {}})
+    for (sizer, cno) in set(sent) | set(back):
+        s, b = sent.get((sizer, cno), 0), back.get((sizer, cno), 0)
+        c = by_contract[cno]
+        c["sent"] += s
+        c["back"] += b
+        c["sizers"][sizer] = {"sent": s, "back": b}
+    moved = {cno for (sizer, cno, mt, d, kg) in moves if d0.isoformat() <= str(d) <= d1.isoformat()}
+    for cno, c in by_contract.items():
+        s, b = c["sent"], c["back"]
         if s > 0 and b > 0:
-            sizing.append(dict(sizer=key[0], contract=key[1], sent=s, back=b, loss_pct=100 * (s - b) / s))
+            by_sizer = [dict(sizer=z, sent=v["sent"], back=v["back"],
+                             loss_pct=(100 * (v["sent"] - v["back"]) / v["sent"] if v["sent"] > 0 else 0.0))
+                        for z, v in sorted(c["sizers"].items())]
+            sizing.append(dict(contract=cno, sent=s, back=b, loss_pct=100 * (s - b) / s,
+                               moved_in_window=cno in moved, by_sizer=by_sizer))
     return flags, weekly, sizing, t
 
 
@@ -207,14 +222,15 @@ def pilferage(con, cfg, as_of=None):
     flags, weekly, sizing, t = analyse(con, cfg, as_of - timedelta(days=look), as_of)
     rows = [["Days" if e["first"] != e["last"] else "Day", e["first"] if e["first"] == e["last"] else f"{e['first']} to {e['last']}",
              e["contract"], e["party"], round(e["kg"]), e["why"]] for e in episodes(flags)]
-    rows += [["Sizing", "", s["contract"], s["sizer"], round(s["sent"] - s["back"]),
-              f"sent {s['sent']:,.0f} kg, sized beams back {s['back']:,.0f} kg: loss {s['loss_pct']:.1f}%"]
-             for s in sorted(sizing, key=lambda s: -s["loss_pct"]) if s["loss_pct"] > float(t["sizing_loss_pct"])]
+    sized_flagged = [s for s in sizing if s["moved_in_window"] and s["loss_pct"] > float(t["sizing_loss_pct"])]
+    rows += [["Sizing", "", s["contract"], f"{len(s['by_sizer'])} sizer(s)", round(s["sent"] - s["back"]),
+              f"sent {s['sent']:,.0f} kg, sized beams back {s['back']:,.0f} kg (netted): loss {s['loss_pct']:.1f}% · "
+              + "; ".join(f"{z['sizer']} {z['sent'] - z['back']:+,.0f}" for z in s["by_sizer"])]
+             for s in sorted(sized_flagged, key=lambda s: -s["loss_pct"])]
     over = [w for w in weekly if w[4] is not None and w[4] > float(t["excess_kg"])]
     summary = [f"Last {look} days to {as_of:%d-%b-%Y}: {len(rows) - sum(1 for r in rows if r[0] == 'Sizing')} episodes "
                f"({len(flags)} issue days) to check, "
-               f"{sum(1 for s in sizing if s['loss_pct'] > float(t['sizing_loss_pct']))} sizer/contract with loss over "
-               f"{t['sizing_loss_pct']}%."]
+               f"{len(sized_flagged)} contract(s) with sizing loss over {t['sizing_loss_pct']}%."]
     summary += [f"  Contracts {w[0]} ({w[1]}): last {t['window_days']} days {w[2]:,} kg weft issued vs {w[3]:,} kg needed (+{w[4]:,} kg)"
                 for w in over]
     return Report(f"Yarn pilferage check - {as_of:%d-%b-%Y}", ["Check", "Date", "Contract", "Party / sizer", "Kg", "Why"],

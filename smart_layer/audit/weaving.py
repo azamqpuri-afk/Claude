@@ -248,9 +248,11 @@ def run(a):
                   f"{loom}: {now:,.0f} m a day vs its usual {usual:,.0f} ({now / usual:.1f}x)",
                   "a big change in the loom's output with no quality change to explain it - stoppage, or entries booked to the wrong loom")
 
-    looms, m, rej = a.q("""SELECT COUNT(DISTINCT loom_code), SUM(meters), SUM(COALESCE(rejected_m, 0))
-                           FROM loom_production WHERE prod_date BETWEEN ? AND ?""", d0, d1)[0]
+    looms, m, bgrade, rej = a.q("""SELECT COUNT(DISTINCT loom_code), SUM(meters), SUM(COALESCE(second_quality_m, 0)),
+                                          SUM(COALESCE(rejected_m, 0))
+                                   FROM loom_production WHERE prod_date BETWEEN ? AND ?""", d0, d1)[0]
     eff = a.q(f"""SELECT {EFF_AGG}
                   FROM loom_production WHERE prod_date BETWEEN ? AND ?""", d0, d1)[0][0]
     a.summary.append(f"Weaving: {looms} looms, {m or 0:,.0f} m" + (f", efficiency {eff:.1f}%" if eff else "")
+                     + (f", B-grade {100 * bgrade / m:.1f}%" if m and bgrade else "")   # B shown separately, not reject
                      + (f", rejection {100 * rej / m:.1f}%" if m else "") + ".")

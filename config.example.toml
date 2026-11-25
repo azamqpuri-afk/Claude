@@ -99,6 +99,11 @@ duplicate_payment_min = 5000
 # keep the three separate (Total = A + B + Rejection). "auto" works it out per contract; set true or false to force.
 # rejection_includes_second = "auto"
 # grade_labels = { a = "A-grade", b = "B-grade", reject = "Rejection" }   # rename the columns if the mill uses other names
+# rejection_grades: which fabric grades count as REJECTION everywhere (audit %, morning summary, dashboard, monthly
+# chart). Owner-confirmed for Dost: C + CP only. B grade is a saleable SECOND and is shown separately, never as
+# rejection. The grade split itself lives in the mapping (loom_production second_quality_m = B, rejected_m = the
+# rejection grades); this setting is the label used on the chart and reports so it stays generic per mill.
+# rejection_grades = ["C", "CP"]
 # under_production_eff_floor_pct: the daily audit never flags a loom as UNDER-producing (vs its picks/inch-adjusted
 # usual) while the scoreboard shows it running at or above this efficiency - a low ERP metres figure then reflects a
 # different width/panel set-up, not a real shortfall. Only the ERP-vs-scoreboard cut-to-cut check flags entry gaps.

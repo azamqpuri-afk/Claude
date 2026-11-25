@@ -25,7 +25,10 @@ DEFAULTS = {"warn_days": 15, "urgent_days": 5, "rate_days": 30, "ends_tolerance"
             "sizer_return_days": 30, "own_beam_sizers": [], "beam_aliases": {}, "ignore_beams": [], "empty_age_out_days": 120,
             "shrink_min_pct": 1, "shrink_max_pct": 15,    # real shrinkage is ~1-12% by quality; outside = cut/on-loom beam
             "monitor_rate_days": 14,                      # loom-monitor meters/day window, as a second days-to-finish
-            "warn_days_by_type": {}}                      # per loom type, e.g. {VA = 7, AIRJET = 7}; matched in the loom name
+            "warn_days_by_type": {},                      # per loom type, e.g. {VA = 7, AIRJET = 7}; matched in the loom name
+            # item AF: beam statuses that count as a sized beam WAITING in stock (received, not yet mounted). A mill
+            # whose ERP marks in-stock sized beams with another status adds it here so the "no backup" alert sees them.
+            "sized_stock_statuses": ["sized_waiting"]}
 
 
 def warn_days_for(loom_name, t):
@@ -146,13 +149,19 @@ def beams_on_looms(con, cfg, as_of=None):
                          days=days, days_erp=days_erp, days_mon=days_mon, finish=finish,
                          last_entry=last_entry.get(loom), over=bool(length and woven > 1.02 * length),
                          backup=None))
-    # backups: sized beams waiting, matched on contract, else ends within tolerance; earliest-finishing looms first
-    waiting = [dict(beam=b, set_no=s, contract=c, ends=e) for b, s, c, e in con.execute(
-        "SELECT beam_no, set_no, contract_no, ends FROM beams WHERE status = 'sized_waiting'")]
+    # backups: sized beams waiting in stock (item AF - any status the mill marks as in-stock sized, not just the one
+    # literal 'sized_waiting'), matched on contract, else same QUALITY/construction, else ends within tolerance;
+    # earliest-finishing looms first.
+    pool_statuses = list(t.get("sized_stock_statuses") or ["sized_waiting"])
+    ph = ",".join("?" * len(pool_statuses))
+    waiting = [dict(beam=b, set_no=s, contract=c, ends=e, quality=qual.get(c)) for b, s, c, e in con.execute(
+        f"SELECT beam_no, set_no, contract_no, ends FROM beams WHERE status IN ({ph})", pool_statuses)]
     tol = float(t["ends_tolerance"])
     for r in sorted(rows, key=lambda r: (r["days"] is None, r["days"] or 0)):
-        pick = next((w for w in waiting if w["contract"] and w["contract"] == r["contract"]), None) or next(
-            (w for w in waiting if w["ends"] and r["ends"] and abs(w["ends"] - r["ends"]) <= tol), None)
+        rq = qual.get(r["contract"])
+        pick = (next((w for w in waiting if w["contract"] and w["contract"] == r["contract"]), None)
+                or next((w for w in waiting if w["quality"] and rq and _norm(w["quality"]) == _norm(rq)), None)
+                or next((w for w in waiting if w["ends"] and r["ends"] and abs(w["ends"] - r["ends"]) <= tol), None))
         if pick:
             r["backup"] = pick
             waiting.remove(pick)

@@ -53,10 +53,13 @@ def daily_production(con, cfg, day=None):
     # overall efficiency is weighted by meters-at-100 (EFF_AGG), not by meters, so it matches the audit figure
     eff = con.execute(f"SELECT {EFF_AGG} FROM loom_production WHERE prod_date = ?", (d,)).fetchone()[0]
     rej = sum(r[3] or 0 for r in rows)
+    # B grade is a saleable second, shown separately and NEVER counted as rejection (owner-confirmed: rejection = C+CP)
+    bgrade = con.execute("SELECT SUM(COALESCE(second_quality_m, 0)) FROM loom_production WHERE prod_date = ?", (d,)).fetchone()[0] or 0
     out = [[n, m, round(e, 1) if e is not None else None, round(100.0 * rj / m, 1) if m else None, q]
            for n, m, e, rj, q in rows]
     summary = [f"{len(rows)} looms wove {total_m:,.0f} m"
                + (f", efficiency {eff:.1f}%" if eff is not None else "")
+               + (f", B-grade {100.0 * bgrade / total_m:.1f}%" if total_m and bgrade else "")
                + (f", rejection {100.0 * rej / total_m:.1f}%" if total_m else "") + "."]
     if idle:
         summary.append(f"Longer than usual with no production entered ({len(idle)}): "

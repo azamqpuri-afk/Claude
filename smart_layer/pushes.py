@@ -153,7 +153,11 @@ def _production_line(con, d, cfg=None):
     sm, seff, srpm = con.execute(
         f"""SELECT SUM(meters), SUM(efficiency_pct*COALESCE(shift_sec,meters))/NULLIF(SUM(COALESCE(shift_sec,meters)),0), AVG(rpm)
            FROM loom_monitor WHERE read_date = ?{ex}""", [ds, *excl_codes]).fetchone()
-    erp = f"ERP {em:,.0f} m" + (f", eff {eeff:.0f}%" if eeff is not None else "") if em else "ERP: not keyed yet"
+    bg, rj = con.execute("""SELECT SUM(COALESCE(second_quality_m, 0)), SUM(COALESCE(rejected_m, 0))
+                            FROM loom_production WHERE prod_date = ?""", (ds,)).fetchone()
+    # B grade (saleable second) is shown separately and never counted in rejection (rejection = C+CP, owner-confirmed)
+    grades = ((f", B {100 * (bg or 0) / em:.0f}%" if bg else "") + (f", rej {100 * (rj or 0) / em:.0f}%" if rj is not None else "")) if em else ""
+    erp = f"ERP {em:,.0f} m" + (f", eff {eeff:.0f}%" if eeff is not None else "") + grades if em else "ERP: not keyed yet"
     scb = (f"scoreboard eff {seff:.0f}% · {sm:,.0f} m" + (f" · {srpm:.0f} rpm" if srpm else "")) if sm else "no scoreboard data"
     return f"{d:%d-%b}: {erp} | {scb}"
 
