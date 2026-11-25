@@ -446,6 +446,7 @@ def build(con, cfg, as_of=None):
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "push_failures": _push_failures(con),            # item B1: alerts the outbox could not deliver in the last 24h
         "mapping_warning": _mapping_warning(cfg),         # item S: mill ERP mapping older than the app
+        "ui_style": _ui_style(con),                       # item AE: saved look & feel (follows the login across devices)
         "kpis": {
             "meters": round(today[1] or 0) if today else 0,
             "dispatched_month": round(disp_month or 0), "woven_month": round(woven_month or 0),
@@ -602,6 +603,13 @@ def _push_failures(con):
                                                "error": r["last_error"]} for r in rows[:8]]}
     except Exception:
         return {"count": 0, "items": []}
+
+
+def _ui_style(con):
+    """Item AE: the dashboard skin saved for this login (classic / ios / android), so it follows across devices."""
+    from .. import store as _store
+    s = _store.get_state(con, "ui_style", "classic")
+    return s if s in ("classic", "ios", "android") else "classic"
 
 
 def _mapping_warning(cfg):

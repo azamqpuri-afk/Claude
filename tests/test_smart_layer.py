@@ -504,6 +504,18 @@ def test_pilferage_finds_planted_cases(env):
     assert any(z["sizer"] == "Rehman Sizing" for z in byc["CON-42"]["by_sizer"])
 
 
+def test_vAE_ui_style_persists(env):
+    # AE: the chosen look & feel skin is saved for the login and returned in the payload (follows across devices).
+    from smart_layer import store
+    from smart_layer.web import data as web_data
+    cfg, con = env
+    assert web_data.build(con, cfg)["ui_style"] == "classic"      # default
+    store.set_state(con, "ui_style", "ios")
+    assert web_data.build(con, cfg)["ui_style"] == "ios"
+    store.set_state(con, "ui_style", "nonsense")
+    assert web_data.build(con, cfg)["ui_style"] == "classic"      # unknown value falls back to classic
+
+
 def test_vAD_monthly_grade_bands(env):
     # AD: the monthly chart payload carries A / B / Rejection meters (and %) per month for the stacked bar.
     from smart_layer.web import data as web_data

@@ -29,7 +29,17 @@
     --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
   }
   *{box-sizing:border-box} html,body{margin:0}
-  body{background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;-webkit-font-smoothing:antialiased}
+  body{background:var(--bg);color:var(--ink);font:15px/1.45 var(--ui-font,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif);-webkit-font-smoothing:antialiased}
+  /* item AE: "look & feel" skins - Classic (default) / iOS (frosted glass) / Android (Material You). Token swaps only,
+     so every skin works in BOTH light and dark; the data and layout never change. */
+  :root[data-style="ios"]{ --radius:22px; --ui-font:-apple-system,"SF Pro Text",system-ui,sans-serif;
+    --shadow:0 1px 1px rgba(0,0,0,.04),0 12px 34px rgba(0,0,0,.13); }
+  :root[data-style="ios"] .card,:root[data-style="ios"] .tile,:root[data-style="ios"] .plist{
+    background:color-mix(in srgb,var(--panel) 70%,transparent);backdrop-filter:blur(14px) saturate(1.35);-webkit-backdrop-filter:blur(14px) saturate(1.35); }
+  :root[data-style="android"]{ --radius:20px; --ui-font:"Roboto","Noto Sans",system-ui,Arial,sans-serif;
+    --shadow:0 1px 2px rgba(0,0,0,.24),0 4px 12px rgba(0,0,0,.15); }
+  :root[data-style="android"] .card,:root[data-style="android"] .tile,:root[data-style="android"] .plist{
+    background:color-mix(in srgb,var(--teal) 6%,var(--panel)); }
   .wrap{max-width:1200px;margin:0 auto;padding:0 16px 48px}
   a{color:var(--teal)}
   /* header */
@@ -293,10 +303,12 @@
     <input type="date" id="day" title="View the mill as of this date">
     <button class="hbtn" id="askBtn" aria-expanded="false">💬 Ask</button>
     <button class="hbtn" id="schemeBtn" title="Colour scheme" aria-expanded="false">🎨</button>
+    <button class="hbtn" id="styleBtn" title="Look &amp; feel" aria-expanded="false">✨</button>
     <button class="hbtn" id="licBtn" title="Licence">🔑</button>
     <button class="hbtn" id="themeBtn">🌙 <span>Dark</span></button>
   </header>
   <div class="schemeMenu" id="schemeMenu"><h4>Colour scheme</h4></div>
+  <div class="schemeMenu" id="styleMenu"><h4>Look &amp; feel</h4></div>
   <div class="banner" id="licBanner"></div>
 
   <nav class="tabs" id="tabs">
@@ -646,6 +658,30 @@ function applyScheme(key, remember){
   applyScheme(saved||"teal", false);                         // config default is applied later, once data loads, if nothing saved
 })();
 
+/* ---------- item AE: look & feel skin (Classic / iOS / Android), remembered per device + per login ---------- */
+var STYLES={ classic:{name:"Classic"}, ios:{name:"iOS · frosted glass"}, android:{name:"Android · Material You"} };
+var curStyle="classic";
+function applyStyle(key, remember){
+  curStyle=STYLES[key]?key:"classic";
+  var root=document.documentElement;
+  if(curStyle==="classic") root.removeAttribute("data-style"); else root.setAttribute("data-style",curStyle);
+  if(remember){
+    try{localStorage.setItem("sl-style",curStyle);}catch(e){}
+    try{fetch("api/ui/style",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({style:curStyle})});}catch(e){}   // follow the login across devices
+  }
+  var mb=$("#styleMenu"); if(mb) mb.querySelectorAll(".schemeItem").forEach(b=>b.setAttribute("aria-selected", b.dataset.k===curStyle));
+  if(typeof rebuildCharts==="function" && window.D) rebuildCharts();
+}
+(function(){
+  var menu=$("#styleMenu"), btn=$("#styleBtn"); if(!menu||!btn) return;
+  menu.innerHTML='<h4>Look &amp; feel</h4>'+Object.keys(STYLES).map(function(k){return '<button class="schemeItem" data-k="'+k+'">'+esc(STYLES[k].name)+'</button>';}).join("");
+  menu.querySelectorAll(".schemeItem").forEach(b=>b.onclick=()=>{ applyStyle(b.dataset.k, true); menu.classList.remove("open"); btn.setAttribute("aria-expanded","false"); });
+  btn.onclick=(e)=>{ e.stopPropagation(); var o=!menu.classList.contains("open"); menu.classList.toggle("open",o); btn.setAttribute("aria-expanded",o); };
+  document.addEventListener("click",(e)=>{ if(!menu.contains(e.target)&&e.target!==btn) menu.classList.remove("open"); });
+  var saved=null; try{saved=localStorage.getItem("sl-style");}catch(e){}
+  applyStyle(saved||"classic", false);                       // the login's saved choice (D.ui_style) is applied on data load if nothing is saved on this device
+})();
+
 /* ---------- weave-forming opening animation (~2s, once per session) ---------- */
 (function(){
   var el=$("#weave-intro"); if(!el) return;
@@ -752,6 +788,7 @@ function render(){
   if(!D) return;
   var dc=D.dashboard||{};
   ANIM = dc.animations!==false; SHOW_AMOUNTS = dc.show_amounts!==false;
+  if(D.ui_style){ var _ls=null; try{_ls=localStorage.getItem("sl-style");}catch(e){} if(!_ls && D.ui_style!==curStyle) applyStyle(D.ui_style,false); }   // item AE: login's saved skin follows across devices
   REFRESH_SECS = Math.max(30, parseInt(dc.refresh_seconds)||300);
   // colour scheme: the browser's saved choice wins; otherwise the mill's [dashboard] colour_scheme default
   var savedScheme=null; try{savedScheme=localStorage.getItem("sl-scheme");}catch(e){}

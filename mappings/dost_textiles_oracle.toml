@@ -12,7 +12,7 @@
 [mapping]
 name = "Dost Textiles ERP (Oracle, DOSTEX)"
 version = "1.2.0"            # this mapping's own revision (item S: bump when the mill's SQL changes)
-app_version = "0.20.0"      # the Smart Layer release this mapping was built/verified for
+app_version = "0.21.0"      # the Smart Layer release this mapping was built/verified for
 
 # DOSTEX.I is keyed on (ic, uc); like the existing stock scripts, items are taken per item code (ic)
 [entities.items]

@@ -654,6 +654,16 @@ class App:
         finally:
             con.close()
 
+    def set_ui_style(self, style):
+        """Item AE: remember the dashboard look & feel skin for this login (so it follows across phone and PC)."""
+        style = style if style in ("classic", "ios", "android") else "classic"
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            store.set_state(con, "ui_style", style)
+            return {"ok": True, "style": style}
+        finally:
+            con.close()
+
     def ledger(self, account):
         from . import finance
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -1259,6 +1269,13 @@ def handler(app):
                     return self._send(200, app.acknowledge(str(body.get("id", ""))[:200], body.get("title", ""),
                                                            body.get("who", ""), bool(body.get("undo")),
                                                            str(body.get("severity", ""))[:12]))
+                except Exception as e:
+                    return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
+            if self.path == "/api/ui/style":              # item AE: remember the look & feel skin for this login
+                try:
+                    n = min(int(self.headers.get("Content-Length", 0)), 2000)
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                    return self._send(200, app.set_ui_style(str(body.get("style", ""))[:16]))
                 except Exception as e:
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path == "/api/closing/counts":       # save edited closing counts (dashboard password already checked)

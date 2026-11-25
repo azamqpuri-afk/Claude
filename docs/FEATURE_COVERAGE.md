@@ -176,6 +176,17 @@ the mapping/config, never the core).
 | P | **Idempotent installer tasks.** On upgrade a mill's customized trigger is kept; a signed-in-user task tries an S4U logon (runs when the user is not logged on) and falls back to Interactive | `installer/install_tasks.ps1` |
 | B3 | **Reboot-blindness heartbeat.** A large gap since the last live run pushes once "server was off from X to Y - data gap"; every live run pings an external dead-man's-switch so an outside service alerts if the whole PC/app dies | `pushes.heartbeat` · `[monitor] restart_gap_minutes` / `heartbeat_url` |
 
+## New in 0.21.0 (audit accuracy, demand, grade chart, skins)
+
+| # | What it does | Where |
+|---|--------------|-------|
+| AA | **Qty-0 / rate-0 purchase lines.** A qty-0 receipt line (often a duplicate or the wrong item) is flagged as an entry problem, never as a rate jump, and never used as an item's last rate; a rate-0 line with real qty asks "free or missing from the bill?" | `audit/store.py` |
+| AB | **Edits compared per line.** The issue-slip snapshot is keyed per line (slip + item + destination + the ERP's line serial via the new optional `store_issues.line_no`), so adding a second line of the same item is no longer read as the first line's qty/value changing; a line added to an older slip is flagged as a possible backdated insert | `audit/edits.py`, `schema.py` |
+| AC | **Store demand: urgency + Excel.** Default order is out-of-stock first then below-usage, both highest-use first; a "Months cover" column; an Excel download beside the PDF | `reports/stock.py`, dashboard |
+| AD | **Monthly production by grade.** One stacked bar per month — A-grade / B-grade / Rejection (C+CP) — with total m above the bar, A% inside the band and rejection in red; replaces the old meters-and-A% chart | `web/data.py`, `web/dashboard.html` |
+| AE | **Look & feel skins.** A top-bar switch: Classic / iOS (frosted glass) / Android (Material You) — token swaps only, same data and tabs, light and dark for each; remembered per device and per login | `web/dashboard.html`, `web/server.py`, `web/data.py` |
+| AF | **Audit false-alarm fixes.** Beams count sized stock of the same quality as a backup; sizing loss is per contract (netted across sizers), moving contracts only; legacy negative fabric stops nagging (no movement > 90 days); rejection = C + CP, B shown separately everywhere | `textile/beams.py`, `textile/pilferage.py`, `audit/yarn.py`, `audit/weaving.py`, Dost mapping |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |
