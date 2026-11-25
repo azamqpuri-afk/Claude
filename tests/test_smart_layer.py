@@ -610,7 +610,7 @@ def test_vAF_beam_backup_matches_quality_in_stock(env):
     con = sqlite3.connect(":memory:")
     con.executescript("""
         CREATE TABLE looms (loom_code TEXT, loom_name TEXT);
-        CREATE TABLE contracts (contract_no TEXT, quality TEXT);
+        CREATE TABLE contracts (contract_no TEXT, quality TEXT, warp_count TEXT);
         CREATE TABLE beams (beam_no TEXT, status TEXT, set_no TEXT, contract_no TEXT, loom_code TEXT, sizer_name TEXT,
                             ends INT, set_length_m REAL, woven_m REAL, length_left_m REAL, mounted_date TEXT,
                             received_date TEXT, bwidth INT);
@@ -620,15 +620,24 @@ def test_vAF_beam_backup_matches_quality_in_stock(env):
         CREATE TABLE loom_monitor (loom_code TEXT, read_date TEXT, meters REAL);
     """)
     end = _d(2026, 11, 24)
-    con.execute("INSERT INTO looms VALUES ('L16','LOOM-16')")
-    con.execute("INSERT INTO contracts VALUES ('70','90X82 CTN-70'),('71','90X82 CTN-70')")
+    con.execute("INSERT INTO looms VALUES ('L16','LOOM-16'),('L30','LOOM-30')")
+    # c70/c71 same quality + warp count; c75 and c76 share ends/inch (76) but DIFFERENT warp count (30 vs 31)
+    con.execute("INSERT INTO contracts VALUES ('70','90X82 CTN-70','54'),('71','90X82 CTN-70','54'),"
+                "('75','76X66 30/30 PC','30'),('76','76X66 31/34 PC','31')")
     con.execute("INSERT INTO beams VALUES ('B70','on_loom','S1','70','L16',NULL,82,2600,2400,200,?,NULL,1)",
                 ((end - _td(days=5)).isoformat(),))
     con.execute("INSERT INTO beams VALUES ('B71','sized_waiting','S2','71','L16',NULL,82,2600,0,2600,NULL,?,1)",
                 ((end - _td(days=2)).isoformat(),))
-    con.execute("INSERT INTO loom_production VALUES ('L16', ?, 300, '70')", ((end - _td(days=1)).isoformat(),))
+    # L30 on c75; a sized c76 beam with near-identical ends is in stock - must NOT be used (different warp count)
+    con.execute("INSERT INTO beams VALUES ('B75','on_loom','S3','75','L30',NULL,8855,2600,2400,200,?,NULL,1)",
+                ((end - _td(days=5)).isoformat(),))
+    con.execute("INSERT INTO beams VALUES ('B76','sized_waiting','S4','76','L30',NULL,8838,2600,0,2600,NULL,?,1)",
+                ((end - _td(days=2)).isoformat(),))
+    con.execute("INSERT INTO loom_production VALUES ('L16', ?, 300, '70'),('L30', ?, 300, '75')",
+                ((end - _td(days=1)).isoformat(), (end - _td(days=1)).isoformat()))
     rows = {r["loom_name"]: r for r in bm.beams_on_looms(con, cfg, end)}
     assert rows["LOOM-16"]["backup"] and rows["LOOM-16"]["backup"]["contract"] == "71"   # matched by quality, not contract no
+    assert rows["LOOM-30"]["backup"] is None   # c76 beam shares ends but has a different warp count -> not a valid backup
 
 
 def test_vAF_negative_fabric_only_active_contracts(env):
