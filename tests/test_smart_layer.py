@@ -504,6 +504,43 @@ def test_pilferage_finds_planted_cases(env):
     assert any(z["sizer"] == "Rehman Sizing" for z in byc["CON-42"]["by_sizer"])
 
 
+def test_vAB_edits_compared_per_line(env):
+    # AB: adding more lines of the same item to a slip must NOT read as the first line's quantity/value changing
+    # (the "gripper 590 -> 1,770" false alarm). Lines are compared per line; a line added to an OLD slip is flagged
+    # as a possible backdated insert, not a rate edit.
+    import sqlite3
+    from smart_layer.audit import edits as ed
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE items (item_code TEXT, item_name TEXT);
+        CREATE TABLE store_issues (doc_no TEXT, doc_date TEXT, entered_at TEXT, item_code TEXT, qty REAL, amount REAL,
+                                   issued_to TEXT, entered_by TEXT, line_no TEXT);
+        CREATE TABLE store_receipts (item_code TEXT, entered_at TEXT, doc_date TEXT, doc_no TEXT);
+        CREATE TABLE loom_production (prod_date TEXT, loom_code TEXT, shift TEXT, quality TEXT, meters REAL);
+        CREATE TABLE looms (loom_code TEXT, loom_name TEXT);
+    """)
+    con.execute("INSERT INTO items VALUES ('GRIP','PROJECTILE GRIPPER')")
+    old_day = "2026-11-10"
+    con.execute("INSERT INTO store_issues VALUES ('1130', ?, NULL, 'GRIP', 1, 590, 'LOOM 35', NULL, '1')", (old_day,))
+    a1 = _AuditStub(con, cfg, "2026-11-20", "2026-11-20", persist=True)
+    a1.cur = "PKR"
+    ed.run(a1)                                           # seeds the per-line snapshot, reports nothing
+    assert not a1.findings
+    con.execute("INSERT INTO store_issues VALUES ('1130', ?, NULL, 'GRIP', 1, 590, 'LOOM 14', NULL, '22')", (old_day,))
+    con.execute("INSERT INTO store_issues VALUES ('1130', ?, NULL, 'GRIP', 1, 590, 'LOOM 5', NULL, '23')", (old_day,))
+    a2 = _AuditStub(con, cfg, "2026-11-21", "2026-11-21", persist=True)
+    a2.cur = "PKR"
+    ed.run(a2)
+    keys = {f.key for f in a2.findings}
+    blob = " ".join((f.title + " " + f.detail).lower() for f in a2.findings)
+    assert not any(f.severity == "CONFIRMED" for f in a2.findings)   # the untouched first line is not an edit
+    assert "value changed" not in blob and "rate edited" not in blob
+    assert any(k.startswith("isadd-1130|GRIP|LOOM 14") for k in keys)   # the added lines flagged as additions
+    assert any(k.startswith("isadd-1130|GRIP|LOOM 5") for k in keys)
+
+
 def test_vAA_qty0_and_rate0_purchase_lines(env):
     # AA: a qty-0 purchase line is an entry problem (possible duplicate / wrong item), NOT a rate jump, and is never
     # used as the item's last rate; a rate-0 line with real qty asks "free or missing from the bill?".
@@ -1408,8 +1445,8 @@ def test_change_feed_records_at_sync_time(env, tmp_path):
                 return iter(s.issues)
             return iter([])
 
-    iss1 = ("s1", today, None, "I1", 1, 50, "LOOM 5", None)
-    iss2 = ("s2", today, None, "I2", 2, 80, "LOOM 31", None)
+    iss1 = ("s1", today, None, "I1", 1, 50, "LOOM 5", None, None)   # trailing None = line_no (new store_issues column)
+    iss2 = ("s2", today, None, "I2", 2, 80, "LOOM 31", None, None)
     dbp = tmp_path / "cl.db"
     ent = ["items", "store_issues"]
     # baseline sync (store_issues empty before -> no events recorded)

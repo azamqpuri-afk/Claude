@@ -88,7 +88,10 @@ ENTITIES = (
          C("qty", "REAL", "Quantity issued", True),
          C("amount", "REAL", "Line value"),
          C("issued_to", "TEXT", "Department / machine / loom it went to"),
-         C("entered_by", "TEXT", "ERP user who keyed it")),
+         C("entered_by", "TEXT", "ERP user who keyed it"),
+         C("line_no", "TEXT", "Optional: the ERP's own line serial on the slip (sr no). When mapped, edit detection "
+                              "compares per LINE so adding a second line of the same item is not read as a quantity "
+                              "or rate change. Falls back to item + destination when not mapped.")),
         date_column="doc_date",
     ),
     Entity(

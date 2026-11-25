@@ -58,10 +58,22 @@ def run(a):
         return
     cur = a.cur
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    issues = {f"{doc}|{item}": [d, name, qty or 0, round(amt or 0, 2)] for doc, item, d, name, qty, amt in a.q("""
-        SELECT s.doc_no, s.item_code, MIN(s.doc_date), COALESCE(MAX(i.item_name), s.item_code), SUM(s.qty), SUM(s.amount)
-        FROM store_issues s LEFT JOIN items i ON i.item_code = s.item_code
-        WHERE s.doc_date >= date(?, '-180 days') GROUP BY s.doc_no, s.item_code""", a.window[1])}
+    # Item AB: compare per LINE, not per item total on the slip. A slip can carry the same item on several lines to
+    # different looms; adding a line later must not read as the first line's quantity or rate changing. The line is
+    # keyed by (slip, item, destination, line serial) - the ERP's own sr no when the mapping provides store_issues
+    # line_no, otherwise the destination separates the lines. Value = [date, name, qty, amount, cost-centre, item, slip].
+    issues = {}
+    for doc, item, d, name, cc, ln, qty, amt in a.q("""
+            SELECT s.doc_no, s.item_code, s.doc_date, COALESCE(i.item_name, s.item_code),
+                   COALESCE(s.issued_to, ''), COALESCE(s.line_no, ''), s.qty, s.amount
+            FROM store_issues s LEFT JOIN items i ON i.item_code = s.item_code
+            WHERE s.doc_date >= date(?, '-180 days')""", a.window[1]):
+        key = f"{doc}|{item}|{cc}|{ln}"
+        if key in issues:                                # same key twice only when line_no is not mapped - aggregate
+            issues[key][2] += qty or 0
+            issues[key][3] = round(issues[key][3] + (amt or 0), 2)
+        else:
+            issues[key] = [d, name, qty or 0, round(amt or 0, 2), cc, item, doc]
     prod = {f"{d}|{loom}|{shift}|{q}": [d, name, m or 0] for d, loom, name, shift, q, m in a.q("""
         SELECT p.prod_date, p.loom_code, COALESCE(MAX(l.loom_name), p.loom_code), COALESCE(p.shift, '-'), COALESCE(p.quality, '-'),
                SUM(p.meters)
@@ -73,23 +85,37 @@ def run(a):
     # backwards and makes the next daily audit report everything since as "deleted".
     prev_day = (old or {}).get("taken", "")[:10]
     if a.persist and a.window[1] >= (prev_day or a.window[1]):
-        set_state(a.con, "edit_snapshot", {"taken": now, "issues": issues, "prod": prod})
-    if not old:
-        return
+        set_state(a.con, "edit_snapshot", {"taken": now, "issues": issues, "prod": prod, "ver": 2})
+    if not old or old.get("ver") != 2:
+        return                                           # first run, or an older per-item snapshot: re-seed, report nothing
     since = old.get("taken", now)
+    baseline_day = since[:10]
     system_rerate, human_rate_edit = _rerate_signals(a, since, now)   # read once for the whole window
-    old_from = min((v[0] for v in old.get("issues", {}).values()), default=None)
-    for key, (d, name, qty, amt) in old.get("issues", {}).items():
-        doc, item = key.split("|", 1)
+    old_issues = old.get("issues", {})
+    old_from = min((v[0] for v in old_issues.values()), default=None)
+    # item AB: a LINE added to a slip that is OLDER than the last snapshot - a possible backdated insert (a brand-new
+    # slip dated today is normal and not flagged). This is why the gripper "590 -> 1,770" was a false edit: two more
+    # lines were added, not an existing line's value changed.
+    for key, v in issues.items():
+        if key in old_issues:
+            continue
+        d, name, qty, amt, cc, item, doc = v
+        if d < baseline_day:
+            a.add("WATCH", "Edits", f"isadd-{key}",
+                  f"Issue slip {doc} ({d}): a line was ADDED after the slip was saved - {name} x{qty:g} to {cc or '?'}, {cur} {amt:,.0f}",
+                  f"the slip is dated {d} but the line first appeared on {baseline_day} - check it is not backdated")
+    for key, v in old_issues.items():
+        d, name, qty, amt = v[0], v[1], v[2], v[3]
+        item, doc = (v[5], v[6]) if len(v) > 6 else (key.split("|")[1], key.split("|")[0])
         new = issues.get(key)
         if new is None:
-            if old_from and d >= old_from and d >= min((v[0] for v in issues.values()), default=d):
+            if old_from and d >= old_from and d >= min((x[0] for x in issues.values()), default=d):
                 a.add("WATCH", "Edits", f"isdel-{key}", f"Issue slip {doc} ({d}): {name} x{qty:g} is no longer in the ERP",
-                      "deleted after it was saved - check with the store why")
+                      "a line was deleted after it was saved - check with the store why")
             continue
         if abs(new[2] - qty) > 1e-6:
-            a.add("CONFIRMED", "Edits", f"isqty-{key}-{new[2]:g}", f"Issue slip {doc} ({d}): {name} quantity changed {qty:g} -> {new[2]:g}",
-                  "an old issue slip was edited after it was saved - check with the storekeeper why")
+            a.add("CONFIRMED", "Edits", f"isqty-{key}-{new[2]:g}", f"Issue slip {doc} ({d}): {name} quantity changed {qty:g} -> {new[2]:g} on this line",
+                  "an issue slip LINE was edited after it was saved - check with the storekeeper why")
         elif abs(new[3] - amt) >= 1000:
             late = a.q("""SELECT doc_no, doc_date FROM store_receipts WHERE item_code = ? AND entered_at > ? AND doc_date <= ? LIMIT 1""",
                        item, since, d)
