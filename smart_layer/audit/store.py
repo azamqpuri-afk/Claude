@@ -27,12 +27,25 @@ def run(a):
     # purchase rates: vs the last purchase, and vs other suppliers
     receipts = a.q(f"""SELECT r.doc_no, r.doc_date, r.item_code, COALESCE(i.item_name, r.item_code), r.supplier_name, r.rate, r.qty
             FROM store_receipts r LEFT JOIN items i ON i.item_code = r.item_code
-            WHERE {in_window.replace('doc_date', 'r.doc_date').replace('entered_at', 'r.entered_at')} AND r.rate > 0""",
+            WHERE {in_window.replace('doc_date', 'r.doc_date').replace('entered_at', 'r.entered_at')}""",
                    d0, d1, d0, d1)
     jump = float(t["rate_jump_ratio"])
     cheap, cheap_min = float(t["cheaper_elsewhere_ratio"]), float(t["cheaper_elsewhere_min_extra"])
     for dno, dd, code, name, sup, rate, qty in receipts:
+        q, rt = (qty or 0), (rate or 0)
+        # item AA: a qty-0 line (often a duplicate of another line, or the wrong item picked) is an ENTRY problem, not
+        # a rate jump - and it must never be used as the item's "last rate" either (the lookups below exclude qty 0).
+        if q <= 0:
+            a.add("WATCH", "Store", f"qty0-{dno}-{code}",
+                  f"GRN {dno} {name}: qty 0 line - check entry (possible duplicate or wrong item)",
+                  f"rate {cur} {rt:,.0f}, {sup or '?'}")
+            continue
+        if rt <= 0:                                       # a real quantity received at rate 0 - free, or missing from the bill?
+            a.add("WATCH", "Store", f"rate0-{dno}-{code}",
+                  f"GRN {dno} {name}: rate 0 on {q:g} - free, or missing from the bill?", f"{sup or '?'}")
+            continue
         prev = a.q("""SELECT rate, doc_date, supplier_name FROM store_receipts WHERE item_code = ? AND doc_no <> ? AND rate > 0
+                      AND COALESCE(qty, 0) > 0
                       AND doc_date BETWEEN date(?, '-18 months') AND ? ORDER BY doc_date DESC LIMIT 1""", code, dno, dd, dd)
         if prev:
             pr, pd, ps = prev[0]
@@ -42,6 +55,7 @@ def run(a):
                       f"GRN {dno} {name}: rate {cur} {rate:,.0f} vs last {cur} {pr:,.0f} ({ratio:.1f}x)",
                       f"{sup or '?'} now; last {ps or '?'} on {pd}")
         alt = a.q("""SELECT rate, doc_date, supplier_name FROM store_receipts WHERE item_code = ? AND doc_no <> ? AND rate > 0
+                     AND COALESCE(qty, 0) > 0
                      AND COALESCE(supplier_name, '') <> COALESCE(?, '') AND doc_date BETWEEN date(?, '-12 months') AND ?
                      ORDER BY rate LIMIT 1""", code, dno, sup, dd, dd)
         if alt:

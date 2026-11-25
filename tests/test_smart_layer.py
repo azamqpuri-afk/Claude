@@ -504,6 +504,23 @@ def test_pilferage_finds_planted_cases(env):
     assert any(z["sizer"] == "Rehman Sizing" for z in byc["CON-42"]["by_sizer"])
 
 
+def test_vAA_qty0_and_rate0_purchase_lines(env):
+    # AA: a qty-0 purchase line is an entry problem (possible duplicate / wrong item), NOT a rate jump, and is never
+    # used as the item's last rate; a rate-0 line with real qty asks "free or missing from the bill?".
+    from datetime import date as _d
+    cfg, con = env
+    day = _d(2026, 11, 24)
+    code = con.execute("SELECT item_code FROM items LIMIT 1").fetchone()[0]
+    con.execute("INSERT INTO store_receipts (doc_no, doc_date, item_code, qty, rate, supplier_name) VALUES ('G900', ?, ?, 0, 700, 'ACME')",
+                (day.isoformat(), code))
+    con.execute("INSERT INTO store_receipts (doc_no, doc_date, item_code, qty, rate, supplier_name) VALUES ('G901', ?, ?, 5, 0, 'ACME')",
+                (day.isoformat(), code))
+    keys = {f.key for f in audit.run(con, cfg, day).findings}
+    assert any(k.startswith("qty0-G900") for k in keys)
+    assert any(k.startswith("rate0-G901") for k in keys)
+    assert not any(k.startswith("rate-G900") for k in keys)   # the qty-0 line raises no rate-jump alarm
+
+
 def test_vAF_beam_backup_matches_quality_in_stock(env):
     # AF: a sized beam IN STOCK of the same QUALITY (different contract number) counts as the backup for an
     # at-risk loom, so "no sized beam waiting" is not a false alarm. Pool statuses are configurable.
