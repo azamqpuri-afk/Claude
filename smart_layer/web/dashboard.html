@@ -767,7 +767,7 @@ function buildCharts(tab){
         plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},
           tooltip:Object.assign(tip(c),{callbacks:{
             label:function(it){ var x=mo[it.dataIndex]; var p=it.datasetIndex===0?x.a_grade:it.datasetIndex===1?x.b_pct:x.rej_pct; return it.dataset.label+": "+fmN(it.parsed.y)+" m"+(p!=null?" ("+p+"%)":""); },
-            footer:function(items){ return "Total "+fmN((mo[items[0].dataIndex]||{}).meters)+" m"; }})})},
+            footer:function(items){ return "Total "+fmN((mo[items[0].dataIndex]||{}).meters)+" m"; }}})},
         scales:{x:Object.assign({stacked:true},grid(c)),
           y:Object.assign({stacked:true,beginAtZero:true,title:{display:true,text:"meters",color:c.muted}},grid(c))}},
       plugins:[gradeLabels]});

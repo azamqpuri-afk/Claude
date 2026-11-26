@@ -504,6 +504,34 @@ def test_pilferage_finds_planted_cases(env):
     assert any(z["sizer"] == "Rehman Sizing" for z in byc["CON-42"]["by_sizer"])
 
 
+def test_v0211_dashboard_inline_scripts_are_valid_js():
+    # 0.21.1 regression guard: a brace typo in the AD chart broke the whole dashboard script, so NO data showed.
+    # Syntax-check every inline <script> in dashboard.html with node so a JS error can never ship again.
+    import os
+    import pathlib
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("node not available to syntax-check the dashboard script")
+    import smart_layer.web as webpkg
+    html = (pathlib.Path(webpkg.__file__).parent / "dashboard.html").read_text(encoding="utf-8")
+    blocks = re.findall(r"<script(?![^>]*\bsrc=)[^>]*>(.*?)</script>", html, re.S | re.I)
+    assert blocks, "no inline <script> blocks found in dashboard.html"
+    for i, b in enumerate(blocks):
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as f:
+            f.write(b)
+            path = f.name
+        try:
+            r = subprocess.run([node, "--check", path], capture_output=True, text=True)
+        finally:
+            os.unlink(path)
+        assert r.returncode == 0, f"dashboard inline <script> block {i} has a JS syntax error:\n{r.stderr.strip()[:500]}"
+
+
 def test_vAE_ui_style_persists(env):
     # AE: the chosen look & feel skin is saved for the login and returned in the payload (follows across devices).
     from smart_layer import store
