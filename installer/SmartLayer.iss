@@ -27,8 +27,17 @@ UninstallDisplayName=Smart Layer
 CloseApplications=force
 RestartApplications=no
 
+[InstallDelete]
+; Always refresh OUR OWN app files on an upgrade, never trust a stale timestamp (a hand-patched dashboard.html once
+; survived an upgrade because its mtime was newer). Delete the served web assets and the compiled package tree before
+; the copy below re-lays them down fresh. These are pure program files - the mill's own files (config.toml, the
+; data\ and output\ folders, and any installed mill mapping under mappings\) live OUTSIDE these paths and are left
+; completely untouched.
+Type: filesandordirs; Name: "{app}\smart_layer\web"
+
 [Files]
 ; The whole compiled program (Nuitka --standalone output: build\app_main.dist, exe renamed to SmartLayer.exe).
+; ignoreversion forces every file to overwrite regardless of version info or timestamp (replacesameversion behaviour).
 Source: "..\build\app_main.dist\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 ; Scripts that the scheduled tasks run (they call SmartLayer.exe, not python).
 Source: "..\installer\run_daily.cmd";     DestDir: "{app}"; Flags: ignoreversion
