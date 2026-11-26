@@ -196,6 +196,14 @@ class App:
         finally:
             con.close()
 
+    def dispatches_month(self, day=None):
+        """Item AL: this month's fabric dispatches (date, gate pass, party, quality, meters)."""
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return data.dispatches_month(con, self.cfg, day)
+        finally:
+            con.close()
+
     def month_sales(self, d0=None, d1=None, day=None, month=None, history=False):
         """Sales tile drill (#1/#28): a month's sale vouchers (the Overview month `day`, or an explicit `month`),
         optionally with the 12-month sales history for the drill's month list."""
@@ -929,7 +937,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/closing/count-review", "/api/closing/counts-saved",
                 "/api/gully", "/api/gully/sets", "/api/gully/lines", "/api/gully/quality",
                 "/api/contracts-all", "/api/contract-report",
-                "/api/feed", "/api/feed/production", "/api/fabric/history", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
+                "/api/feed", "/api/feed/production", "/api/fabric/history", "/api/fabric/dispatches", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
                 "/api/edits", "/api/edits/detail",
                 "/api/looms/efficiency", "/api/looms/days",
                 "/api/scoreboard", "/api/scoreboard/trend", "/api/scoreboard/live", "/api/sensor/episode",
@@ -1025,7 +1033,7 @@ def get_response(app, path, query, check_licence=True):
             return 200, app.changes(params.get("since", "")), "application/json", {}
         if path == "/api/reports/files":                 # saved report files for the Reports page
             return 200, app.reports_files(), "application/json", {}
-        if path in ("/api/fabric/history", "/api/finance/sales"):   # optional from/to range (#24 fabric, #1 sales)
+        if path in ("/api/fabric/history", "/api/fabric/dispatches", "/api/finance/sales"):   # optional from/to range
             try:
                 a0 = date.fromisoformat(params["from"]) if params.get("from") else None
                 a1 = date.fromisoformat(params["to"]) if params.get("to") else None
@@ -1033,6 +1041,8 @@ def get_response(app, path, query, check_licence=True):
                 return 400, {"error": "from/to must be YYYY-MM-DD"}, "application/json", {}
             if path == "/api/fabric/history":
                 return 200, app.fabric_history(a0, a1), "application/json", {}
+            if path == "/api/fabric/dispatches":                # item AL: this month's dispatch lines
+                return 200, app.dispatches_month(a1), "application/json", {}
             # sales drill (#28): a month (?month=YYYY-MM) or the Overview date (?date=), + the 12-month history
             try:
                 sday = date.fromisoformat(params["date"]) if params.get("date") else None

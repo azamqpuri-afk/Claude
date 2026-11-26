@@ -734,6 +734,22 @@ def fabric_history(con, cfg, d0=None, d1=None):
     return {"totals": totals, "rows": rows, "dispatches": lines, "from": lo, "to": hi}
 
 
+def dispatches_month(con, cfg, as_of=None):
+    """Item AL: THIS MONTH's fabric dispatches - one row per gate pass (date, gate pass, party, quality, meters),
+    with the month total. Only outward moves ('out'); returns ('in') are excluded."""
+    d1 = as_of or date.today()
+    lo = d1.replace(day=1).isoformat()
+    hi = d1.isoformat()
+    rows = [{"date": a, "doc_no": b, "party": (c or d or ""), "quality": (e or ""), "meters": round(f or 0)}
+            for a, b, c, d, e, f in con.execute("""
+                SELECT fd.dispatch_date, fd.doc_no, p.party_name, fd.deliver_to, fd.quality, fd.meters
+                FROM fabric_dispatches fd LEFT JOIN parties p ON p.party_code = fd.party_code
+                WHERE fd.dispatch_date BETWEEN ? AND ? AND fd.direction = 'out'
+                ORDER BY fd.dispatch_date DESC, fd.doc_no""", (lo, hi))]
+    total = sum(r["meters"] for r in rows)
+    return {"rows": rows, "total": total, "month": d1.strftime("%Y-%m"), "from": lo, "to": hi}
+
+
 def _cost_head(con, cfg, as_of):
     """The cost-per-metre headline (last closed month) for the Overview tile's first paint (#25). Cheap enough to
     embed; the tile taps through to /api/finance/cost for the historic table."""

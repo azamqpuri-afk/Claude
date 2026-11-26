@@ -1114,7 +1114,8 @@ function render(){
     ((D.gully&&(D.gully.yarns||D.gully.gully_kg))
       ? tile("♻️ Gully book", num(D.gully.book_kg)+' <span class="cur">kg</span>', num(D.gully.gully_kg)+" returned · tap to trace", (D.gully.book_kg>0?"accent":""), "", "gully")
       : "") +
-    tile("🚚 Dispatched", num(k.dispatched_month)+' <span class="cur">m</span>', "this month · tap for history", "", "", "dispatched");
+    tile("🚚 Dispatched", num(k.dispatched_month)+' <span class="cur">m</span>', "this month · tap for the list", "", "", "dispatched") +
+    tile("📜 Dispatch history", num(k.dispatched_avg_12m)+' <span class="cur">m/mo</span>', "last 12 months · tap for history", "", "", "dispatch-history");
   wireDrills();
   renderWeaving(); renderFinanceTiles(); renderYFTiles();
   renderFeed();
@@ -1301,7 +1302,8 @@ function drill(which){
   if(which==='receivable') return drawParties('customer','📥 Receivable — who owes us');
   if(which==='payable') return drawParties('supplier','📤 Payable — whom we owe');
   if(which==='fabric') return drawFabric();
-  if(which==='dispatched') return drawFabricHistory();
+  if(which==='dispatched') return drawDispatchMonth();           // item AL: this month's dispatch list
+  if(which==='dispatch-history') return drawFabricHistory();     // full produced/dispatched/stock history
   if(which==='yarn') return drawYarn();
   if(which==='gully') return openGullyTab();
 }
@@ -1365,6 +1367,17 @@ async function drawSales(month){
     var ms=$("#sales-month"); if(ms) ms.onchange=()=>drawSales(ms.value);
     $("#drawer-body").querySelectorAll(".clickrow").forEach(tr=>tr.onclick=()=>drawSales(tr.dataset.month));
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load sales invoices.</p>'; }
+}
+async function drawDispatchMonth(){                               // item AL: this month's dispatch lines
+  openDrawer("🚚 Dispatched this month",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see dispatches.</p>'; return; }
+  try{
+    var j=await (await fetch("api/fabric/dispatches")).json();
+    var rows=(j.rows||[]).map(r=>[dshort(r.date), esc(r.doc_no||""), esc(r.party||""), esc(r.quality||""), num(r.meters)]);
+    var head=`<div class="lkpi" style="margin-bottom:10px"><div><div class="t">This month</div><div class="v">${num(j.total)} m</div></div><div><div class="t">Gate passes</div><div class="v">${(j.rows||[]).length}</div></div></div>`;
+    $("#drawer-body").innerHTML=head
+      +(rows.length?table(["Date","Gate pass","Party","Quality","Meters"],rows,[4]):'<p class="muted">No dispatches this month.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load dispatches.</p>'; }
 }
 async function drawFabricHistory(){
   openDrawer("🚚 Fabric — produced, dispatched &amp; in stock",'<p class="muted">Loading…</p>');
