@@ -165,6 +165,37 @@ def _cost_months(con, cfg, as_of, months):
     return out
 
 
+def _tax_amount(con, accounts, side, vtypes, lo, hi):
+    """Sum a set of GL accounts' month movement on one side (item AM). Debits are amount > 0, credits amount < 0
+    (the store's sign convention). `vtypes` restricts to those voucher types (empty = all). Returns None when no
+    accounts are configured, so the UI can say 'set the accounts' instead of showing a misleading zero."""
+    accounts = [str(a) for a in (accounts or []) if str(a).strip()]
+    if not accounts:
+        return None
+    where = "account_code IN (%s) AND voucher_date >= ? AND voucher_date <= ? AND voucher_kind <> 'opening'" % ",".join("?" * len(accounts))
+    params = list(accounts) + [lo, hi]
+    vtypes = [str(v) for v in (vtypes or []) if str(v).strip()]
+    if vtypes:
+        where += " AND voucher_type IN (%s)" % ",".join("?" * len(vtypes))
+        params += vtypes
+    expr = "SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END)" if side == "cr" else "SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END)"
+    row = con.execute("SELECT %s FROM ledger_entries WHERE %s" % (expr, where), params).fetchone()
+    return round((row[0] or 0), 2)
+
+
+def _tax_totals(con, cfg, lo, hi):
+    """Item AM: a month's tax amounts from the GL accounts named in [cost] (all read-only). Further tax on sales and
+    the net sales-tax cost (output tax on sales minus input tax on purchases)."""
+    c = cfg["cost"]
+    out = _tax_amount(con, c.get("output_tax_accounts"), c.get("output_tax_side", "cr"), c.get("output_tax_vtypes"), lo, hi)
+    inp = _tax_amount(con, c.get("input_tax_accounts"), c.get("input_tax_side", "dr"), c.get("input_tax_vtypes"), lo, hi)
+    fur = _tax_amount(con, c.get("further_tax_accounts"), c.get("further_tax_side", "dr"), c.get("further_tax_vtypes"), lo, hi)
+    net = (out - inp) if (out is not None and inp is not None) else (out if inp is None else (-inp if out is None else None))
+    return {"output": out, "input": inp, "further": fur, "net": net,
+            "configured": any(v is not None for v in (out, inp, fur)),
+            "further_booked": (fur is not None and fur > 0)}
+
+
 def cost_headline(con, cfg, as_of=None, months=12):
     """The cost-per-metre headline for the Overview tile / cost report: the LAST CLOSED month (month-end posted)
     with its cost/m without and with sizing and the per-head breakdown, plus the average, lowest and highest over
@@ -178,9 +209,27 @@ def cost_headline(con, cfg, as_of=None, months=12):
     ws = [d["with_sizing"] for d in closed if d["with_sizing"] is not None]
     lo = min(closed, key=lambda d: d["no_sizing"] if d["no_sizing"] is not None else 9e9)
     hi = max(closed, key=lambda d: d["no_sizing"] if d["no_sizing"] is not None else -9e9)
+    # item AM: TOTAL Rs beside the per-metre figures, plus a taxes block and a grand total incl sizing and taxes.
+    import calendar as _cal
+    w = last["woven"] or 0                                 # metres woven in the headline (last closed) month
+    b = last["buckets"]
+    ns_total = round(b["store"] + b["payroll"] + b["power"] + b["other"], 2)
+    sizing_total = round(b["sizing"], 2)
+    y, mo = (int(x) for x in last["month"].split("-"))
+    mlo, mhi = f"{last['month']}-01", date(y, mo, _cal.monthrange(y, mo)[1]).isoformat()
+    taxes = _tax_totals(con, cfg, mlo, mhi)
+    extra = (taxes["further"] or 0) + (taxes["net"] or 0)   # only the configured tax amounts add to the grand total
+    grand_total = round(ns_total + sizing_total + extra, 2)
+    per = (lambda v: round(v / w, 2) if (w and v is not None) else None)
     return {"closed": True, "month": last["month"], "no_sizing": last["no_sizing"], "with_sizing": last["with_sizing"],
             "heads": {"store": last["store"], "payroll": last["payroll"], "power": last["power"],
                       "other": last["other"], "sizing": last["sizing"]},
+            "woven_m": round(w),
+            "totals": {"store": round(b["store"], 2), "payroll": round(b["payroll"], 2), "power": round(b["power"], 2),
+                       "other": round(b["other"], 2), "no_sizing": ns_total, "sizing": sizing_total,
+                       "grand": grand_total},
+            "taxes": {**taxes, "further_per": per(taxes["further"]), "net_per": per(taxes["net"])},
+            "grand_per_m": per(grand_total),
             "closed_months": len(closed),
             "avg_no_sizing": round(sum(ns) / len(ns), 2) if ns else None,
             "avg_with_sizing": round(sum(ws) / len(ws), 2) if ws else None,

@@ -271,6 +271,12 @@
   .cwrap{position:relative;height:230px;padding:4px 10px 12px}
   /* item AG: on a narrow screen the monthly-grade bars scroll sideways instead of squeezing to nothing */
   .cwrap-scroll{overflow-x:auto;overflow-y:hidden} .cwrap-scroll .cinner{position:relative;height:100%;min-width:640px}
+  /* item AM: cost-per-metre breakdown table (total Rs beside Rs/m) */
+  .brk{width:100%;border-collapse:collapse;margin:4px 0 14px;font-size:13.5px}
+  .brk thead td{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--muted);padding:2px 8px}
+  .brk td{padding:6px 8px;border-bottom:1px solid var(--line)} .brk td.r{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .brk tr.sub td{font-weight:700} .brk tr.sub2 td{font-size:11.5px;color:var(--muted);padding-top:2px;border-bottom:1px solid var(--line)}
+  .brk tr.grand td{font-weight:800;border-top:2px solid var(--line);border-bottom:0}
   .cnote{color:var(--muted);font-size:13px;padding:30px 16px;text-align:center}
   .pad{padding:4px 12px 14px}
   /* tables */
@@ -1291,7 +1297,7 @@ function costTile(){
   if(!c.closed) return tile("🧮 Cost / metre", "—", (c.latest_open? (c.latest_open+" · month-end pending"):"needs [cost] heads")+" · tap", "", "", "cost");
   var cur=c.currency||"Rs";
   return tile("🧮 Cost / metre ("+esc(c.month)+")", cur+" "+c.no_sizing,
-    cur+" "+c.with_sizing+" with sizing · tap for history", "", "", "cost");
+    cur+" "+c.with_sizing+" with sizing"+(c.grand_per_m!=null?" · "+cur+" "+c.grand_per_m+" incl. taxes":"")+" · tap", "", "", "cost");
 }
 function drill(which){
   if(AMT_HIDE_ALL && FINANCE_DRILLS.indexOf(which)>=0){ toast("Amounts hidden — tap 👁 to show"); return; }   // item AN
@@ -1332,11 +1338,33 @@ async function drawCost(){
     var head="";
     if(h.closed){
       var cur=h.currency||"Rs";
-      head=`<div class="lkpi" style="margin-bottom:10px"><div><div class="t">${esc(h.month)} · no sizing</div><div class="v">${cur} ${h.no_sizing}</div></div>`+
-        `<div><div class="t">with sizing</div><div class="v">${cur} ${h.with_sizing}</div></div>`+
-        `<div><div class="t">avg (${h.closed_months} closed mo)</div><div class="v">${cur} ${h.avg_no_sizing}</div></div>`+
-        `<div><div class="t">low / high</div><div class="v" style="font-size:14px">${h.low.no_sizing} (${esc(h.low.month).slice(5)}) · ${h.high.no_sizing} (${esc(h.high.month).slice(5)})</div></div></div>`+
-        `<p class="muted" style="margin:0 0 8px;font-size:12px">Headline is the last CLOSED month (month-end posted). Heads: store ${h.heads.store}, payroll ${h.heads.payroll}, power ${h.heads.power}, other ${h.heads.other}, sizing ${h.heads.sizing} ${cur}/m.</p>`;
+      var t=h.totals||{}, hd=h.heads||{}, tx=h.taxes||{};
+      var rsm=(v)=> v==null?"—":(cur+" "+num(v));          // total rupees
+      var pm =(v)=> v==null?"—":(cur+" "+v+"/m");          // per metre
+      head=`<div class="lkpi" style="margin-bottom:10px"><div><div class="t">${esc(h.month)} · no sizing</div><div class="v">${cur} ${h.no_sizing}/m</div></div>`+
+        `<div><div class="t">with sizing</div><div class="v">${cur} ${h.with_sizing}/m</div></div>`+
+        `<div><div class="t">incl. taxes</div><div class="v">${pm(h.grand_per_m)}</div></div>`+
+        `<div><div class="t">avg (${h.closed_months} closed mo)</div><div class="v">${cur} ${h.avg_no_sizing}/m</div></div></div>`;
+      // item AM: the full breakdown - total Rs beside Rs/m, in order, with the taxes block and the grand total
+      var row=(lbl,tot,per,cls)=>`<tr${cls?` class="${cls}"`:""}><td>${lbl}</td><td class="r">${tot}</td><td class="r">${per}</td></tr>`;
+      var brk=`<table class="brk"><thead><tr><td></td><td class="r">Total</td><td class="r">per metre</td></tr></thead><tbody>`;
+      brk+=row(`Meters woven (${esc(h.month)})`, num(h.woven_m)+" m", "");
+      brk+=row("Store", rsm(t.store), pm(hd.store));
+      brk+=row("Payroll", rsm(t.payroll), pm(hd.payroll));
+      brk+=row("Power", rsm(t.power), pm(hd.power));
+      brk+=row("Other", rsm(t.other), pm(hd.other));
+      brk+=row("Total (excl. sizing)", rsm(t.no_sizing), pm(h.no_sizing), "sub");
+      brk+=row("Sizing", rsm(t.sizing), pm(hd.sizing));
+      if(tx.configured){
+        brk+=row("Further tax on sales", tx.further==null?"not set":(tx.further_booked?rsm(tx.further):"not booked yet"), tx.further_per==null?"—":pm(tx.further_per));
+        brk+=row("Net sales tax (output − input)", rsm(tx.net), pm(tx.net_per));
+        brk+=`<tr class="sub2"><td colspan="3">output ${rsm(tx.output)} · input ${rsm(tx.input)}</td></tr>`;
+      } else {
+        brk+=`<tr><td colspan="3" class="muted">Taxes: set [cost] output_tax_accounts / input_tax_accounts / further_tax_accounts</td></tr>`;
+      }
+      brk+=row("Grand total (incl. sizing &amp; taxes)", rsm(t.grand), pm(h.grand_per_m), "grand");
+      brk+=`</tbody></table>`;
+      head+=`<p class="muted" style="margin:0 0 6px;font-size:12px">Headline is the last CLOSED month (month-end posted). Totals below are that month.</p>`+brk;
     } else {
       head=`<p class="muted" style="margin:0 0 8px">No closed month yet${h.latest_open?(" (latest "+esc(h.latest_open)+" has month-end entries pending)"):""}.</p>`;
     }
