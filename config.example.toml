@@ -50,9 +50,8 @@ colour_scheme = "teal"  # default palette: teal | indigo | copper | madder | oli
 # if these are missing, Auto just follows the device's light/dark setting. (Decimal degrees; east/north positive.)
 # latitude = 31.52         # e.g. Faisalabad; set your mill's own coordinates
 # longitude = 73.07
-# Hide-amount eye (item AJ): tiles whose amounts can be hidden on screen (per device). Default is receivable only;
-# add more tile keys to taste, e.g. ["receivable", "payable", "cash", "banks", "sales"].
-hideable_tiles = ["receivable"]
+# Hide-amount eye (item AN): every money figure has an eye, and a master 👁 in the header hides/shows all finance
+# numbers at once (remembered per device). No config needed — it covers all money tiles and the Finance tab.
 
 [reports]
 tracked_issue_days = 60

@@ -559,7 +559,7 @@ def test_vAE_ui_theme_and_overview_payload(env):
     for v, want in (("dark", "dark"), ("light", "light"), ("junk", "auto")):
         store.set_state(con, "ui_theme", v)
         assert web_data.build(con, cfg)["ui_theme"] == want
-    for key in ("latitude", "longitude", "hideable_tiles"):
+    for key in ("latitude", "longitude"):
         assert key in d["dashboard"]                               # present (value may be None when unset)
 
 

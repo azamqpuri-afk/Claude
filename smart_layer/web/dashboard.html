@@ -226,6 +226,9 @@
   /* item AJ: hide-amount eye in a tile's corner (banking-app style) */
   .tile .eye{position:absolute;top:9px;right:10px;z-index:2;border:0;background:transparent;cursor:pointer;font-size:15px;line-height:1;opacity:.55;padding:3px;border-radius:8px}
   .tile .eye:hover{opacity:1;background:var(--teal-soft)}
+  /* item AN: when amounts are hidden, blur the Finance tab's figure tables/lists too (tiles mask to Rs ••••••) */
+  :root[data-hideamt] #fin-parties,:root[data-hideamt] #fin-ledger,:root[data-hideamt] #fin-daily-tiles,
+  :root[data-hideamt] #fin-daily-sum,:root[data-hideamt] #fin-daily-entries{filter:blur(7px);pointer-events:none;user-select:none}
   .tile .lbl{font-size:12.5px;color:var(--muted);font-weight:600;display:flex;gap:7px;align-items:center}
   .tile .val{font-size:23px;font-weight:750;letter-spacing:-.5px;margin-top:9px}
   .tile .val .cur{font-size:13px;color:var(--muted);font-weight:600}
@@ -468,12 +471,11 @@
     <div class="mill"><b id="millName">—</b><span id="asof">loading…</span></div>
     <input type="date" id="day" title="View the mill as of this date">
     <button class="hbtn" id="askBtn" aria-expanded="false">💬 Ask</button>
-    <button class="hbtn" id="schemeBtn" title="Colour scheme" aria-expanded="false">🎨</button>
+    <button class="hbtn" id="amtBtn" title="Hide amounts" aria-pressed="false">👁</button>
     <button class="hbtn" id="styleBtn" title="Look &amp; feel" aria-expanded="false">✨</button>
     <button class="hbtn" id="licBtn" title="Licence">🔑</button>
     <button class="hbtn" id="themeBtn">🌙 <span>Dark</span></button>
   </header>
-  <div class="schemeMenu" id="schemeMenu"><h4>Colour scheme</h4></div>
   <div class="schemeMenu" id="styleMenu"><h4>Look &amp; feel</h4></div>
   <div class="banner" id="licBanner"></div>
 
@@ -844,42 +846,8 @@ var themeMode="auto";                                      // auto | light | dar
   document.addEventListener("visibilitychange", function(){ if(!document.hidden) window.refreshAutoTheme(); });
 })();
 
-/* ---------- colour schemes (#23): 6 mill-cloth palettes + picker, remembered per browser ---------- */
-// [primary, deep/header] — the soft tint is derived from the primary so it reads in light and dark alike.
-// Semantic colours (red/amber/green/blue) are left untouched so warnings stay legible in every scheme.
-var SCHEMES={
-  teal:   {name:"Teal Loom",      primary:"#0f6e5c", deep:"#0f2a24"},
-  indigo: {name:"Indigo Denim",   primary:"#24408e", deep:"#16244f"},
-  copper: {name:"Cotton & Copper",primary:"#b8622f", deep:"#24272a"},
-  madder: {name:"Madder Red",     primary:"#9b2d2d", deep:"#3a1414"},
-  olive:  {name:"Olive Khaddar",  primary:"#55632a", deep:"#262b16"},
-  navy:   {name:"Navy & Gold",    primary:"#1d2c4f", deep:"#b8963c"},
-};
-var curScheme="teal";
-function applyScheme(key, remember){
-  var s=SCHEMES[key]||SCHEMES.teal; curScheme=SCHEMES[key]?key:"teal";
-  var root=document.documentElement;
-  if(curScheme==="teal"){                                   // the default palette lives in the stylesheet — clear overrides
-    ["--teal","--teal-deep","--teal-soft"].forEach(v=>root.style.removeProperty(v));
-  } else {
-    root.style.setProperty("--teal", s.primary);
-    root.style.setProperty("--teal-deep", s.deep);
-    root.style.setProperty("--teal-soft", "color-mix(in srgb, "+s.primary+" 14%, var(--panel))");
-  }
-  if(remember){ try{localStorage.setItem("sl-scheme",curScheme);}catch(e){} }
-  var mb=$("#schemeMenu"); if(mb) mb.querySelectorAll(".schemeItem").forEach(b=>b.setAttribute("aria-selected", b.dataset.k===curScheme));
-  if(typeof rebuildCharts==="function" && window.D) rebuildCharts();   // repaint charts in the new accent
-}
-(function(){
-  var menu=$("#schemeMenu"), btn=$("#schemeBtn"); if(!menu||!btn) return;
-  menu.innerHTML='<h4>Colour scheme</h4>'+Object.keys(SCHEMES).map(function(k){var s=SCHEMES[k];
-    return '<button class="schemeItem" data-k="'+k+'"><span class="schemeDot" style="background:linear-gradient(90deg,'+s.primary+' 60%,'+s.deep+' 60%)"></span>'+esc(s.name)+'</button>';}).join("");
-  menu.querySelectorAll(".schemeItem").forEach(b=>b.onclick=()=>{ applyScheme(b.dataset.k, true); menu.classList.remove("open"); btn.setAttribute("aria-expanded","false"); });
-  btn.onclick=(e)=>{ e.stopPropagation(); var o=!menu.classList.contains("open"); menu.classList.toggle("open",o); btn.setAttribute("aria-expanded",o); };
-  document.addEventListener("click",(e)=>{ if(!menu.contains(e.target)&&e.target!==btn) menu.classList.remove("open"); });
-  var saved=null; try{saved=localStorage.getItem("sl-scheme");}catch(e){}
-  applyScheme(saved||"teal", false);                         // config default is applied later, once data loads, if nothing saved
-})();
+/* item AK: the old "Colour scheme" picker was removed - the only visual choice now is Look & feel (Classic / iOS /
+   Samsung). Any previously saved sl-scheme value is ignored. */
 
 /* ---------- item AE: look & feel skin (Classic / iOS / Android), remembered per device + per login ---------- */
 var STYLES={ classic:{name:"Classic"}, ios:{name:"iOS · Liquid Glass"}, samsung:{name:"Samsung · One UI"} };
@@ -1033,23 +1001,34 @@ function tile(lbl, val, meta, cls, asof, drill){
   var m = String(lbl).match(/^(\S+)\s+([\s\S]*)$/);              // split a leading emoji token off the label
   var head = (m && /[^\x00-\x7F]/.test(m[1]))
     ? `<span class="ti ti-${tileGroup(drill,lbl)}">${m[1]}</span>${m[2]}` : lbl;
-  // item AJ: an eye to hide this tile's amounts, so the dashboard can be shown without revealing e.g. receivables
-  var canHide = drill && window.HIDEABLE && HIDEABLE.indexOf(drill)>=0;
-  var hidden = canHide && AMT_HIDDEN.has(drill);
-  if(hidden){ val="Rs ••••••"; if(meta) meta=String(meta).replace(/\d[\d.,]*/g, "••••••"); }
-  var eye = canHide ? `<button class="eye" data-eye="${esc(drill)}" title="${hidden?"Show amounts":"Hide amounts"}" aria-label="${hidden?"Show amounts":"Hide amounts"}">${hidden?"🙈":"👁"}</button>` : "";
+  // item AN: any money tile (value shown as "Rs …") carries an eye and is masked when amounts are hidden
+  var isMoney = isMoneyVal(val);
+  var hidden = isMoney && AMT_HIDE_ALL;
+  if(hidden){ val="Rs ••••••"; if(meta) meta=maskMeta(meta); }
+  var eye = isMoney ? `<button class="eye" title="${hidden?"Show amounts":"Hide amounts"}" aria-label="${hidden?"Show amounts":"Hide amounts"}">${hidden?"🙈":"👁"}</button>` : "";
   return `<div class="tile ${cls||""}${click}">${eye}<div class="lbl">${head}${chev}</div><div class="val">${val}</div>${meta?`<div class="meta">${meta}</div>`:""}${asof?`<div class="asof-tile">🕒 ${esc(asof)}</div>`:""}</div>`;
 }
 var ANIM=true, SHOW_AMOUNTS=true, REFRESH_SECS=300;   // from [dashboard] config, set on each data load
-var HIDEABLE=["receivable"], AMT_HIDDEN=new Set();    // item AJ: which tiles can hide amounts, and which are hidden now
-try{ AMT_HIDDEN=new Set(JSON.parse(localStorage.getItem("sl-hidden")||"[]")); }catch(e){}
-document.addEventListener("click", function(e){        // the eye toggles a tile's amounts (captured before the tile's own drill click)
-  var eye = e.target.closest && e.target.closest("[data-eye]"); if(!eye) return;
-  e.stopPropagation(); e.preventDefault();
-  var k=eye.getAttribute("data-eye");
-  if(AMT_HIDDEN.has(k)) AMT_HIDDEN.delete(k); else AMT_HIDDEN.add(k);
-  try{ localStorage.setItem("sl-hidden", JSON.stringify(Array.from(AMT_HIDDEN))); }catch(e2){}
-  render();                                            // render() self-guards on D; re-masks the affected tile(s)
+// item AN: hide every finance figure at once (for showing the dashboard without revealing money). One state for the
+// whole dashboard, remembered per device; every money tile shows an eye, plus a master eye in the header. Visible by
+// default. (This supersedes AJ's per-tile hiding.)
+var AMT_HIDE_ALL=false;
+try{ AMT_HIDE_ALL = localStorage.getItem("sl-hideamt")==="1"; }catch(e){}
+var FINANCE_DRILLS=["cash","banks","sales","receivable","payable","cost","taxes","avgsales"];   // drills blocked while hidden
+function isMoneyVal(v){ return /^\s*(Rs|₨|PKR|US\$|\$)\s/.test(String(v)); }
+function maskMeta(m){ return String(m).replace(/\d[\d.,]*/g, "••••••"); }
+function syncHideAmtUI(){
+  var r=document.documentElement; if(AMT_HIDE_ALL) r.setAttribute("data-hideamt","1"); else r.removeAttribute("data-hideamt");
+  var mb=$("#amtBtn"); if(mb){ mb.textContent = AMT_HIDE_ALL ? "🙈" : "👁"; mb.title = AMT_HIDE_ALL ? "Show amounts" : "Hide amounts"; mb.setAttribute("aria-pressed", AMT_HIDE_ALL); }
+}
+function toggleHideAmt(){
+  AMT_HIDE_ALL=!AMT_HIDE_ALL;
+  try{ localStorage.setItem("sl-hideamt", AMT_HIDE_ALL?"1":"0"); }catch(e){}
+  syncHideAmtUI(); render();                            // render() self-guards on D and re-masks every money figure
+}
+document.addEventListener("click", function(e){        // any tile eye, or the header master eye, toggles all finance amounts
+  var eye = e.target.closest && e.target.closest(".eye,#amtBtn"); if(!eye) return;
+  e.stopPropagation(); e.preventDefault(); toggleHideAmt();
 }, true);
 function render(){
   if(!D) return;
@@ -1060,11 +1039,8 @@ function render(){
   if(dc.latitude!=null && dc.longitude!=null && isFinite(+dc.latitude) && isFinite(+dc.longitude)) MILL_GEO={lat:+dc.latitude, lon:+dc.longitude};
   if(D.ui_theme){ var _lt=null; try{_lt=localStorage.getItem("sl-theme");}catch(e){} if(!_lt && D.ui_theme!==themeMode && typeof applyTheme==="function") applyTheme(D.ui_theme,false); }
   if(typeof refreshAutoTheme==="function") refreshAutoTheme();   // recompute now that the location (and saved theme) are known
-  if(dc.hideable_tiles && dc.hideable_tiles.length) HIDEABLE = dc.hideable_tiles;   // item AJ: which tiles get the hide-amount eye
+  syncHideAmtUI();                                               // item AN: reflect the saved hide-amounts state on each render
   REFRESH_SECS = Math.max(30, parseInt(dc.refresh_seconds)||300);
-  // colour scheme: the browser's saved choice wins; otherwise the mill's [dashboard] colour_scheme default
-  var savedScheme=null; try{savedScheme=localStorage.getItem("sl-scheme");}catch(e){}
-  if(!savedScheme && dc.colour_scheme && SCHEMES[dc.colour_scheme] && dc.colour_scheme!==curScheme) applyScheme(dc.colour_scheme, false);
   $("#millName").textContent = D.company || "Mill";
   $("#subtitle").textContent = "by Azam Puri";
   var te=$("#tab-edits"); if(te) te.style.display = (D.edits_installed && !STATIC_DATA) ? "" : "none";   // Edits tab only when the ERP change-history layer is present
@@ -1317,7 +1293,7 @@ function costTile(){
     cur+" "+c.with_sizing+" with sizing · tap for history", "", "", "cost");
 }
 function drill(which){
-  if(window.AMT_HIDDEN && AMT_HIDDEN.has(which)){ toast("Amounts hidden — tap 👁 to show"); return; }   // item AJ
+  if(AMT_HIDE_ALL && FINANCE_DRILLS.indexOf(which)>=0){ toast("Amounts hidden — tap 👁 to show"); return; }   // item AN
   if(which==='cash') return drawCash();
   if(which==='cost') return drawCost();
   if(which==='banks') return drawBanks();

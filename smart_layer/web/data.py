@@ -429,7 +429,7 @@ def build(con, cfg, as_of=None):
         "edits_installed": _edits_installed(con),        # show the Edits tab only when the ERP change-history layer is present
         "purchasing_installed": _purchasing_installed(con),  # show the Indents & POs view only when those entities are mapped
         "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound",
-                                                            "colour_scheme", "latitude", "longitude", "hideable_tiles")},
+                                                            "latitude", "longitude")},
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "push_failures": _push_failures(con),            # item B1: alerts the outbox could not deliver in the last 24h
         "mapping_warning": _mapping_warning(cfg),         # item S: mill ERP mapping older than the app
