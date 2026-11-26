@@ -490,7 +490,7 @@
     <div class="mill"><b id="millName">—</b><span id="asof">loading…</span></div>
     <input type="date" id="day" title="View the mill as of this date">
     <button class="hbtn" id="askBtn" aria-expanded="false">💬 Ask</button>
-    <button class="hbtn" id="amtBtn" title="Hide amounts" aria-pressed="false">👁</button>
+    <button class="hbtn" id="amtBtn" title="Hide all amounts" aria-pressed="false">👁 Hide amounts</button>
     <button class="hbtn" id="styleBtn" title="Look &amp; feel" aria-expanded="false">✨</button>
     <button class="hbtn" id="licBtn" title="Licence">🔑</button>
     <button class="hbtn" id="themeBtn">🌙 <span>Dark</span></button>
@@ -1020,34 +1020,43 @@ function tile(lbl, val, meta, cls, asof, drill){
   var m = String(lbl).match(/^(\S+)\s+([\s\S]*)$/);              // split a leading emoji token off the label
   var head = (m && /[^\x00-\x7F]/.test(m[1]))
     ? `<span class="ti ti-${tileGroup(drill,lbl)}">${m[1]}</span>${m[2]}` : lbl;
-  // item AN: any money tile (value shown as "Rs …") carries an eye and is masked when amounts are hidden
+  // item AN: any money tile (value shown as "Rs …") carries its OWN eye and is masked when that tile is hidden
   var isMoney = isMoneyVal(val);
-  var hidden = isMoney && AMT_HIDE_ALL;
+  var akey = amtKey(drill,lbl);
+  var hidden = isMoney && tileHidden(akey);
   if(hidden){ val="Rs ••••••"; if(meta) meta=maskMeta(meta); }
-  var eye = isMoney ? `<button class="eye" title="${hidden?"Show amounts":"Hide amounts"}" aria-label="${hidden?"Show amounts":"Hide amounts"}">${hidden?"🙈":"👁"}</button>` : "";
+  var eye = isMoney ? `<button class="eye" data-eye="${esc(akey)}" title="${hidden?"Show amount":"Hide amount"}" aria-label="${hidden?"Show amount":"Hide amount"}">${hidden?"🙈":"👁"}</button>` : "";
   return `<div class="tile ${cls||""}${click}">${eye}<div class="lbl">${head}${chev}</div><div class="val">${val}</div>${meta?`<div class="meta">${meta}</div>`:""}${asof?`<div class="asof-tile">🕒 ${esc(asof)}</div>`:""}</div>`;
 }
 var ANIM=true, SHOW_AMOUNTS=true, REFRESH_SECS=300;   // from [dashboard] config, set on each data load
-// item AN: hide every finance figure at once (for showing the dashboard without revealing money). One state for the
-// whole dashboard, remembered per device; every money tile shows an eye, plus a master eye in the header. Visible by
-// default. (This supersedes AJ's per-tile hiding.)
-var AMT_HIDE_ALL=false;
+// item AN: hide finance amounts. Each money tile has its OWN eye (masks only that tile); the header master eye
+// hides or shows ALL money at once. Both visible by default and remembered per device (sl-hideamt + sl-hide-tiles).
+var AMT_HIDE_ALL=false, AMT_HIDDEN=new Set();
 try{ AMT_HIDE_ALL = localStorage.getItem("sl-hideamt")==="1"; }catch(e){}
-var FINANCE_DRILLS=["cash","banks","sales","receivable","payable","cost","taxes","avgsales"];   // drills blocked while hidden
+try{ AMT_HIDDEN = new Set(JSON.parse(localStorage.getItem("sl-hide-tiles")||"[]")); }catch(e){}
 function isMoneyVal(v){ return /^\s*(Rs|₨|PKR|US\$|\$)\s/.test(String(v)); }
 function maskMeta(m){ return String(m).replace(/\d[\d.,]*/g, "••••••"); }
+function amtKey(drill,lbl){ return drill || ("t-"+String(lbl).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"")); }
+function tileHidden(key){ return AMT_HIDE_ALL || AMT_HIDDEN.has(key); }   // a tile is hidden by "hide all" OR its own eye
+function anyHidden(){ return AMT_HIDE_ALL || AMT_HIDDEN.size>0; }
+function saveHidden(){ try{ localStorage.setItem("sl-hideamt", AMT_HIDE_ALL?"1":"0"); localStorage.setItem("sl-hide-tiles", JSON.stringify(Array.from(AMT_HIDDEN))); }catch(e){} }
 function syncHideAmtUI(){
   var r=document.documentElement; if(AMT_HIDE_ALL) r.setAttribute("data-hideamt","1"); else r.removeAttribute("data-hideamt");
-  var mb=$("#amtBtn"); if(mb){ mb.textContent = AMT_HIDE_ALL ? "🙈" : "👁"; mb.title = AMT_HIDE_ALL ? "Show amounts" : "Hide amounts"; mb.setAttribute("aria-pressed", AMT_HIDE_ALL); }
+  var mb=$("#amtBtn"); if(mb){ var on=anyHidden(); mb.textContent = on ? "🙈 Show amounts" : "👁 Hide amounts"; mb.title = on ? "Show all amounts" : "Hide all amounts"; mb.setAttribute("aria-pressed", on); }
 }
-function toggleHideAmt(){
-  AMT_HIDE_ALL=!AMT_HIDE_ALL;
-  try{ localStorage.setItem("sl-hideamt", AMT_HIDE_ALL?"1":"0"); }catch(e){}
-  syncHideAmtUI(); render();                            // render() self-guards on D and re-masks every money figure
+function toggleTileAmt(key){                            // per-tile eye: mask ONLY this tile
+  if(AMT_HIDDEN.has(key)) AMT_HIDDEN.delete(key); else AMT_HIDDEN.add(key);
+  saveHidden(); syncHideAmtUI(); render();
 }
-document.addEventListener("click", function(e){        // any tile eye, or the header master eye, toggles all finance amounts
-  var eye = e.target.closest && e.target.closest(".eye,#amtBtn"); if(!eye) return;
-  e.stopPropagation(); e.preventDefault(); toggleHideAmt();
+function toggleHideAll(){                               // master eye: hide everything, or show everything (and clear per-tile)
+  if(anyHidden()){ AMT_HIDE_ALL=false; AMT_HIDDEN.clear(); } else { AMT_HIDE_ALL=true; }
+  saveHidden(); syncHideAmtUI(); render();
+}
+document.addEventListener("click", function(e){        // the header master eye hides/shows all; a tile eye masks its own tile
+  var master = e.target.closest && e.target.closest("#amtBtn");
+  if(master){ e.stopPropagation(); e.preventDefault(); toggleHideAll(); return; }
+  var eye = e.target.closest && e.target.closest(".eye[data-eye]");
+  if(eye){ e.stopPropagation(); e.preventDefault(); toggleTileAmt(eye.getAttribute("data-eye")); }
 }, true);
 function render(){
   if(!D) return;
@@ -1314,7 +1323,7 @@ function costTile(){
     cur+" "+c.with_sizing+" with sizing"+(c.grand_per_m!=null?" · "+cur+" "+c.grand_per_m+" incl. taxes":"")+" · tap", "", "", "cost");
 }
 function drill(which){
-  if(AMT_HIDE_ALL && FINANCE_DRILLS.indexOf(which)>=0){ toast("Amounts hidden — tap 👁 to show"); return; }   // item AN
+  if(tileHidden(which)){ toast("Amounts hidden — tap 👁 to show"); return; }   // item AN: block the drill only for a hidden tile
   if(which==='cash') return drawCash();
   if(which==='cost') return drawCost();
   if(which==='banks') return drawBanks();
