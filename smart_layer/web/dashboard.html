@@ -134,14 +134,63 @@
   :root[data-style="samsung"] .card,:root[data-style="samsung"] .tile,:root[data-style="samsung"] .plist,
   :root[data-style="samsung"] .lkpi,:root[data-style="samsung"] .alert{
     background:var(--panel);border:1px solid var(--card-border);box-shadow:none }
-  :root[data-style="samsung"] header{ padding-top:7vh }
+  :root[data-style="samsung"] header{ padding-top:16px }
+  :root[data-style="samsung"][data-tab="overview"] header{ padding-top:22vh }    /* One UI: a tall, reachable home header, on Overview only */
   :root[data-style="samsung"] .brand h1{ font-size:clamp(1.5rem,5.5vw,2.3rem);letter-spacing:-.3px;line-height:1.1 }
   :root[data-style="samsung"] .hd h3{ color:var(--teal);font-weight:800 }
   :root[data-style="samsung"] .sec{ color:var(--teal);font-weight:800 }
-  /* Samsung tabs: a flat, full-width bottom-nav style bar; active tab bold in the accent colour */
-  :root[data-style="samsung"] .tabs{ border-top:1px solid var(--sep);border-bottom:1px solid var(--sep);gap:0;padding:2px 0 }
-  :root[data-style="samsung"] .tabs button{ flex:1 1 auto;text-align:center;border-bottom:0;margin-bottom:0;color:var(--muted);font-weight:600 }
-  :root[data-style="samsung"] .tabs button[aria-selected=true]{ color:var(--teal);font-weight:800;border-bottom:0 }
+  /* Samsung tabs: a filled accent PILL for the selected tab on a tonal track (One UI segmented control) */
+  :root[data-style="samsung"] .tabs{ border:0;background:#e6e6e6;border-radius:12px;padding:4px;gap:3px;margin:8px 0 18px }
+  :root[data-style="samsung"] .tabs button{ border-bottom:0;margin-bottom:0;border-radius:9px;padding:8px 14px;color:var(--ink);font-weight:600 }
+  :root[data-style="samsung"] .tabs button[aria-selected=true]{ background:var(--teal);color:#fff;font-weight:700 }
+  @media (prefers-color-scheme: dark){ :root[data-style="samsung"]:not([data-theme="light"]) .tabs{ background:#262626 } }
+  :root[data-theme="dark"][data-style="samsung"] .tabs{ background:#262626 }
+
+  /* ===== item AE: coloured UI elements shared by the iOS & Samsung skins (Classic untouched) ===== */
+  /* each tile's emoji in a tinted chip - circle (Samsung) or rounded square (iOS); tint set by the tile's group */
+  :root[data-style="ios"] .ti,:root[data-style="samsung"] .ti{ display:inline-flex;align-items:center;justify-content:center;
+    width:34px;height:34px;border-radius:50%;font-size:17px;line-height:1;flex:0 0 auto }
+  :root[data-style="ios"] .ti{ width:30px;height:30px;border-radius:8px }
+  :root[data-style="ios"] .ti-accent,:root[data-style="samsung"] .ti-accent{ background:color-mix(in srgb,var(--teal) 15%,transparent) }
+  :root[data-style="ios"] .ti-warm,:root[data-style="samsung"] .ti-warm{ background:color-mix(in srgb,var(--amber) 16%,transparent) }
+  :root[data-style="ios"] .ti-ok,:root[data-style="samsung"] .ti-ok{ background:color-mix(in srgb,var(--ok) 16%,transparent) }
+  /* keep the accent (highlight) tile filled in the skins - the flat-card rule above would otherwise blank it */
+  :root[data-style="ios"] .tile.accent,:root[data-style="samsung"] .tile.accent{ background:linear-gradient(160deg,var(--teal-deep),var(--teal));color:#fff;border:0 }
+  :root[data-style="ios"] .tile.accent .ti,:root[data-style="samsung"] .tile.accent .ti{ background:rgba(255,255,255,.2) }
+  /* needs-attention + read-list rows: a severity circle (iOS: rounded square) with a white glyph */
+  :root[data-style="ios"] .alert,:root[data-style="samsung"] .alert{ border-left-width:1px }
+  :root[data-style="ios"] .alert::before,:root[data-style="samsung"] .alert::before{ content:"";flex:0 0 auto;
+    width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;
+    font-weight:800;font-size:16px;background:var(--muted) }
+  :root[data-style="ios"] .alert::before{ width:30px;height:30px;border-radius:8px }
+  :root[data-style="ios"] .alert.ACTION::before,:root[data-style="samsung"] .alert.ACTION::before{ content:"!";background:var(--red) }
+  :root[data-style="ios"] .alert.CONFIRMED::before,:root[data-style="samsung"] .alert.CONFIRMED::before{ content:"i";background:var(--teal) }
+  :root[data-style="ios"] .alert.WATCH::before,:root[data-style="samsung"] .alert.WATCH::before{ content:"!";background:var(--amber) }
+  :root[data-style="ios"] .alert.INFO::before,:root[data-style="samsung"] .alert.INFO::before{ content:"✓";background:var(--ok) }
+  /* switches / checkboxes take the accent colour */
+  :root[data-style="ios"] input[type=checkbox],:root[data-style="samsung"] input[type=checkbox]{ accent-color:var(--teal);width:16px;height:16px }
+  /* Needs-attention: all rows in ONE grouped card, each a 2-line row (title + muted detail), compact round button */
+  :root[data-style="ios"] .strip:not(.ok-strip),:root[data-style="samsung"] .strip:not(.ok-strip){
+    background:var(--panel);border:1px solid var(--card-border);border-radius:var(--radius);
+    box-shadow:var(--shadow),var(--card-inset);gap:0;padding:2px 2px;overflow:hidden }
+  :root[data-style="ios"] .strip:not(.ok-strip){ -webkit-backdrop-filter:var(--card-blur);backdrop-filter:var(--card-blur) }
+  :root[data-style="ios"] .alert,:root[data-style="samsung"] .alert{ position:relative;background:transparent;border:0;
+    box-shadow:none;border-radius:0;min-height:56px;padding:9px 12px;gap:12px;align-items:center }
+  :root[data-style="ios"] .alert .atext,:root[data-style="samsung"] .alert .atext{ display:flex;flex-direction:column;gap:2px;min-width:0;flex:1 1 auto }
+  :root[data-style="ios"] .alert .t,:root[data-style="samsung"] .alert .t{ font-size:.95rem;font-weight:600;line-height:1.25 }
+  :root[data-style="ios"] .alert .d,:root[data-style="samsung"] .alert .d{ font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis }
+  :root[data-style="ios"] .alert .d::before,:root[data-style="samsung"] .alert .d::before{ content:"" }
+  :root[data-style="ios"] .alert .readon,:root[data-style="samsung"] .alert .readon{ margin-left:0 }
+  :root[data-style="ios"] .alert .ackbtn,:root[data-style="samsung"] .alert .ackbtn,
+  :root[data-style="ios"] .alert .unack,:root[data-style="samsung"] .alert .unack{
+    margin-left:auto;width:32px;height:32px;padding:0;border:0;border-radius:50%;flex:0 0 auto;
+    display:inline-flex;align-items:center;justify-content:center;font-size:15px;text-decoration:none;
+    background:color-mix(in srgb,var(--teal) 15%,transparent);color:var(--teal);font-weight:700 }
+  :root[data-style="ios"] .alert .al,:root[data-style="samsung"] .alert .al{ display:none }     /* keep only the glyph */
+  :root[data-style="samsung"] .alert .go{ display:none }                                         /* chevron: iOS only */
+  :root[data-style="ios"] .alert .go{ color:var(--muted);font-weight:400;flex:0 0 auto }
+  :root[data-style="ios"] .alert .go .gl{ display:none }
+  :root[data-style="ios"] .alert:not(:last-child)::after{ content:"";position:absolute;left:54px;right:0;bottom:0;height:1px;background:var(--sep) }
   .wrap{max-width:1200px;margin:0 auto;padding:0 16px 48px}
   a{color:var(--teal)}
   /* header */
@@ -173,7 +222,10 @@
   /* tiles */
   .grid{display:grid;gap:14px}
   .g2{grid-template-columns:repeat(2,1fr)} .g3{grid-template-columns:repeat(3,1fr)} .g4{grid-template-columns:repeat(4,1fr)} .g5{grid-template-columns:repeat(5,1fr)}
-  .tile{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);overflow:hidden}
+  .tile{position:relative;background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow);overflow:hidden}
+  /* item AJ: hide-amount eye in a tile's corner (banking-app style) */
+  .tile .eye{position:absolute;top:9px;right:10px;z-index:2;border:0;background:transparent;cursor:pointer;font-size:15px;line-height:1;opacity:.55;padding:3px;border-radius:8px}
+  .tile .eye:hover{opacity:1;background:var(--teal-soft)}
   .tile .lbl{font-size:12.5px;color:var(--muted);font-weight:600;display:flex;gap:7px;align-items:center}
   .tile .val{font-size:23px;font-weight:750;letter-spacing:-.5px;margin-top:9px}
   .tile .val .cur{font-size:13px;color:var(--muted);font-weight:600}
@@ -190,6 +242,9 @@
   .alert{display:flex;align-items:center;gap:11px;background:var(--panel);border:1px solid var(--line);border-left:4px solid var(--muted);border-radius:12px;padding:11px 14px;box-shadow:var(--shadow);cursor:pointer}
   .alert.ACTION{border-left-color:var(--red)} .alert.CONFIRMED{border-left-color:var(--amber)} .alert.WATCH{border-left-color:var(--blue)}
   .alert .t{font-weight:600;font-size:14px} .alert .d{color:var(--muted);font-size:13px} .alert .go{color:var(--teal);font-weight:600;font-size:13px;white-space:nowrap}
+  .alert .atext{display:contents}                              /* Classic: title + detail stay inline, exactly as before */
+  .alert .d::before{content:"— "}                              /* the separator dash (skins drop it and stack the detail) */
+  .alert .readon{margin-left:auto} .alert .unack{margin-left:10px;white-space:nowrap}
   .alert .ackbtn{margin-left:auto;padding:2px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}
   .alert .ackbtn:hover{border-color:var(--teal);color:var(--teal)}
   .ackfoot{font-size:12px;color:var(--muted);padding:4px 2px} .ackfoot a{color:var(--teal);font-weight:600}
@@ -721,15 +776,72 @@ var activeChip = null, curLedger = null, curLedgerData = null;
 var wvSrc = "erp";   // weaving: show ERP efficiency by default; scoreboard only when toggled (averages only - the two post on different cadences)
 var attOpen = false; // needs-attention starts collapsed so it never covers the page
 
-/* ---------- theme + logo ---------- */
+/* ---------- theme: Auto (sunrise/sunset) / Light / Dark, remembered per device + per login ---------- */
+var MILL_GEO=null;                                         // {lat,lon} from [dashboard]; null until data loads
+var themeMode="auto";                                      // auto | light | dark  (auto is the default for new users)
 (function(){
-  var root=document.documentElement, btn=$("#themeBtn");
-  function sysDark(){try{return matchMedia("(prefers-color-scheme: dark)").matches}catch(e){return false}}
-  function cur(){var t=root.getAttribute("data-theme");return t?t:(sysDark()?"dark":"light");}
-  function paint(){var d=cur()==="dark";btn.firstChild.nodeValue=d?"☀️ ":"🌙 ";btn.querySelector("span").textContent=d?"Light":"Dark";}
-  try{var s=localStorage.getItem("sl-theme");if(s)root.setAttribute("data-theme",s);}catch(e){}
-  paint();
-  btn.onclick=function(){var n=cur()==="dark"?"light":"dark";root.setAttribute("data-theme",n);try{localStorage.setItem("sl-theme",n);}catch(e){}paint();rebuildCharts();};
+  var root=document.documentElement, btn=$("#themeBtn"); if(!btn) return;
+  function sysDark(){ try{ return matchMedia("(prefers-color-scheme: dark)").matches; }catch(e){ return false; } }
+  // NOAA sunrise/sunset for a date at lat/lon (east-positive longitude). No library (~25 lines). Returns
+  // {rise:Date, set:Date}, or null in polar day/night.
+  function sunTimes(date, lat, lon){
+    var rad=Math.PI/180, J=date.getTime()/86400000 + 2440587.5, lw=-lon;
+    var n=Math.round(J - 2451545.0 + 0.0009 - lw/360);
+    var Js=2451545.0 + 0.0009 + lw/360 + n;
+    var M=(357.5291 + 0.98560028*(Js-2451545.0)) % 360;
+    var C=1.9148*Math.sin(M*rad)+0.0200*Math.sin(2*M*rad)+0.0003*Math.sin(3*M*rad);
+    var lam=(M + C + 180 + 102.9372) % 360;
+    var Jt=Js + 0.0053*Math.sin(M*rad) - 0.0069*Math.sin(2*lam*rad);
+    var sinD=Math.sin(lam*rad)*Math.sin(23.44*rad), cosD=Math.cos(Math.asin(sinD));
+    var cw=(Math.sin(-0.833*rad) - Math.sin(lat*rad)*sinD) / (Math.cos(lat*rad)*cosD);
+    if(cw>1 || cw<-1) return null;                         // sun never rises / never sets today
+    var w=Math.acos(cw)/rad;
+    return { rise:new Date((Jt - w/360 - 2440587.5)*86400000), set:new Date((Jt + w/360 - 2440587.5)*86400000) };
+  }
+  function autoState(){                                    // null => no location, caller falls back to the device
+    if(!MILL_GEO) return null;
+    var now=new Date(), t=sunTimes(now, MILL_GEO.lat, MILL_GEO.lon);
+    if(!t) return null;
+    return { dark:(now < t.rise || now >= t.set), rise:t.rise, set:t.set };
+  }
+  function fmtT(d){ try{ return d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit"}); }catch(e){ return ""; } }
+  function paint(dark){
+    btn.firstChild.nodeValue = themeMode==="auto" ? "🌓 " : (dark ? "☀️ " : "🌙 ");
+    btn.querySelector("span").textContent = themeMode==="auto" ? "Auto" : (themeMode==="dark" ? "Dark" : "Light");
+    var tip="Tap to change theme";
+    if(themeMode==="auto"){ var a=autoState();
+      tip = a ? (a.dark ? "Auto · light at "+fmtT(a.rise) : "Auto · dark at "+fmtT(a.set)) : "Auto · follows this device"; }
+    btn.title=tip;
+  }
+  function apply(){
+    var dark;
+    if(themeMode==="light"){ root.setAttribute("data-theme","light"); dark=false; }
+    else if(themeMode==="dark"){ root.setAttribute("data-theme","dark"); dark=true; }
+    else { var a=autoState();
+      if(a===null){ root.removeAttribute("data-theme"); dark=sysDark(); }   // no location -> the device decides
+      else { root.setAttribute("data-theme", a.dark?"dark":"light"); dark=a.dark; } }
+    paint(dark);
+  }
+  window.applyTheme=function(mode, remember){
+    themeMode=(mode==="light"||mode==="dark")?mode:"auto";
+    apply();
+    if(remember){
+      try{ localStorage.setItem("sl-theme", themeMode); }catch(e){}
+      try{ fetch("api/ui/theme",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({theme:themeMode})}); }catch(e){}
+    }
+    if(window.rebuildCharts && window.D) rebuildCharts();
+  };
+  window.refreshAutoTheme=function(){                      // Auto only: re-evaluate; rebuild charts if the theme flipped
+    if(themeMode!=="auto") { paint(root.getAttribute("data-theme")==="dark"); return; }
+    var before=root.getAttribute("data-theme"); apply();
+    if(root.getAttribute("data-theme")!==before && window.rebuildCharts && window.D) rebuildCharts();
+  };
+  var saved=null; try{ saved=localStorage.getItem("sl-theme"); }catch(e){}
+  themeMode=(saved==="light"||saved==="dark"||saved==="auto")?saved:"auto";
+  apply();
+  btn.onclick=function(){ themeMode = themeMode==="auto" ? "light" : (themeMode==="light" ? "dark" : "auto"); window.applyTheme(themeMode, true); };
+  setInterval(window.refreshAutoTheme, 300000);            // re-check every 5 minutes (sunset/sunrise crossing)
+  document.addEventListener("visibilitychange", function(){ if(!document.hidden) window.refreshAutoTheme(); });
 })();
 
 /* ---------- colour schemes (#23): 6 mill-cloth palettes + picker, remembered per browser ---------- */
@@ -905,17 +1017,50 @@ function rebuildCharts(){ Object.keys(charts).forEach(k=>charts[k].destroy()); c
 var rzt; addEventListener("resize",()=>{clearTimeout(rzt);rzt=setTimeout(()=>{Object.values(charts).forEach(ch=>ch.resize());},150);});
 
 /* ---------- render on data ---------- */
+// item AE: each tile's leading emoji becomes a coloured chip (circle in Samsung, rounded square in iOS; plain in
+// Classic). The chip tint follows the tile's group, worked out from its drill key + label: money=accent blue,
+// stock/yarn/fabric=orange, mill/production=green, else accent.
+function tileGroup(drill, lbl){
+  var k=(String(drill||"")+" "+String(lbl||"")).toLowerCase();
+  if(/(fabric|yarn|gully|dispatch|stock|store|godown|indent|\bpo\b|bag|cone)/.test(k)) return "warm";
+  if(/(cash|bank|sales|receiv|payab|cost|expense|billed|invoice|\brs\b|profit|margin)/.test(k)) return "accent";
+  if(/(meter|metre|effic|scoreboard|loom|weav|produc|woven|rpm|grade|shift)/.test(k)) return "ok";
+  return "accent";
+}
 function tile(lbl, val, meta, cls, asof, drill){
   var click = drill ? ` clickable" data-drill="${esc(drill)}" role="button" tabindex="0` : "";
   var chev = drill ? '<span class="chev">›</span>' : "";
-  return `<div class="tile ${cls||""}${click}"><div class="lbl">${lbl}${chev}</div><div class="val">${val}</div>${meta?`<div class="meta">${meta}</div>`:""}${asof?`<div class="asof-tile">🕒 ${esc(asof)}</div>`:""}</div>`;
+  var m = String(lbl).match(/^(\S+)\s+([\s\S]*)$/);              // split a leading emoji token off the label
+  var head = (m && /[^\x00-\x7F]/.test(m[1]))
+    ? `<span class="ti ti-${tileGroup(drill,lbl)}">${m[1]}</span>${m[2]}` : lbl;
+  // item AJ: an eye to hide this tile's amounts, so the dashboard can be shown without revealing e.g. receivables
+  var canHide = drill && window.HIDEABLE && HIDEABLE.indexOf(drill)>=0;
+  var hidden = canHide && AMT_HIDDEN.has(drill);
+  if(hidden){ val="Rs ••••••"; if(meta) meta=String(meta).replace(/\d[\d.,]*/g, "••••••"); }
+  var eye = canHide ? `<button class="eye" data-eye="${esc(drill)}" title="${hidden?"Show amounts":"Hide amounts"}" aria-label="${hidden?"Show amounts":"Hide amounts"}">${hidden?"🙈":"👁"}</button>` : "";
+  return `<div class="tile ${cls||""}${click}">${eye}<div class="lbl">${head}${chev}</div><div class="val">${val}</div>${meta?`<div class="meta">${meta}</div>`:""}${asof?`<div class="asof-tile">🕒 ${esc(asof)}</div>`:""}</div>`;
 }
 var ANIM=true, SHOW_AMOUNTS=true, REFRESH_SECS=300;   // from [dashboard] config, set on each data load
+var HIDEABLE=["receivable"], AMT_HIDDEN=new Set();    // item AJ: which tiles can hide amounts, and which are hidden now
+try{ AMT_HIDDEN=new Set(JSON.parse(localStorage.getItem("sl-hidden")||"[]")); }catch(e){}
+document.addEventListener("click", function(e){        // the eye toggles a tile's amounts (captured before the tile's own drill click)
+  var eye = e.target.closest && e.target.closest("[data-eye]"); if(!eye) return;
+  e.stopPropagation(); e.preventDefault();
+  var k=eye.getAttribute("data-eye");
+  if(AMT_HIDDEN.has(k)) AMT_HIDDEN.delete(k); else AMT_HIDDEN.add(k);
+  try{ localStorage.setItem("sl-hidden", JSON.stringify(Array.from(AMT_HIDDEN))); }catch(e2){}
+  render();                                            // render() self-guards on D; re-masks the affected tile(s)
+}, true);
 function render(){
   if(!D) return;
   var dc=D.dashboard||{};
   ANIM = dc.animations!==false; SHOW_AMOUNTS = dc.show_amounts!==false;
   if(D.ui_style){ var _ls=null; try{_ls=localStorage.getItem("sl-style");}catch(e){} if(!_ls && D.ui_style!==curStyle) applyStyle(D.ui_style,false); }   // item AE: login's saved skin follows across devices
+  // item AE: the mill's location drives the Auto (sunrise/sunset) theme; the login's saved theme follows across devices
+  if(dc.latitude!=null && dc.longitude!=null && isFinite(+dc.latitude) && isFinite(+dc.longitude)) MILL_GEO={lat:+dc.latitude, lon:+dc.longitude};
+  if(D.ui_theme){ var _lt=null; try{_lt=localStorage.getItem("sl-theme");}catch(e){} if(!_lt && D.ui_theme!==themeMode && typeof applyTheme==="function") applyTheme(D.ui_theme,false); }
+  if(typeof refreshAutoTheme==="function") refreshAutoTheme();   // recompute now that the location (and saved theme) are known
+  if(dc.hideable_tiles && dc.hideable_tiles.length) HIDEABLE = dc.hideable_tiles;   // item AJ: which tiles get the hide-amount eye
   REFRESH_SECS = Math.max(30, parseInt(dc.refresh_seconds)||300);
   // colour scheme: the browser's saved choice wins; otherwise the mill's [dashboard] colour_scheme default
   var savedScheme=null; try{savedScheme=localStorage.getItem("sl-scheme");}catch(e){}
@@ -942,14 +1087,14 @@ function render(){
   } else {
     cnt.textContent = fs.length + (fs.length===1?" item":" items");
     var ack=D.acknowledged||[];
-    strip.innerHTML = fs.map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">— ${esc(f.detail)}</span>`:""}<button class="ackbtn" data-ack="${esc(f.id||"")}" data-ackt="${esc(f.title)}" data-sev="${esc(f.severity)}" title="I have seen this — clear it">✓ Mark read</button><span class="go">Open ›</span></div>`).join("")
+    strip.innerHTML = fs.map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><div class="atext"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">${esc(f.detail)}</span>`:""}</div><button class="ackbtn" data-ack="${esc(f.id||"")}" data-ackt="${esc(f.title)}" data-sev="${esc(f.severity)}" title="Mark read" aria-label="Mark read"><span class="ag">✓</span><span class="al"> Mark read</span></button><span class="go"><span class="gl">Open</span> ›</span></div>`).join("")
       + (ack.length?`<div class="ackfoot">${ack.length} marked read · <a href="#" id="ack-show">show all notifications</a><div id="ack-list" hidden style="margin-top:6px"></div></div>`:"");
     strip.querySelectorAll(".alert").forEach(a=>a.onclick=(e)=>{ if(e.target.closest(".ackbtn")) return; openFinding(fs[+a.dataset.fi]); });
     strip.querySelectorAll(".ackbtn").forEach(bn=>bn.onclick=(e)=>{ e.stopPropagation(); markRead(bn.getAttribute("data-ack"), bn.getAttribute("data-ackt"), false, bn.getAttribute("data-sev"), bn.closest(".alert")); });
     var showA=$("#ack-show");
     if(showA) showA.onclick=(e)=>{ e.preventDefault(); var l=$("#ack-list");
       if(l.hidden){ l.hidden=false; showA.textContent="hide";
-        l.innerHTML=ack.map((a,i)=>`<div class="alert ${esc(a.severity)}" style="opacity:.55" data-ri="${i}"><span class="t">${esc(a.title)}</span>${a.detail?`<span class="d">— ${esc(a.detail)}</span>`:""}<span class="muted" style="margin-left:auto;font-size:11px;white-space:nowrap">read ${esc(String(a.read_at||"").slice(0,10))}</span><a href="#" class="unack" data-unack="${esc(a.id)}" style="margin-left:10px;white-space:nowrap">↩ mark unread</a><span class="go">Open ›</span></div>`).join("");
+        l.innerHTML=ack.map((a,i)=>`<div class="alert ${esc(a.severity)}" style="opacity:.55" data-ri="${i}"><div class="atext"><span class="t">${esc(a.title)}</span>${a.detail?`<span class="d">${esc(a.detail)}</span>`:""}</div><span class="muted readon" style="font-size:11px;white-space:nowrap">read ${esc(String(a.read_at||"").slice(0,10))}</span><a href="#" class="unack" data-unack="${esc(a.id)}" title="Mark unread" aria-label="Mark unread"><span class="ag">↩</span><span class="al"> mark unread</span></a><span class="go"><span class="gl">Open</span> ›</span></div>`).join("");
         l.querySelectorAll(".alert").forEach(x=>x.onclick=(ev)=>{ if(ev.target.closest(".unack")) return; openFinding(ack[+x.dataset.ri]); });
         l.querySelectorAll("[data-unack]").forEach(x=>x.onclick=(ev)=>{ ev.preventDefault(); ev.stopPropagation(); markRead(x.getAttribute("data-unack"), "", true, ""); });
       } else { l.hidden=true; showA.textContent="show all notifications"; } };
@@ -1172,6 +1317,7 @@ function costTile(){
     cur+" "+c.with_sizing+" with sizing · tap for history", "", "", "cost");
 }
 function drill(which){
+  if(window.AMT_HIDDEN && AMT_HIDDEN.has(which)){ toast("Amounts hidden — tap 👁 to show"); return; }   // item AJ
   if(which==='cash') return drawCash();
   if(which==='cost') return drawCost();
   if(which==='banks') return drawBanks();
@@ -2651,6 +2797,7 @@ var curTab="overview";
 var loaded={};
 function setTab(name){
   curTab=name;
+  document.documentElement.setAttribute("data-tab", name);     // item AE: lets a skin give the Overview a roomier header
   document.querySelectorAll("#tabs button").forEach(b=>b.setAttribute("aria-selected", b.dataset.tab===name));
   document.querySelectorAll(".pane").forEach(p=>p.hidden = p.dataset.pane!==name);
   buildCharts(name);

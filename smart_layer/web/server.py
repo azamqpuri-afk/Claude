@@ -663,6 +663,16 @@ class App:
         finally:
             con.close()
 
+    def set_ui_theme(self, theme):
+        """Item AE: remember the Auto / Light / Dark choice for this login (so it follows across phone and PC)."""
+        theme = theme if theme in ("auto", "light", "dark") else "auto"
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            store.set_state(con, "ui_theme", theme)
+            return {"ok": True, "theme": theme}
+        finally:
+            con.close()
+
     def ledger(self, account):
         from . import finance
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -1280,6 +1290,13 @@ def handler(app):
                     n = min(int(self.headers.get("Content-Length", 0)), 2000)
                     body = json.loads(self.rfile.read(n) or b"{}")
                     return self._send(200, app.set_ui_style(str(body.get("style", ""))[:16]))
+                except Exception as e:
+                    return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
+            if self.path == "/api/ui/theme":              # item AE: remember the Auto/Light/Dark choice for this login
+                try:
+                    n = min(int(self.headers.get("Content-Length", 0)), 2000)
+                    body = json.loads(self.rfile.read(n) or b"{}")
+                    return self._send(200, app.set_ui_theme(str(body.get("theme", ""))[:16]))
                 except Exception as e:
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path == "/api/closing/counts":       # save edited closing counts (dashboard password already checked)

@@ -428,11 +428,13 @@ def build(con, cfg, as_of=None):
         "change_cursor": _change_cursor(con),           # the change_log id to pass back as `since` on the next refresh
         "edits_installed": _edits_installed(con),        # show the Edits tab only when the ERP change-history layer is present
         "purchasing_installed": _purchasing_installed(con),  # show the Indents & POs view only when those entities are mapped
-        "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound", "colour_scheme")},
+        "dashboard": {k: cfg["dashboard"].get(k) for k in ("animations", "show_amounts", "refresh_seconds", "sound",
+                                                            "colour_scheme", "latitude", "longitude", "hideable_tiles")},
         "sync": _sync_health(con, cfg), "reports_window": int(cfg["reports"]["tracked_issue_days"]),
         "push_failures": _push_failures(con),            # item B1: alerts the outbox could not deliver in the last 24h
         "mapping_warning": _mapping_warning(cfg),         # item S: mill ERP mapping older than the app
         "ui_style": _ui_style(con),                       # item AE: saved look & feel (follows the login across devices)
+        "ui_theme": _ui_theme(con),                       # item AE: saved Auto/Light/Dark choice (follows the login)
         "kpis": {
             "meters": round(today[1] or 0) if today else 0,
             "dispatched_month": round(disp_month or 0), "woven_month": round(woven_month or 0),
@@ -598,6 +600,13 @@ def _ui_style(con):
     if s == "android":
         s = "samsung"                                     # the old skin id, remapped (One UI, not Material You)
     return s if s in ("classic", "ios", "samsung") else "classic"
+
+
+def _ui_theme(con):
+    """Item AE: the saved Auto / Light / Dark choice for this login. Auto (default) follows sunrise/sunset."""
+    from .. import store as _store
+    t = _store.get_state(con, "ui_theme", "auto")
+    return t if t in ("auto", "light", "dark") else "auto"
 
 
 def _mapping_warning(cfg):

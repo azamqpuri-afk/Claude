@@ -548,6 +548,21 @@ def test_vAE_ui_style_persists(env):
     assert web_data.build(con, cfg)["ui_style"] == "classic"      # unknown value falls back to classic
 
 
+def test_vAE_ui_theme_and_overview_payload(env):
+    # AE: the Auto/Light/Dark choice persists per login, and the payload carries the geo + hideable-tile keys the
+    # dashboard needs (sunrise/sunset Auto theme and the hide-amount eye).
+    from smart_layer import store
+    from smart_layer.web import data as web_data
+    cfg, con = env
+    d = web_data.build(con, cfg)
+    assert d["ui_theme"] == "auto"                                 # default for new users
+    for v, want in (("dark", "dark"), ("light", "light"), ("junk", "auto")):
+        store.set_state(con, "ui_theme", v)
+        assert web_data.build(con, cfg)["ui_theme"] == want
+    for key in ("latitude", "longitude", "hideable_tiles"):
+        assert key in d["dashboard"]                               # present (value may be None when unset)
+
+
 def test_vAD_monthly_grade_bands(env):
     # AD: the monthly chart payload carries A / B / Rejection meters (and %) per month for the stacked bar.
     from smart_layer.web import data as web_data
