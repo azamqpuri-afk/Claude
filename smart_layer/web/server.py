@@ -641,22 +641,21 @@ class App:
         from datetime import datetime
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
-            acked = store.get_state(con, "acked", {}) or {}
             if undo:
-                acked.pop(fid, None)
+                store.ack_delete(con, fid)
             elif fid:
-                today = datetime.now().strftime("%Y-%m-%d")
-                acked[fid] = {"title": str(title)[:200], "by": str(who)[:60],
-                              "at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-                              "severity": (severity or "WATCH"), "last_seen": today}
-            store.set_state(con, "acked", acked)
-            return {"ok": True, "count": len(acked)}
+                now = datetime.now()
+                store.ack_put(con, fid, str(title)[:200], str(who)[:60],
+                              now.strftime("%Y-%m-%d %H:%M"), (severity or "WATCH"),
+                              now.strftime("%Y-%m-%d"))
+            return {"ok": True, "count": store.ack_count(con)}
         finally:
             con.close()
 
     def set_ui_style(self, style):
         """Item AE: remember the dashboard look & feel skin for this login (so it follows across phone and PC)."""
-        style = style if style in ("classic", "ios", "android") else "classic"
+        style = "samsung" if style == "android" else style        # the old skin id, remapped (One UI, not Material You)
+        style = style if style in ("classic", "ios", "samsung") else "classic"
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
         try:
             store.set_state(con, "ui_style", style)
@@ -1261,15 +1260,20 @@ def handler(app):
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path == "/api/ack":                   # mark a Needs-attention finding read (or restore it)
                 from .. import licence
+                fid = ""
                 if not licence.status(app.cfg).allowed:
+                    print(f"[ack] 403 licence id={fid!r}", flush=True)       # item AH: failed acks are visible in the log
                     return self._send(403, {"error": "Licence: " + licence.status(app.cfg).message})
                 try:
                     n = min(int(self.headers.get("Content-Length", 0)), 20000)
                     body = json.loads(self.rfile.read(n) or b"{}")
-                    return self._send(200, app.acknowledge(str(body.get("id", ""))[:200], body.get("title", ""),
-                                                           body.get("who", ""), bool(body.get("undo")),
-                                                           str(body.get("severity", ""))[:12]))
+                    fid = str(body.get("id", ""))[:200]
+                    res = app.acknowledge(fid, body.get("title", ""), body.get("who", ""),
+                                          bool(body.get("undo")), str(body.get("severity", ""))[:12])
+                    print(f"[ack] 200 {'undo' if body.get('undo') else 'read'} id={fid!r} total={res.get('count')}", flush=True)
+                    return self._send(200, res)
                 except Exception as e:
+                    print(f"[ack] 500 id={fid!r} {type(e).__name__}: {e}"[:200], flush=True)
                     return self._send(500, {"error": f"{type(e).__name__}: {e}"[:300]})
             if self.path == "/api/ui/style":              # item AE: remember the look & feel skin for this login
                 try:

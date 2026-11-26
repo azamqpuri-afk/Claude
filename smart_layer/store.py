@@ -149,6 +149,13 @@ def create(con):
         con.execute(f"CREATE INDEX IF NOT EXISTS ix_{t}_{c} ON {t} ({c})")
     con.execute("CREATE TABLE IF NOT EXISTS sync_log (entity TEXT, synced_at TEXT, since TEXT, rows INTEGER)")
     con.execute("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT)")
+    # Acknowledged "needs attention" findings: ONE ROW PER FINDING id (item AH). This replaces an older design that
+    # kept them all in a single JSON blob under state['acked']; because the web server is threaded, a mark-read and
+    # the daily housekeeping both read-modify-wrote that whole blob with no lock, so a click could be silently lost
+    # (the "notifications are not being marked read" bug). One row per id means an ack INSERT and a housekeeping
+    # DELETE never clobber each other.
+    con.execute("CREATE TABLE IF NOT EXISTS acks "
+                "(id TEXT PRIMARY KEY, title TEXT, by TEXT, at TEXT, severity TEXT, last_seen TEXT)")
     # the dashboard "what changed" feed: new/changed rows recorded at sync time (see smart_layer/changes.py).
     # The client follows a monotonic `id` cursor (not a timestamp), so a refresh landing mid-sync never skips rows.
     have_cl = [r[1] for r in con.execute("PRAGMA table_info(change_log)")]
@@ -341,3 +348,84 @@ def get_state(con, key, default=None):
 def set_state(con, key, value):
     with con:
         con.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (key, json.dumps(value)))
+
+
+# ---- acknowledged findings, one row per id (item AH) ----------------------------------------------------------
+def _ensure_acks(con):
+    """Create the acks table if an older store predates it. Silent on a read-only store (e.g. a cloud view)."""
+    try:
+        con.execute("CREATE TABLE IF NOT EXISTS acks "
+                    "(id TEXT PRIMARY KEY, title TEXT, by TEXT, at TEXT, severity TEXT, last_seen TEXT)")
+    except sqlite3.OperationalError:
+        pass
+
+
+def _migrate_acked(con):
+    """One-time: lift the legacy state['acked'] JSON blob into per-id rows, then drop the blob so nothing races on
+    it again. By 0.22.0 the keys are already the stable section|key form (migrated in 0.21.0), so we copy as-is."""
+    row = con.execute("SELECT value FROM state WHERE key = 'acked'").fetchone()
+    if not row:
+        return
+    try:
+        blob = json.loads(row[0]) or {}
+    except (ValueError, TypeError):
+        blob = {}
+    try:
+        with con:
+            for fid, v in blob.items():
+                v = v if isinstance(v, dict) else {}
+                con.execute("INSERT OR IGNORE INTO acks VALUES (?, ?, ?, ?, ?, ?)",
+                            (fid, str(v.get("title", ""))[:200], str(v.get("by", ""))[:60],
+                             str(v.get("at", "")), str(v.get("severity", "WATCH"))[:12],
+                             str(v.get("last_seen") or v.get("at") or "")[:10]))
+            con.execute("DELETE FROM state WHERE key = 'acked'")
+    except sqlite3.OperationalError:
+        pass                                              # read-only store: leave the blob, build() still reads rows below
+
+
+def ack_all(con):
+    """Every acknowledged finding as {id: {title, by, at, severity, last_seen}}."""
+    _ensure_acks(con)
+    _migrate_acked(con)
+    out = {}
+    try:
+        for fid, title, by, at, sev, ls in con.execute(
+                "SELECT id, title, by, at, severity, last_seen FROM acks"):
+            out[fid] = {"title": title, "by": by, "at": at, "severity": sev, "last_seen": ls}
+    except sqlite3.OperationalError:
+        pass
+    return out
+
+
+def ack_put(con, fid, title, by, at, severity, last_seen):
+    """Mark a finding read (INSERT OR REPLACE a single row - never a whole-dict rewrite, so it can't be clobbered)."""
+    _ensure_acks(con)
+    with con:
+        con.execute("INSERT OR REPLACE INTO acks VALUES (?, ?, ?, ?, ?, ?)",
+                    (fid, str(title)[:200], str(by)[:60], str(at), str(severity)[:12], str(last_seen)[:10]))
+
+
+def ack_touch(con, fid, last_seen):
+    """Reset a still-present finding's forget clock. Best-effort: a read-only store just keeps the old date."""
+    try:
+        with con:
+            con.execute("UPDATE acks SET last_seen = ? WHERE id = ?", (str(last_seen)[:10], fid))
+    except sqlite3.OperationalError:
+        pass
+
+
+def ack_delete(con, fid):
+    """Restore a finding to unread (undo), or forget one the audit has long stopped raising."""
+    try:
+        with con:
+            con.execute("DELETE FROM acks WHERE id = ?", (fid,))
+    except sqlite3.OperationalError:
+        pass
+
+
+def ack_count(con):
+    _ensure_acks(con)
+    try:
+        return con.execute("SELECT COUNT(*) FROM acks").fetchone()[0]
+    except sqlite3.OperationalError:
+        return 0

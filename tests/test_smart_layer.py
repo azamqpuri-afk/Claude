@@ -540,6 +540,10 @@ def test_vAE_ui_style_persists(env):
     assert web_data.build(con, cfg)["ui_style"] == "classic"      # default
     store.set_state(con, "ui_style", "ios")
     assert web_data.build(con, cfg)["ui_style"] == "ios"
+    store.set_state(con, "ui_style", "samsung")
+    assert web_data.build(con, cfg)["ui_style"] == "samsung"       # the One UI skin
+    store.set_state(con, "ui_style", "android")
+    assert web_data.build(con, cfg)["ui_style"] == "samsung"       # old skin id remaps to the new One UI skin
     store.set_state(con, "ui_style", "nonsense")
     assert web_data.build(con, cfg)["ui_style"] == "classic"      # unknown value falls back to classic
 
@@ -755,16 +759,17 @@ def test_needs_attention_acknowledge_clears_and_restores(env):
     assert d["findings"], "the demo raises findings"
     fid = d["findings"][0]["id"]
     before = len(d["findings"])
+    sev = d["findings"][0]["severity"]
     try:
-        store.set_state(con, "acked", {fid: {"title": "seen it", "at": "now"}})   # mark read
+        store.ack_put(con, fid, "seen it", "tester", "now", sev, date.today().isoformat())   # mark read (one row)
         d2 = web_data.build(con, cfg, END)
         assert fid not in {f["id"] for f in d2["findings"]}                  # gone from the strip
         assert len(d2["findings"]) == before - 1
         assert any(a["id"] == fid for a in d2["acknowledged"])               # shown under "marked read"
-        store.set_state(con, "acked", {})                                    # restore
+        store.ack_delete(con, fid)                                           # restore
         assert fid in {f["id"] for f in web_data.build(con, cfg, END)["findings"]}
     finally:
-        store.set_state(con, "acked", {})
+        store.ack_delete(con, fid)
 
 
 def test_cash_group_ledger_is_newest_first_and_ties_to_balance(env):
@@ -2754,19 +2759,17 @@ def test_v0180_ack_persists_until_escalation(env):
     try:
         d = web_data.build(con, cfg, END)
         f = next(x for x in d["findings"] if x["severity"] in ("ACTION", "CONFIRMED", "WATCH"))
-        # mark it read at its current severity
-        _store.set_state(con, "acked", {f["id"]: {"title": f["title"], "at": "2026-01-01 00:00",
-                                                   "severity": f["severity"], "last_seen": END.isoformat()}})
+        # mark it read at its current severity (one row per id - item AH)
+        _store.ack_put(con, f["id"], f["title"], "tester", "2026-01-01 00:00", f["severity"], END.isoformat())
         d2 = web_data.build(con, cfg, END)
         assert all(x["id"] != f["id"] for x in d2["findings"])            # stays read, not in the active list
         assert any(x["id"] == f["id"] for x in d2["acknowledged"])        # shown under "all notifications"
         # had it been read at a LOWER severity, an escalation brings it back
-        _store.set_state(con, "acked", {f["id"]: {"title": f["title"], "at": "2026-01-01 00:00",
-                                                  "severity": "INFO", "last_seen": END.isoformat()}})
+        _store.ack_put(con, f["id"], f["title"], "tester", "2026-01-01 00:00", "INFO", END.isoformat())
         d3 = web_data.build(con, cfg, END)
         assert any(x["id"] == f["id"] for x in d3["findings"])            # escalated -> back in the active list
     finally:
-        _store.set_state(con, "acked", {})
+        _store.ack_delete(con, f["id"])
 
 
 def _loom4_store(new_eff):
@@ -3145,6 +3148,30 @@ def test_v0181_warp_weft_splits_by_count_when_counts_differ(env):
     assert "warp" in sides and "weft" in sides
     bal = {r[0]: r[1] for r in secs["balances"]["rows"]}
     assert bal.get("Warp yarn received kg") == 30000 and bal.get("Weft yarn received kg") == 20000
+
+
+def test_vAH_ack_survives_concurrent_build_housekeeping(env):
+    # Item AH: "notifications are not being marked read". The old design kept every ack in ONE JSON blob; because the
+    # web server is threaded, a Mark-read POST and the build() housekeeping both read-modify-wrote that whole blob
+    # with no lock, so an ack written while a build was in flight was silently overwritten. Acks are now one row per
+    # id, and build() only ever touches/deletes the specific ids it saw - so a concurrent ack cannot be clobbered.
+    from smart_layer.web import data as web_data
+    from smart_layer import store as _store
+    cfg, con = env
+    d = web_data.build(con, cfg, END)                      # also migrates any legacy blob to rows
+    fid = d["findings"][0]["id"]
+    sev = d["findings"][0]["severity"]
+    try:
+        snapshot = _store.ack_all(con)                     # an in-flight build reads the ack set (about to housekeep)
+        _store.ack_put(con, fid, "seen", "user", "2026-01-01 00:00", sev, END.isoformat())   # user clicks Mark read
+        for gone in snapshot:                              # the in-flight build finishes, acting only on ids IT saw
+            _store.ack_delete(con, gone)
+        assert fid in _store.ack_all(con)                  # the fresh ack is NOT lost
+        d2 = web_data.build(con, cfg, END)
+        assert fid not in {f["id"] for f in d2["findings"]}          # and it shows as read
+        assert any(a["id"] == fid for a in d2["acknowledged"])
+    finally:
+        _store.ack_delete(con, fid)
 
 
 def test_v0180_ack_migration_maps_old_keys():

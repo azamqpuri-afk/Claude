@@ -187,6 +187,14 @@ the mapping/config, never the core).
 | AE | **Look & feel skins.** A top-bar switch: Classic / iOS (frosted glass) / Android (Material You) — token swaps only, same data and tabs, light and dark for each; remembered per device and per login | `web/dashboard.html`, `web/server.py`, `web/data.py` |
 | AF | **Audit false-alarm fixes.** Beams count sized stock of the same quality as a backup; sizing loss is per contract (netted across sizers), moving contracts only; legacy negative fabric stops nagging (no movement > 90 days); rejection = C + CP, B shown separately everywhere | `textile/beams.py`, `textile/pilferage.py`, `audit/yarn.py`, `audit/weaving.py`, Dost mapping |
 
+## New in 0.22.0 (skins to iOS/One UI, grade chart declutter, mark-read fix)
+
+| # | What it does | Where |
+|---|--------------|-------|
+| AE | **Skins reworked to real OS looks.** Classic (unchanged) / **iOS — Liquid Glass** (translucent glass cards with a specular edge over fixed colour blobs, pill segmented tabs, large title, SF font) / **Samsung — One UI** (renamed from "Android"; flat tonal borderless cards, roomy header, One UI accent, flat bottom-nav tabs, SamsungOne font). Each skin now swaps the **full colour palette** in light **and** dark, mapped to CSS tokens, so every tab, tile, card, list, button, tooltip and Chart.js colour follows it; charts re-render on a skin change. A saved "android" choice migrates to "samsung" | `web/dashboard.html`, `web/server.py`, `web/data.py` |
+| AG | **Monthly-grade chart decluttered.** Above each bar: the total in short form ("241k") then the rejection % only, in red; "A 95%" set vertically inside a tall A segment; no per-segment meters; top padding and a y-max rounded up to the next 50k so labels never clip; un-rotated month labels; on a narrow screen the bars scroll sideways (min-width 640) instead of squeezing; the legend sits at the bottom. Tooltip still shows full A/B/Rejection meters, % and total | `web/dashboard.html` |
+| AH | **"Mark read" now sticks.** Acknowledged findings moved from a single shared JSON blob to **one row per finding** (new `acks` table, old blob migrated once), so a mark-read click and the daily housekeeping on the threaded server can no longer clobber each other (the lost-update bug). The row is hidden optimistically on click, a failed POST (403 licence / 500 / offline) shows a toast and restores the row, and every `POST /api/ack` is logged with its id and status | `store.py`, `web/server.py`, `web/data.py`, `web/dashboard.html` |
+
 ## Not in the product, and why
 
 | Script(s) | Reason |

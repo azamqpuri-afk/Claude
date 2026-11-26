@@ -324,33 +324,25 @@ def build(con, cfg, as_of=None):
     order = {"ACTION": 0, "CONFIRMED": 1, "WATCH": 2, "INFO": 3}
     keep_days = int((cfg["reports"] or {}).get("ack_keep_days", 30))
     ack_today = date.today().isoformat()
-    acked = _store.get_state(con, "acked", {}) or {}
-    if not _store.get_state(con, "ack_keys_v2", False):    # one-time: map old volatile-key acks to the new stable keys
-        acked = _migrate_acks(acked)
-        try:
-            _store.set_state(con, "acked", acked)
-            _store.set_state(con, "ack_keys_v2", True)
-        except Exception:
-            pass
+    # item AH: acks are now one row per finding id (store.acks), so a mark-read POST and this daily housekeeping can
+    # no longer clobber each other. We only ever delete/touch INDIVIDUAL ids here - never rewrite the whole set.
+    acked = _store.ack_all(con)                            # also migrates the legacy state['acked'] blob once
     all_findings = [{"id": f"{f.section}|{f.key}", "severity": f.severity, "section": f.section,
                      "title": f.title, "detail": f.detail, **({"meta": f.meta} if f.meta else {})}
                     for f in sorted(a.findings, key=lambda f: (order[f.severity], f.section))]
     live_ids = {f["id"] for f in all_findings}
     findings, acknowledged = [], []
-    dirty = False
     for f in all_findings:
         ack = acked.get(f["id"])
         if not ack:
             findings.append(f)
             continue
         if order[f["severity"]] < order.get(ack.get("severity", f["severity"]), 3):
-            acked.pop(f["id"], None)                        # escalated since it was read - show it again as unread
-            dirty = True
+            _store.ack_delete(con, f["id"])                    # escalated since it was read - show it again as unread
             findings.append(f)
         else:
             if ack.get("last_seen") != ack_today:
-                ack["last_seen"] = ack_today                    # still present: reset the forget clock
-                dirty = True
+                _store.ack_touch(con, f["id"], ack_today)       # still present: reset the forget clock
             acknowledged.append({**f, "read_at": ack.get("at", ""), "read": True})
     for fid, ack in list(acked.items()):                   # forget an ack only after the finding has been gone a while
         if fid in live_ids:
@@ -358,15 +350,9 @@ def build(con, cfg, as_of=None):
         last = str(ack.get("last_seen") or ack.get("at") or ack_today)[:10]
         try:
             if (date.fromisoformat(ack_today) - date.fromisoformat(last)).days > keep_days:
-                acked.pop(fid, None)
-                dirty = True
-        except Exception:
+                _store.ack_delete(con, fid)
+        except ValueError:
             pass
-    if dirty:
-        try:
-            _store.set_state(con, "acked", acked)
-        except Exception:
-            pass                                           # a read-only / busy store (e.g. cloud view) just keeps them
 
     # stock: the KPIs count only actionable (recently-used) out/low items; the Store tab lists the WHOLE store room
     # (every item with stock or any movement), searchable, with each item's last issue and last receipt.
@@ -606,10 +592,12 @@ def _push_failures(con):
 
 
 def _ui_style(con):
-    """Item AE: the dashboard skin saved for this login (classic / ios / android), so it follows across devices."""
+    """Item AE: the dashboard skin saved for this login (classic / ios / samsung), so it follows across devices."""
     from .. import store as _store
     s = _store.get_state(con, "ui_style", "classic")
-    return s if s in ("classic", "ios", "android") else "classic"
+    if s == "android":
+        s = "samsung"                                     # the old skin id, remapped (One UI, not Material You)
+    return s if s in ("classic", "ios", "samsung") else "classic"
 
 
 def _mapping_warning(cfg):

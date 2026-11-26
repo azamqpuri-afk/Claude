@@ -13,6 +13,10 @@
     --teal:#0f6f5c; --teal-soft:#e7f2ef; --teal-deep:#0b4f42; --amber:#c77f17; --amber-soft:#fbf1df;
     --red:#c0392b; --red-soft:#fbe9e7; --green:#1f8a4c; --blue:#2b6cb0; --field:#ffffff;
     --shadow:0 1px 2px rgba(15,26,23,.05),0 8px 24px rgba(15,26,23,.06); --radius:16px;
+    /* item AE tokens - these reference the colour tokens above, so they follow light/dark on their own and keep
+       Classic looking exactly as before. Each skin (iOS / Samsung) overrides them with its own palette below. */
+    --grade-a:var(--green); --grade-b:var(--amber); --grade-rej:var(--red); --ok:var(--green);
+    --card-border:var(--line); --sep:var(--line); --card-inset:none; --card-blur:none;
   }
   @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]){
     color-scheme:dark;
@@ -30,16 +34,101 @@
   }
   *{box-sizing:border-box} html,body{margin:0}
   body{background:var(--bg);color:var(--ink);font:15px/1.45 var(--ui-font,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif);-webkit-font-smoothing:antialiased}
-  /* item AE: "look & feel" skins - Classic (default) / iOS (frosted glass) / Android (Material You). Token swaps only,
-     so every skin works in BOTH light and dark; the data and layout never change. */
-  :root[data-style="ios"]{ --radius:22px; --ui-font:-apple-system,"SF Pro Text",system-ui,sans-serif;
-    --shadow:0 1px 1px rgba(0,0,0,.04),0 12px 34px rgba(0,0,0,.13); }
-  :root[data-style="ios"] .card,:root[data-style="ios"] .tile,:root[data-style="ios"] .plist{
-    background:color-mix(in srgb,var(--panel) 70%,transparent);backdrop-filter:blur(14px) saturate(1.35);-webkit-backdrop-filter:blur(14px) saturate(1.35); }
-  :root[data-style="android"]{ --radius:20px; --ui-font:"Roboto","Noto Sans",system-ui,Arial,sans-serif;
-    --shadow:0 1px 2px rgba(0,0,0,.24),0 4px 12px rgba(0,0,0,.15); }
-  :root[data-style="android"] .card,:root[data-style="android"] .tile,:root[data-style="android"] .plist{
-    background:color-mix(in srgb,var(--teal) 6%,var(--panel)); }
+  /* ===== item AE: "look & feel" skins ====================================================================
+     Classic = the default look, untouched. iOS = iOS 26/27 "Liquid Glass". Samsung = One UI 9 (flat, tonal).
+     Each skin swaps the FULL palette in light AND dark (prefers-color-scheme + data-theme), so every card,
+     tile, list, button, tooltip, tab and Chart.js colour follows it. Layout and data never change. */
+
+  /* ---- iOS (Liquid Glass) : LIGHT ---- */
+  :root[data-style="ios"]{
+    --bg:#f2f2f7; --panel:rgba(255,255,255,.62); --field:rgba(255,255,255,.72);
+    --ink:#000000; --muted:rgba(60,60,67,.6); --line:rgba(60,60,67,.12); --sep:rgba(60,60,67,.18);
+    --card-border:rgba(255,255,255,.9); --card-inset:inset 0 1px 0 rgba(255,255,255,.95);
+    --teal:#007aff; --teal-soft:rgba(0,122,255,.12); --teal-deep:#0a62cc; --blue:#007aff;
+    --amber:#ff9500; --amber-soft:rgba(255,149,0,.14); --red:#ff3b30; --red-soft:rgba(255,59,48,.12);
+    --green:#34c759; --ok:#34c759; --grade-a:#007aff; --grade-b:#ff9500; --grade-rej:#ff3b30;
+    --radius:26px; --shadow:0 10px 30px rgba(0,0,0,.08); --card-blur:blur(24px) saturate(1.8);
+    --ui-font:-apple-system,"SF Pro Text","SF Pro Display",system-ui,sans-serif;
+  }
+  /* ---- iOS : DARK (both the system-pref and the explicit toggle) ---- */
+  @media (prefers-color-scheme: dark){ :root[data-style="ios"]:not([data-theme="light"]){
+    --bg:#000000; --panel:rgba(44,44,46,.58); --field:rgba(44,44,46,.72);
+    --ink:#ffffff; --muted:rgba(235,235,245,.6); --line:rgba(255,255,255,.12); --sep:rgba(84,84,88,.6);
+    --card-border:rgba(255,255,255,.16); --card-inset:inset 0 1px 0 rgba(255,255,255,.22);
+    --teal:#0a84ff; --teal-soft:rgba(10,132,255,.2); --teal-deep:#4aa8ff; --blue:#0a84ff;
+    --amber:#ff9f0a; --red:#ff453a; --red-soft:rgba(255,69,58,.18); --green:#30d158; --ok:#30d158;
+    --grade-a:#0a84ff; --grade-b:#ff9f0a; --grade-rej:#ff453a;
+  }}
+  :root[data-theme="dark"][data-style="ios"]{
+    --bg:#000000; --panel:rgba(44,44,46,.58); --field:rgba(44,44,46,.72);
+    --ink:#ffffff; --muted:rgba(235,235,245,.6); --line:rgba(255,255,255,.12); --sep:rgba(84,84,88,.6);
+    --card-border:rgba(255,255,255,.16); --card-inset:inset 0 1px 0 rgba(255,255,255,.22);
+    --teal:#0a84ff; --teal-soft:rgba(10,132,255,.2); --teal-deep:#4aa8ff; --blue:#0a84ff;
+    --amber:#ff9f0a; --red:#ff453a; --red-soft:rgba(255,69,58,.18); --green:#30d158; --ok:#30d158;
+    --grade-a:#0a84ff; --grade-b:#ff9f0a; --grade-rej:#ff453a;
+  }
+  /* iOS materials: translucent glass panels with a specular top edge; fixed colour blobs behind the page */
+  :root[data-style="ios"] body{ background:
+    radial-gradient(60vw 52vh at 0% 0%, rgba(0,122,255,.22), transparent 62%),
+    radial-gradient(56vw 46vh at 100% 0%, rgba(255,149,0,.18), transparent 62%),
+    radial-gradient(72vw 56vh at 50% 100%, rgba(175,82,222,.18), transparent 62%),
+    var(--bg); background-attachment:fixed; }
+  @media (prefers-color-scheme: dark){ :root[data-style="ios"]:not([data-theme="light"]) body{ background:#000; } }
+  :root[data-theme="dark"][data-style="ios"] body{ background:#000; }
+  :root[data-style="ios"] .card,:root[data-style="ios"] .tile,:root[data-style="ios"] .plist,
+  :root[data-style="ios"] .lkpi,:root[data-style="ios"] dialog,:root[data-style="ios"] .schemeMenu,
+  :root[data-style="ios"] #chat,:root[data-style="ios"] .alert{
+    background:var(--panel);border:1px solid var(--card-border);box-shadow:var(--shadow),var(--card-inset);
+    -webkit-backdrop-filter:var(--card-blur);backdrop-filter:var(--card-blur); }
+  :root[data-style="ios"] .brand h1{ font-size:clamp(1.5rem,5.2vw,2.1rem);letter-spacing:-.5px;line-height:1.1 }
+  :root[data-style="ios"] .hd h3{ text-transform:uppercase;letter-spacing:.05em;font-size:13px;color:var(--muted);font-weight:700 }
+  /* iOS tabs: a pill segmented control (grey trough, white selected pill with a soft shadow) */
+  :root[data-style="ios"] .tabs{ border-bottom:0;background:rgba(120,120,128,.14);border-radius:14px;padding:4px;gap:3px;margin:8px 0 18px }
+  :root[data-style="ios"] .tabs button{ border-bottom:0;margin-bottom:0;border-radius:10px;padding:8px 14px;color:var(--ink) }
+  :root[data-style="ios"] .tabs button[aria-selected=true]{ background:#fff;color:#000;box-shadow:0 1px 3px rgba(0,0,0,.16) }
+  @media (prefers-color-scheme: dark){ :root[data-style="ios"]:not([data-theme="light"]) .tabs{ background:rgba(120,120,128,.28) }
+    :root[data-style="ios"]:not([data-theme="light"]) .tabs button[aria-selected=true]{ background:rgba(99,99,102,.9);color:#fff } }
+  :root[data-theme="dark"][data-style="ios"] .tabs{ background:rgba(120,120,128,.28) }
+  :root[data-theme="dark"][data-style="ios"] .tabs button[aria-selected=true]{ background:rgba(99,99,102,.9);color:#fff }
+
+  /* ---- Samsung (One UI) : LIGHT ---- */
+  :root[data-style="samsung"]{
+    --bg:#f2f2f2; --panel:#fcfcfc; --field:#ffffff;
+    --ink:#000000; --muted:#7a7a7a; --line:#e9e9e9; --sep:#e9e9e9;
+    --card-border:transparent; --card-inset:none;
+    --teal:#387aff; --teal-soft:rgba(56,122,255,.1); --teal-deep:#2f63d6; --blue:#387aff;
+    --amber:#ff9f2e; --amber-soft:rgba(255,159,46,.12); --red:#f2484b; --red-soft:rgba(242,72,75,.1);
+    --green:#3fbf6f; --ok:#3fbf6f; --grade-a:#387aff; --grade-b:#ff9f2e; --grade-rej:#f2484b;
+    --radius:26px; --shadow:none; --card-blur:none;
+    --ui-font:"SamsungOne","Roboto",system-ui,"Noto Sans",Arial,sans-serif;
+  }
+  /* ---- Samsung : DARK ---- */
+  @media (prefers-color-scheme: dark){ :root[data-style="samsung"]:not([data-theme="light"]){
+    --bg:#000000; --panel:#171717; --field:#1f1f1f;
+    --ink:#fafafa; --muted:#9a9a9a; --line:#262626; --sep:#262626; --card-border:transparent;
+    --teal:#3e91ff; --teal-soft:rgba(62,145,255,.16); --teal-deep:#6aa9ff; --blue:#3e91ff;
+    --amber:#ffa940; --red:#ff5a5c; --red-soft:rgba(255,90,92,.16); --green:#4fd185; --ok:#4fd185;
+    --grade-a:#3e91ff; --grade-b:#ffa940; --grade-rej:#ff5a5c;
+  }}
+  :root[data-theme="dark"][data-style="samsung"]{
+    --bg:#000000; --panel:#171717; --field:#1f1f1f;
+    --ink:#fafafa; --muted:#9a9a9a; --line:#262626; --sep:#262626; --card-border:transparent;
+    --teal:#3e91ff; --teal-soft:rgba(62,145,255,.16); --teal-deep:#6aa9ff; --blue:#3e91ff;
+    --amber:#ffa940; --red:#ff5a5c; --red-soft:rgba(255,90,92,.16); --green:#4fd185; --ok:#4fd185;
+    --grade-a:#3e91ff; --grade-b:#ffa940; --grade-rej:#ff5a5c;
+  }
+  /* Samsung materials: flat tonal cards - no border, no shadow, big radius; a roomy centred One UI header */
+  :root[data-style="samsung"] .card,:root[data-style="samsung"] .tile,:root[data-style="samsung"] .plist,
+  :root[data-style="samsung"] .lkpi,:root[data-style="samsung"] .alert{
+    background:var(--panel);border:1px solid var(--card-border);box-shadow:none }
+  :root[data-style="samsung"] header{ padding-top:7vh }
+  :root[data-style="samsung"] .brand h1{ font-size:clamp(1.5rem,5.5vw,2.3rem);letter-spacing:-.3px;line-height:1.1 }
+  :root[data-style="samsung"] .hd h3{ color:var(--teal);font-weight:800 }
+  :root[data-style="samsung"] .sec{ color:var(--teal);font-weight:800 }
+  /* Samsung tabs: a flat, full-width bottom-nav style bar; active tab bold in the accent colour */
+  :root[data-style="samsung"] .tabs{ border-top:1px solid var(--sep);border-bottom:1px solid var(--sep);gap:0;padding:2px 0 }
+  :root[data-style="samsung"] .tabs button{ flex:1 1 auto;text-align:center;border-bottom:0;margin-bottom:0;color:var(--muted);font-weight:600 }
+  :root[data-style="samsung"] .tabs button[aria-selected=true]{ color:var(--teal);font-weight:800;border-bottom:0 }
   .wrap{max-width:1200px;margin:0 auto;padding:0 16px 48px}
   a{color:var(--teal)}
   /* header */
@@ -91,6 +180,13 @@
   .alert .ackbtn{margin-left:auto;padding:2px 10px;border:1px solid var(--line);border-radius:999px;background:transparent;color:var(--muted);font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap}
   .alert .ackbtn:hover{border-color:var(--teal);color:var(--teal)}
   .ackfoot{font-size:12px;color:var(--muted);padding:4px 2px} .ackfoot a{color:var(--teal);font-weight:600}
+  /* item AH: toast for a failed mark-read (or any brief notice) */
+  #toast{position:fixed;left:50%;bottom:24px;transform:translate(-50%,16px);z-index:80;max-width:min(520px,92vw);
+    background:var(--panel);color:var(--ink);border:1px solid var(--line);border-left:4px solid var(--teal);
+    border-radius:12px;box-shadow:0 14px 40px rgba(0,0,0,.28);padding:11px 16px;font-size:13.5px;font-weight:600;
+    opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+  #toast.show{opacity:1;transform:translate(-50%,0)}
+  #toast.bad{border-left-color:var(--red)}
   .ackrow{display:flex;gap:10px;align-items:center;padding:3px 2px;font-size:12.5px} .ackrow .muted{color:var(--muted)} .ackrow a{color:var(--teal);font-weight:600}
   .ok-strip{background:var(--teal-soft);color:var(--teal-deep);border-radius:12px;padding:12px 14px;font-weight:600;font-size:14px;margin-bottom:20px}
   /* cards & charts */
@@ -102,6 +198,8 @@
   .card .hd .count{font-size:12px;color:var(--muted)}
   .card .hd .tools{margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
   .cwrap{position:relative;height:230px;padding:4px 10px 12px}
+  /* item AG: on a narrow screen the monthly-grade bars scroll sideways instead of squeezing to nothing */
+  .cwrap-scroll{overflow-x:auto;overflow-y:hidden} .cwrap-scroll .cinner{position:relative;height:100%;min-width:640px}
   .cnote{color:var(--muted);font-size:13px;padding:30px 16px;text-align:center}
   .pad{padding:4px 12px 14px}
   /* tables */
@@ -368,7 +466,7 @@
       <div class="pad"><div class="cmp2" id="wv-cmp"></div></div></div>
     <div class="cols">
       <div class="card" id="wv-trend-card"><div class="hd"><h3>Scoreboard vs ERP efficiency</h3><span class="count">last 30 days</span></div><div class="cwrap"><canvas id="wv1"></canvas></div></div>
-      <div class="card"><div class="hd"><h3>Monthly production by grade</h3><span class="count">ERP · A / B / Rejection · last 12 months</span></div><div class="cwrap"><canvas id="wv2"></canvas></div></div>
+      <div class="card"><div class="hd"><h3>Monthly production by grade</h3><span class="count">ERP · A / B / Rejection · last 12 months</span></div><div class="cwrap cwrap-scroll"><div class="cinner"><canvas id="wv2"></canvas></div></div></div>
     </div>
     <div class="card"><div class="hd"><h3>Loom by loom</h3><span class="count" id="wv-loomcount"></span></div><div class="tscroll"><table id="wv-looms"></table></div></div>
 
@@ -659,9 +757,10 @@ function applyScheme(key, remember){
 })();
 
 /* ---------- item AE: look & feel skin (Classic / iOS / Android), remembered per device + per login ---------- */
-var STYLES={ classic:{name:"Classic"}, ios:{name:"iOS · frosted glass"}, android:{name:"Android · Material You"} };
+var STYLES={ classic:{name:"Classic"}, ios:{name:"iOS · Liquid Glass"}, samsung:{name:"Samsung · One UI"} };
 var curStyle="classic";
 function applyStyle(key, remember){
+  if(key==="android") key="samsung";                     // item AE: the old skin id, remapped so saved choices still work
   curStyle=STYLES[key]?key:"classic";
   var root=document.documentElement;
   if(curStyle==="classic") root.removeAttribute("data-style"); else root.setAttribute("data-style",curStyle);
@@ -694,7 +793,8 @@ function applyStyle(key, remember){
 /* ---------- charts ---------- */
 var charts={}, builtTabs={};
 function cssv(n){return getComputedStyle(document.documentElement).getPropertyValue(n).trim();}
-function palette(){return {ink:cssv("--ink"),muted:cssv("--muted"),line:cssv("--line"),teal:cssv("--teal"),amber:cssv("--amber"),red:cssv("--red"),green:cssv("--green"),blue:cssv("--blue"),panel:cssv("--panel")};}
+function palette(){var g=function(n,f){return cssv(n)||cssv(f);};return {ink:cssv("--ink"),muted:cssv("--muted"),line:cssv("--line"),teal:cssv("--teal"),amber:cssv("--amber"),red:cssv("--red"),green:cssv("--green"),blue:cssv("--blue"),panel:cssv("--panel"),
+  gradeA:g("--grade-a","--green"),gradeB:g("--grade-b","--amber"),gradeRej:g("--grade-rej","--red")};}   // item AE: chart grade colours follow the skin
 function tip(c){return {backgroundColor:c.panel,titleColor:c.ink,bodyColor:c.ink,borderColor:c.line,borderWidth:1,padding:10,cornerRadius:8,boxPadding:4,titleFont:{weight:"700"}};}
 function grid(c){return {grid:{color:c.line,drawBorder:false},ticks:{color:c.muted}};}
 function haveChart(){return typeof window.Chart!=="undefined";}
@@ -748,28 +848,42 @@ function buildCharts(tab){
     function hexA(h,a){ if(!h||h[0]!=="#") return h; h=h.slice(1); if(h.length===3) h=h.split("").map(x=>x+x).join(""); var n=parseInt(h,16); return "rgba("+((n>>16)&255)+","+((n>>8)&255)+","+(n&255)+","+a+")"; }
     function band(col){ return mo.map(x=>x.current?hexA(col,.45):col); }
     var fmN=n=>Math.round(n||0).toLocaleString();
+    // item AG: short form for the label above each bar - 241000 -> "241k", 1.2M etc. (keeps the chart uncluttered)
+    var fmK=function(n){ n=Math.round(n||0); if(n>=1e6) return (n/1e6).toFixed(n>=1e7?0:1).replace(/\.0$/,"")+"M"; if(n>=1e3) return Math.round(n/1e3)+"k"; return ""+n; };
+    var fontUI=cssv("--ui-font")||"system-ui,-apple-system,sans-serif";
+    // item AG: above each bar -> total (short) on line 1, rejection % in red on line 2. Inside a tall A segment ->
+    // "A 95%" rotated vertical in white. No per-segment meters, no " m" clutter. Top padding keeps labels unclipped.
     var gradeLabels={id:"gradeLabels",afterDatasetsDraw:function(ch){
       var ctx=ch.ctx, mA=ch.getDatasetMeta(0).data, mTop=ch.getDatasetMeta(2).data;
-      ctx.save(); ctx.textAlign="center"; ctx.font="600 11px system-ui,-apple-system,sans-serif";
+      ctx.save(); ctx.textAlign="center"; ctx.textBaseline="alphabetic";
       mo.forEach(function(x,i){
         var top=mTop[i]; if(!top) return;
-        ctx.fillStyle=c.ink; ctx.fillText(fmN(x.meters)+" m", top.x, top.y-6);                 // total above the bar
-        var a=mA[i]; if(x.a_grade!=null && a && (a.base-a.y)>18){ ctx.fillStyle="#fff"; ctx.fillText(x.a_grade+"% A", a.x, (a.y+a.base)/2+4); }
-        if(x.rej_m){ ctx.fillStyle=c.red; ctx.fillText(fmN(x.rej_m)+" ("+x.rej_pct+"%)", top.x, top.y+13); }  // rejection in red
+        ctx.font="700 12px "+fontUI; ctx.fillStyle=c.ink;
+        ctx.fillText(fmK(x.meters), top.x, top.y-21);                                  // total (short) above the bar
+        if(x.rej_pct!=null && x.rej_m){ ctx.font="700 11px "+fontUI; ctx.fillStyle=c.red;
+          ctx.fillText(x.rej_pct+"%", top.x, top.y-7); }                                // rejection % only, in red
+        var a=mA[i];                                                                    // A segment: vertical "A 95%"
+        if(x.a_grade!=null && a && (a.base-a.y)>46){
+          ctx.save(); ctx.translate(a.x,(a.y+a.base)/2); ctx.rotate(-Math.PI/2);
+          ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillStyle="#fff"; ctx.font="700 11px "+fontUI;
+          ctx.fillText("A "+x.a_grade+"%",0,0); ctx.restore();
+        }
       });
       ctx.restore();
     }};
+    var maxM=Math.max(0,...mo.map(x=>x.meters||0));
+    var yMax=Math.max(50000, Math.ceil(maxM*1.1/50000)*50000);                          // round up to the next 50k above max*1.1
     mk("wv2",{type:"bar",data:{labels:mo.map(x=>mlabel(x.month)+(x.current?" (to date)":"")),datasets:[
-      {label:"A-grade",data:mo.map(x=>x.a_m),backgroundColor:band(c.green),stack:"g",maxBarThickness:34},
-      {label:"B-grade",data:mo.map(x=>x.b_m),backgroundColor:band(c.amber),stack:"g",maxBarThickness:34},
-      {label:"Rejection (C+CP)",data:mo.map(x=>x.rej_m),backgroundColor:band(c.red),stack:"g",borderRadius:3,maxBarThickness:34}]},
-      options:{responsive:true,maintainAspectRatio:false,
-        plugins:{legend:{labels:{color:c.ink,usePointStyle:true,boxWidth:8}},
+      {label:"A-grade",data:mo.map(x=>x.a_m),backgroundColor:band(c.gradeA),stack:"g",maxBarThickness:34},
+      {label:"B-grade",data:mo.map(x=>x.b_m),backgroundColor:band(c.gradeB),stack:"g",maxBarThickness:34},
+      {label:"Rejection (C+CP)",data:mo.map(x=>x.rej_m),backgroundColor:band(c.gradeRej),stack:"g",borderRadius:3,maxBarThickness:34}]},
+      options:{responsive:true,maintainAspectRatio:false,layout:{padding:{top:28}},
+        plugins:{legend:{position:"bottom",labels:{color:c.ink,usePointStyle:true,boxWidth:8,padding:14}},   // bottom so it never overlaps the above-bar labels (item AG)
           tooltip:Object.assign(tip(c),{callbacks:{
             label:function(it){ var x=mo[it.dataIndex]; var p=it.datasetIndex===0?x.a_grade:it.datasetIndex===1?x.b_pct:x.rej_pct; return it.dataset.label+": "+fmN(it.parsed.y)+" m"+(p!=null?" ("+p+"%)":""); },
             footer:function(items){ return "Total "+fmN((mo[items[0].dataIndex]||{}).meters)+" m"; }}})},
-        scales:{x:Object.assign({stacked:true},grid(c)),
-          y:Object.assign({stacked:true,beginAtZero:true,title:{display:true,text:"meters",color:c.muted}},grid(c))}},
+        scales:{x:Object.assign({stacked:true},grid(c),{ticks:{color:c.muted,maxRotation:0,minRotation:0,autoSkip:false}}),
+          y:Object.assign({stacked:true,beginAtZero:true,max:yMax,title:{display:true,text:"meters",color:c.muted}},grid(c))}},
       plugins:[gradeLabels]});
   }
   builtTabs[tab]=true;
@@ -818,7 +932,7 @@ function render(){
     strip.innerHTML = fs.map((f,i)=>`<div class="alert ${esc(f.severity)}" data-fi="${i}"><span class="t">${esc(f.title)}</span>${f.detail?`<span class="d">— ${esc(f.detail)}</span>`:""}<button class="ackbtn" data-ack="${esc(f.id||"")}" data-ackt="${esc(f.title)}" data-sev="${esc(f.severity)}" title="I have seen this — clear it">✓ Mark read</button><span class="go">Open ›</span></div>`).join("")
       + (ack.length?`<div class="ackfoot">${ack.length} marked read · <a href="#" id="ack-show">show all notifications</a><div id="ack-list" hidden style="margin-top:6px"></div></div>`:"");
     strip.querySelectorAll(".alert").forEach(a=>a.onclick=(e)=>{ if(e.target.closest(".ackbtn")) return; openFinding(fs[+a.dataset.fi]); });
-    strip.querySelectorAll(".ackbtn").forEach(bn=>bn.onclick=(e)=>{ e.stopPropagation(); markRead(bn.getAttribute("data-ack"), bn.getAttribute("data-ackt"), false, bn.getAttribute("data-sev")); });
+    strip.querySelectorAll(".ackbtn").forEach(bn=>bn.onclick=(e)=>{ e.stopPropagation(); markRead(bn.getAttribute("data-ack"), bn.getAttribute("data-ackt"), false, bn.getAttribute("data-sev"), bn.closest(".alert")); });
     var showA=$("#ack-show");
     if(showA) showA.onclick=(e)=>{ e.preventDefault(); var l=$("#ack-list");
       if(l.hidden){ l.hidden=false; showA.textContent="hide";
@@ -875,11 +989,22 @@ function render(){
   if(!STATIC_DATA){ lastCursor = (D.change_cursor!=null? D.change_cursor : lastCursor); prevKpis = D.kpis || null; prevFindingIds = new Set((D.findings||[]).map(f=>f.id)); }
 }
 
-async function markRead(id, title, undo, severity){
+async function markRead(id, title, undo, severity, row){
   if(STATIC_DATA || !id) return;                         // clearing needs the live server
-  try{ await fetch("api/ack",{method:"POST",headers:{"Content-Type":"application/json"},
-       body:JSON.stringify({id:id, title:title||"", undo:!!undo, severity:severity||""})}); load(); }   // reload so counts + strip update
-  catch(e){}
+  // item AH: hide the row at once (optimistic) so a slow or racing server never leaves a clicked item looking stuck;
+  // if the POST fails we put the row back AND show a toast, so the user is never misled into thinking it was cleared.
+  if(!undo && row){ row.style.transition="opacity .18s"; row.style.opacity=".35"; row.style.pointerEvents="none"; }
+  function restore(){ if(row){ row.style.opacity=""; row.style.pointerEvents=""; } }
+  try{
+    var r=await fetch("api/ack",{method:"POST",headers:{"Content-Type":"application/json"},
+       body:JSON.stringify({id:id, title:title||"", undo:!!undo, severity:severity||""})});
+    if(!r.ok){
+      restore();
+      toast(r.status===403 ? "Licence inactive — not marked read" : ("Could not mark read ("+r.status+")"), true);
+      return;
+    }
+    load();                                              // reload so counts + strip match the server's truth
+  }catch(e){ restore(); toast("Could not reach the server — not marked read", true); }
 }
 
 /* ---------- live feed panel (today's change_log) ---------- */
@@ -2665,6 +2790,12 @@ function playChanges(events, pk, nk){
 }
 function tileEl(drill){ return document.querySelector(`#ov-money [data-drill="${drill}"]`) || document.querySelector('#ov-mill [data-drill="'+drill+'"]'); }
 function flash(el, bad){ if(!el) return; el.classList.remove("flash","bad"); void el.offsetWidth; el.classList.add("flash"); if(bad) el.classList.add("bad"); }
+var _toastT;
+function toast(msg, bad){                                 // item AH: a brief message so a failed action is never silent
+  var t=$("#toast"); if(!t){ t=document.createElement("div"); t.id="toast"; document.body.appendChild(t); }
+  t.textContent=msg; t.className = bad ? "show bad" : "show";
+  clearTimeout(_toastT); _toastT=setTimeout(function(){ t.className=""; }, 4200);
+}
 function layerPos(el){ var L=$("#anim-layer"); if(!el) return {x:innerWidth/2,y:160,L:L}; var r=el.getBoundingClientRect(); return {x:r.left+r.width/2, y:r.top+10, L:L}; }
 function NOTE_SVG(front){ return front
   ? `<svg viewBox="0 0 66 30"><rect width="66" height="30" rx="3" fill="#f3ead9" stroke="#d9b98f" stroke-width=".5"/>`
