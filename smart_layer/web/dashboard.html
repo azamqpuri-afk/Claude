@@ -68,13 +68,26 @@
     --grade-a:#0a84ff; --grade-b:#ff9f0a; --grade-rej:#ff453a;
   }
   /* iOS materials: translucent glass panels with a specular top edge; fixed colour blobs behind the page */
-  :root[data-style="ios"] body{ background:
-    radial-gradient(60vw 52vh at 0% 0%, rgba(0,122,255,.22), transparent 62%),
-    radial-gradient(56vw 46vh at 100% 0%, rgba(255,149,0,.18), transparent 62%),
-    radial-gradient(72vw 56vh at 50% 100%, rgba(175,82,222,.18), transparent 62%),
-    var(--bg); background-attachment:fixed; }
-  @media (prefers-color-scheme: dark){ :root[data-style="ios"]:not([data-theme="light"]) body{ background:#000; } }
-  :root[data-theme="dark"][data-style="ios"] body{ background:#000; }
+  /* iOS colour blobs live on a dedicated FIXED layer. A body background with background-attachment:fixed is
+     ignored on iOS/Android browsers, so the blobs would scroll away and every card lower down would sit on flat
+     grey. A position:fixed ::before (z-index:-1) stays put behind the whole page, so the glass always has colour
+     to refract. Kept in BOTH light and dark - dark keeps the #000 base (from --bg) with slightly stronger blobs. */
+  :root[data-style="ios"] body{ position:relative; }
+  :root[data-style="ios"] body::before{ content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;background:
+    radial-gradient(40vmax 40vmax at 8% 6%, rgba(0,122,255,.22), transparent 60%),
+    radial-gradient(38vmax 38vmax at 95% 20%, rgba(255,149,0,.18), transparent 60%),
+    radial-gradient(34vmax 34vmax at 20% 55%, rgba(52,199,89,.14), transparent 60%),
+    radial-gradient(42vmax 42vmax at 60% 100%, rgba(175,82,222,.18), transparent 60%); }
+  @media (prefers-color-scheme: dark){ :root[data-style="ios"]:not([data-theme="light"]) body::before{ background:
+    radial-gradient(40vmax 40vmax at 8% 6%, rgba(0,122,255,.3), transparent 60%),
+    radial-gradient(38vmax 38vmax at 95% 20%, rgba(255,149,0,.24), transparent 60%),
+    radial-gradient(34vmax 34vmax at 20% 55%, rgba(52,199,89,.16), transparent 60%),
+    radial-gradient(42vmax 42vmax at 60% 100%, rgba(175,82,222,.26), transparent 60%); } }
+  :root[data-theme="dark"][data-style="ios"] body::before{ background:
+    radial-gradient(40vmax 40vmax at 8% 6%, rgba(0,122,255,.3), transparent 60%),
+    radial-gradient(38vmax 38vmax at 95% 20%, rgba(255,149,0,.24), transparent 60%),
+    radial-gradient(34vmax 34vmax at 20% 55%, rgba(52,199,89,.16), transparent 60%),
+    radial-gradient(42vmax 42vmax at 60% 100%, rgba(175,82,222,.26), transparent 60%); }
   :root[data-style="ios"] .card,:root[data-style="ios"] .tile,:root[data-style="ios"] .plist,
   :root[data-style="ios"] .lkpi,:root[data-style="ios"] dialog,:root[data-style="ios"] .schemeMenu,
   :root[data-style="ios"] #chat,:root[data-style="ios"] .alert{
