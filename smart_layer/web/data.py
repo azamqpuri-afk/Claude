@@ -435,6 +435,7 @@ def build(con, cfg, as_of=None):
         "mapping_warning": _mapping_warning(cfg),         # item S: mill ERP mapping older than the app
         "ui_style": _ui_style(con),                       # item AE: saved look & feel (follows the login across devices)
         "ui_theme": _ui_theme(con),                       # item AE: saved Auto/Light/Dark choice (follows the login)
+        "replay": _replay(con, as_of),                    # item AP: today's latest cash + dispatch, to replay once on open
         "kpis": {
             "meters": round(today[1] or 0) if today else 0,
             "dispatched_month": round(disp_month or 0), "woven_month": round(woven_month or 0),
@@ -607,6 +608,34 @@ def _ui_theme(con):
     from .. import store as _store
     t = _store.get_state(con, "ui_theme", "auto")
     return t if t in ("auto", "light", "dark") else "auto"
+
+
+def _replay(con, as_of):
+    """Item AP: the single latest cash movement and the single latest fabric dispatch/receipt booked TODAY, in the
+    shape the dashboard's animations expect, so it can replay them once when it opens (the live ones are easy to
+    miss). Each is None when there was no such event today."""
+    today = (as_of or date.today()).isoformat()
+    out = {}
+    try:
+        c = con.execute("""SELECT l.amount, COALESCE(a.account_name, l.narration)
+                FROM ledger_entries l JOIN accounts a USING (account_code)
+                WHERE a.account_group = 'cash' AND l.voucher_date = ? AND l.voucher_kind <> 'opening' AND l.amount <> 0
+                ORDER BY l.entered_at DESC, l.rowid DESC LIMIT 1""", (today,)).fetchone()
+        if c:
+            out["cash"] = {"kind": "cash", "delta": round(c[0]), "label": str(c[1] or "")[:40]}
+    except Exception:
+        pass
+    try:
+        d = con.execute("""SELECT fd.direction, fd.meters, COALESCE(p.party_name, fd.deliver_to, fd.party_code), fd.quality
+                FROM fabric_dispatches fd LEFT JOIN parties p ON p.party_code = fd.party_code
+                WHERE fd.dispatch_date = ? AND COALESCE(fd.meters, 0) > 0
+                ORDER BY fd.rowid DESC LIMIT 1""", (today,)).fetchone()
+        if d:
+            out["truck"] = {"kind": ("in" if d[0] == "in" else "out"), "what": "fabric",
+                            "meters": round(d[1] or 0), "party": str(d[2] or "")[:24]}
+    except Exception:
+        pass
+    return out
 
 
 def _mapping_warning(cfg):
