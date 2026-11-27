@@ -114,6 +114,11 @@ Save-Task "Smart Layer Dashboard" "$AppDir\run_dashboard.cmd" $dashPrin $dashTri
 
 if ($Start) {                                        # setup has written config.toml - safe to start now
     Stop-ScheduledTask -TaskName "Smart Layer Dashboard" -ErrorAction SilentlyContinue
+    # Stop-ScheduledTask only ends the task's cmd wrapper; run_dashboard.cmd launches SmartLayer.exe which keeps
+    # serving the OLD config from memory. Kill the exe itself so the restart below actually reloads the new config.
+    Start-Sleep -Milliseconds 300
+    taskkill.exe /IM SmartLayer.exe /F /T 2>$null | Out-Null
+    Start-Sleep -Milliseconds 300
     Start-ScheduledTask -TaskName "Smart Layer Dashboard"
     Start-ScheduledTask -TaskName "Smart Layer Live" -ErrorAction SilentlyContinue   # first live pull now
 }

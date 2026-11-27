@@ -2000,6 +2000,10 @@ def test_vAQ_real_cash_cost_and_challan_tracking(env):
         assert rc["challan"]["status"] in ("due", "pending", "overdue")            # demo has no FBR payment -> unpaid
         months = _repfin.real_cash_months(con, cfg, END)
         assert months and all(("real_per" in m and "margin_per" in m and "challan" in m) for m in months)
+        # AQ-5: the real-cash figure without sizing is present and never exceeds the with-sizing figure
+        assert "real_per_nosz" in rc and "sizing_gst_estimated" in rc
+        assert rc["real_per_nosz"] is None or rc["real_per"] is None or rc["real_per_nosz"] <= rc["real_per"]
+        assert all(("real_per_nosz" in m and "sizing_gst" in m) for m in months)
     finally:
         for k, v in saved.items():
             if v is None:

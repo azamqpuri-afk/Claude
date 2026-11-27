@@ -409,6 +409,40 @@ def challan_status(month, cfg, as_of, found):
     return "pending" if as_of <= due else "overdue"
 
 
+def _sizing_accounts(con, cfg):
+    """Item AQ-5: the expense account codes that fall in the 'sizing' cost bucket, so GST paid in the same vouchers
+    as a sizing cost can be separated out."""
+    out = []
+    for acode, head, name in con.execute("SELECT account_code, head_name, account_name FROM accounts WHERE account_group = 'expense'"):
+        if _bucket_of(head, name, cfg) == "sizing":
+            out.append(str(acode))
+    return out
+
+
+def _sizing_gst(con, cfg, lo, hi):
+    """Item AQ-5: GST (input tax) paid in the SAME vouchers that carry a sizing cost, so the real-cash cost can be
+    shown without sizing. Returns the attributed amount (0.0 when none is found in those vouchers), or None when it
+    cannot be attributed (no sizing accounts or no input-tax accounts configured) so the caller can estimate it."""
+    szacc = _sizing_accounts(con, cfg)
+    inacc = [str(a) for a in (cfg["cost"].get("input_tax_accounts") or []) if str(a).strip()]
+    if not szacc or not inacc:
+        return None
+    vids = [r[0] for r in con.execute(
+        "SELECT DISTINCT voucher_id FROM ledger_entries WHERE account_code IN (%s) AND voucher_date >= ? AND voucher_date <= ? AND voucher_kind <> 'opening'"
+        % ",".join("?" * len(szacc)), szacc + [lo, hi])]
+    if not vids:
+        return 0.0
+    side = cfg["cost"].get("input_tax_side", "dr")
+    expr = "SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END)" if side == "cr" else "SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END)"
+    total = 0.0
+    for i in range(0, len(vids), 400):                   # chunk the voucher-id list to stay under the SQL param limit
+        chunk = vids[i:i + 400]
+        row = con.execute("SELECT %s FROM ledger_entries WHERE voucher_id IN (%s) AND account_code IN (%s)"
+                          % (expr, ",".join("?" * len(chunk)), ",".join("?" * len(inacc))), chunk + inacc).fetchone()
+        total += row[0] or 0
+    return round(total, 2)
+
+
 def _sales_exgst(con, lo, hi):
     """Sales booked in a month, ex-GST (revenue ledger credits)."""
     r = con.execute("""SELECT -COALESCE(SUM(l.amount), 0) FROM ledger_entries l JOIN accounts a USING (account_code)
@@ -437,17 +471,29 @@ def real_cash_months(con, cfg, as_of=None, months=12):
         found = ch is not None
         challan_paid = ch["paid"] if found else 0
         real = exgst + input_gst + (challan_paid if found else 0)
+        # item AQ-5: the same figure WITHOUT sizing = real − (sizing ex-GST + GST paid on sizing bills). GST on sizing
+        # is the input tax booked in the same vouchers as a sizing cost; when it cannot be attributed, pro-rate it
+        # from the month's input GST over its ex-GST cost base, and say so ("estimated").
+        sizing_exgst = b["sizing"]
+        sz_gst = _sizing_gst(con, cfg, lo, hi)
+        sz_gst_est = sz_gst is None
+        if sz_gst_est:
+            sz_gst = round(sizing_exgst * (input_gst / exgst), 2) if exgst else 0.0
+        real_nosz = real - (sizing_exgst + sz_gst)
         out_gst = _tax_amount(con, c.get("output_tax_accounts"), c.get("output_tax_side", "cr"), c.get("output_tax_vtypes"), lo, hi) or 0
         wht = _tax_amount(con, c.get("withholding_tax_accounts"), c.get("withholding_tax_side", "dr"), c.get("withholding_tax_vtypes"), lo, hi) or 0
         cash_sales = _sales_exgst(con, lo, hi) + out_gst - wht
         per = (lambda v: round(v / w, 2) if (w and v is not None) else None)
         due, _rem = _challan_due(m, cfg)
         rp, sp = per(real), per(cash_sales)
+        rpn = per(real_nosz)
         out.append({"month": m, "woven": round(w), "exgst": round(exgst, 2), "input_gst": round(input_gst, 2),
                     "challan": {"paid": round(challan_paid, 2), "date": (ch["date"] if found else None),
                                 "status": challan_status(m, cfg, as_of, found), "due": due.isoformat(),
                                 "payments": (ch["payments"] if found else [])},
                     "real_cost": round(real, 2), "real_per": rp,
+                    "sizing_exgst": round(sizing_exgst, 2), "sizing_gst": round(sz_gst, 2), "sizing_gst_estimated": sz_gst_est,
+                    "real_cost_nosz": round(real_nosz, 2), "real_per_nosz": rpn,
                     "cash_sales": round(cash_sales, 2), "sales_per": sp,
                     "margin_per": (None if (rp is None or sp is None) else round(sp - rp, 2)),
                     "closed": d["closed"]})

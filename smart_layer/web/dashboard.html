@@ -1340,12 +1340,13 @@ function challanMeta(ch, cur){
 }
 function realCostTile(){
   var c=(D&&D.real_cost)||{};
-  if(!c.enabled) return "";                      // item AQ: Dost-specific, OFF unless [cost] cash_view + fbr_payment_accounts
-  if(!c.closed) return tile("💵 Cost/m (real cash)", "—", "no closed month yet · tap", "", "", "realcost");
+  if(!c.enabled || !c.closed) return "";         // item AQ: OFF unless [cost] cash_view + fbr_payment_accounts; and
+                                                 // nothing to show (no closed month yet) → vanish, not a dead "—" tile
   var cur=c.currency||"Rs";
   var ch=c.challan||{};
+  var nosz = (c.real_per_nosz!=null) ? (cur+" "+c.real_per_nosz+"/m without sizing · ") : "";   // item AQ-5
   return tile("💵 Cost/m (real cash) ("+esc(c.month)+")", cur+" "+c.real_per,
-    challanMeta(ch, cur)+" · tap for cash view", "", "", "realcost");
+    nosz+challanMeta(ch, cur)+" · tap for cash view", "", "", "realcost");
 }
 function drill(which){
   if(tileHidden(which)){ toast("Amounts hidden — tap 👁 to show"); return; }   // item AN: block the drill only for a hidden tile
@@ -1441,6 +1442,7 @@ async function drawRealCost(){
       var pm =(v)=> v==null?"—":(cur+" "+v+"/m");
       var rsm=(v)=> v==null?"—":(cur+" "+num(v));
       head=`<div class="lkpi" style="margin-bottom:8px"><div><div class="t">${esc(h.month)} · real cash</div><div class="v">${pm(h.real_per)}</div></div>`+
+        `<div><div class="t">without sizing</div><div class="v">${pm(h.real_per_nosz)}</div></div>`+
         `<div><div class="t">real sales</div><div class="v">${pm(h.sales_per)}</div></div>`+
         `<div><div class="t">real margin</div><div class="v">${pm(h.margin_per)}</div></div></div>`;
       head+=`<p style="margin:0 0 8px">${CHALLAN_BADGE(ch.status)} <span class="muted" style="font-size:12px">${esc(challanMeta(ch,cur))}</span></p>`;
@@ -1451,6 +1453,10 @@ async function drawRealCost(){
       brk+=row("GST paid on purchases", rsm(h.input_gst));
       brk+=row("FBR sales-tax challan paid", ch.status==="paid"?rsm(ch.paid):(ch.status==="overdue"?'<span class="tag bad">not paid — overdue</span>':'<span class="tag mid">not paid yet</span>'));
       brk+=row("Real cash cost", rsm(h.real_cost), "grand");
+      // item AQ-5: the same figure without sizing (sizing cost + GST on sizing taken out)
+      var szlbl = "less sizing ex-GST + GST on sizing"+(h.sizing_gst_estimated?" (GST estimated)":"");
+      brk+=row(szlbl, "− "+rsm((h.sizing_exgst||0)+(h.sizing_gst||0)), "sub");
+      brk+=row("Real cash cost (without sizing)", rsm(h.real_cost_nosz), "grand");
       brk+=`</tbody></table>`;
       head+=`<p class="muted" style="margin:6px 0;font-size:12px">The challan is counted only once actually paid. Headline is the last CLOSED month.</p>`+brk;
     } else {
@@ -1460,11 +1466,12 @@ async function drawRealCost(){
       var cur=h.currency||"Rs", ch=m.challan||{};
       var chcell = ch.status==="paid" ? (num(ch.paid)+" ✓") : (ch.status==="overdue"?"overdue":(ch.status==="pending"?"pending":"—"));
       return [esc(m.month), num(m.woven), num(m.exgst), num(m.input_gst), chcell, num(m.real_cost),
-              m.real_per==null?"—":(cur+" "+m.real_per), m.sales_per==null?"—":(cur+" "+m.sales_per),
+              m.real_per==null?"—":(cur+" "+m.real_per), m.real_per_nosz==null?"—":(cur+" "+m.real_per_nosz),
+              m.sales_per==null?"—":(cur+" "+m.sales_per),
               m.margin_per==null?"—":(cur+" "+m.margin_per),
               m.closed?'<span class="tag ok">closed</span>':'<span class="tag mid">not closed</span>'];
     });
-    var cols=["Month","Woven m","Cost ex-GST","GST on buys","Challan","Real cost","Real/m","Sales/m","Margin/m","Closed?"];
+    var cols=["Month","Woven m","Cost ex-GST","GST on buys","Challan","Real cost","Real/m","Real/m no sizing","Sales/m","Margin/m","Closed?"];
     $("#drawer-body").innerHTML=head+(mrows.length?table(cols,mrows,[1,2,3,5]):'<p class="muted">No real-cash data.</p>');
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load the real-cash view.</p>'; }
 }
