@@ -1340,8 +1340,10 @@ function challanMeta(ch, cur){
 }
 function realCostTile(){
   var c=(D&&D.real_cost)||{};
-  if(!c.enabled || !c.closed) return "";         // item AQ: OFF unless [cost] cash_view + fbr_payment_accounts; and
-                                                 // nothing to show (no closed month yet) → vanish, not a dead "—" tile
+  if(!c.enabled) return "";                      // item AQ: OFF unless [cost] cash_view + fbr_payment_accounts → vanish
+  // enabled but no closed month for the picked date: show "—" with a reason, so an old date doesn't look like the tile
+  // went missing (owner feedback) - tapping still opens the drill, which explains it
+  if(!c.closed) return tile("💵 Cost/m (real cash)", "—", "no closed month for this date · tap", "", "", "realcost");
   var cur=c.currency||"Rs";
   var ch=c.challan||{};
   var nosz = (c.real_per_nosz!=null) ? (cur+" "+c.real_per_nosz+"/m without sizing · ") : "";   // item AQ-5
