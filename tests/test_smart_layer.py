@@ -626,8 +626,74 @@ def test_vAB_edits_compared_per_line(env):
     blob = " ".join((f.title + " " + f.detail).lower() for f in a2.findings)
     assert not any(f.severity == "CONFIRMED" for f in a2.findings)   # the untouched first line is not an edit
     assert "value changed" not in blob and "rate edited" not in blob
-    assert any(k.startswith("isadd-1130|GRIP|LOOM 14") for k in keys)   # the added lines flagged as additions
-    assert any(k.startswith("isadd-1130|GRIP|LOOM 5") for k in keys)
+    # AB-1 (0.22.2): the line is keyed by (slip, line serial, item) - NOT the destination - so the two added lines
+    # (sr 22/23 on the same old slip, already in the snapshot) are flagged as additions
+    assert any(k.startswith("isadd-1130|22|GRIP") for k in keys)
+    assert any(k.startswith("isadd-1130|23|GRIP") for k in keys)
+
+
+def test_vAB1_destination_relabel_is_not_add_delete(env):
+    # AB-1 (0.22.2): the ERP can re-label a line's destination (issued_to) e.g. "LOOM NO 30" -> "LOOM NO 1" without the
+    # physical line changing. Keying on the destination made one unchanged line read as deleted + re-added; keying by
+    # (slip, line_no, item) must flag NOTHING when only the destination text differs.
+    import sqlite3
+    from smart_layer.audit import edits as ed
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE items (item_code TEXT, item_name TEXT);
+        CREATE TABLE store_issues (doc_no TEXT, doc_date TEXT, entered_at TEXT, item_code TEXT, qty REAL, amount REAL,
+                                   issued_to TEXT, entered_by TEXT, line_no TEXT);
+        CREATE TABLE store_receipts (item_code TEXT, entered_at TEXT, doc_date TEXT, doc_no TEXT);
+        CREATE TABLE loom_production (prod_date TEXT, loom_code TEXT, shift TEXT, quality TEXT, meters REAL);
+        CREATE TABLE looms (loom_code TEXT, loom_name TEXT);
+    """)
+    con.execute("INSERT INTO items VALUES ('210060022','GUN METAL BARI D-60')")
+    con.execute("INSERT INTO store_issues VALUES ('1132','2026-11-26',NULL,'210060022',0.1,560,'LOOM NO 30',NULL,'20')")
+    a1 = _AuditStub(con, cfg, "2026-11-26", "2026-11-26", persist=True); a1.cur = "PKR"
+    ed.run(a1)
+    assert not a1.findings                                 # seeds, reports nothing
+    # the ERP re-labels the destination only; same slip, same line serial, same qty/amount
+    con.execute("UPDATE store_issues SET issued_to = 'LOOM NO 1' WHERE line_no = '20'")
+    a2 = _AuditStub(con, cfg, "2026-11-27", "2026-11-27", persist=True); a2.cur = "PKR"
+    ed.run(a2)
+    assert not a2.findings                                 # NO add, NO delete, NO qty/value change
+
+
+def test_vAB2_new_slip_with_old_date_is_not_backdated(env):
+    # AB-2 (0.22.2): a line on a slip we had NEVER seen before (the whole slip is new to us) is same-day data entry
+    # caught by the next morning's run - NOT a backdated insert - even when the slip's own date is a day or two back.
+    # Only a line added to a slip a prior run had ALREADY seen is flagged.
+    import sqlite3
+    from smart_layer.audit import edits as ed
+    cfg, _ = env
+    con = sqlite3.connect(":memory:")
+    con.executescript("""
+        CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE items (item_code TEXT, item_name TEXT);
+        CREATE TABLE store_issues (doc_no TEXT, doc_date TEXT, entered_at TEXT, item_code TEXT, qty REAL, amount REAL,
+                                   issued_to TEXT, entered_by TEXT, line_no TEXT);
+        CREATE TABLE store_receipts (item_code TEXT, entered_at TEXT, doc_date TEXT, doc_no TEXT);
+        CREATE TABLE loom_production (prod_date TEXT, loom_code TEXT, shift TEXT, quality TEXT, meters REAL);
+        CREATE TABLE looms (loom_code TEXT, loom_name TEXT);
+    """)
+    con.execute("INSERT INTO items VALUES ('N1','TUCKING NEEDLE'),('N2','STEEL NAIL'),('G1','GRIP')")
+    # a slip already seen in the baseline (so later additions to IT would be flagged)
+    con.execute("INSERT INTO store_issues VALUES ('1100','2026-11-20',NULL,'G1',1,590,'LOOM 5',NULL,'1')")
+    a1 = _AuditStub(con, cfg, "2026-11-26", "2026-11-26", persist=True); a1.cur = "PKR"
+    ed.run(a1)
+    # a brand-new slip 1132 dated 26-Nov (yesterday) appears only in the 27-Nov run - same-day entry, not backdated
+    con.execute("INSERT INTO store_issues VALUES ('1132','2026-11-26',NULL,'N1',2,800,'STORE',NULL,'27')")
+    con.execute("INSERT INTO store_issues VALUES ('1132','2026-11-26',NULL,'N2',5,300,'STORE',NULL,'26')")
+    a2 = _AuditStub(con, cfg, "2026-11-27", "2026-11-27", persist=True); a2.cur = "PKR"
+    ed.run(a2)
+    assert not any(k.startswith("isadd-1132") for k in {f.key for f in a2.findings})   # new slip -> not flagged
+    # but a line slipped into the ALREADY-SEEN slip 1100 under its old date IS flagged
+    con.execute("INSERT INTO store_issues VALUES ('1100','2026-11-20',NULL,'N2',9,700,'LOOM 5',NULL,'2')")
+    a3 = _AuditStub(con, cfg, "2026-11-28", "2026-11-28", persist=True); a3.cur = "PKR"
+    ed.run(a3)
+    assert any(k.startswith("isadd-1100|2|N2") for k in {f.key for f in a3.findings})
 
 
 def test_vAA_qty0_and_rate0_purchase_lines(env):

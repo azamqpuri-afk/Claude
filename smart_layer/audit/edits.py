@@ -68,7 +68,11 @@ def run(a):
                    COALESCE(s.issued_to, ''), COALESCE(s.line_no, ''), s.qty, s.amount
             FROM store_issues s LEFT JOIN items i ON i.item_code = s.item_code
             WHERE s.doc_date >= date(?, '-180 days')""", a.window[1]):
-        key = f"{doc}|{item}|{cc}|{ln}"
+        # item AB-1 (0.22.2): key the line by (slip, line serial, item) when the ERP gives a line_no. The DESTINATION
+        # (issued_to) is NOT in the key: it is a free-text field the ERP can re-label ("LOOM NO 30" vs "LOOM NO 1")
+        # without the physical line changing, and keying on it made one unchanged line read as deleted + re-added.
+        # Only when there is no line_no do we fall back to (slip, item, destination) and aggregate same-item lines.
+        key = f"{doc}|{ln}|{item}" if str(ln) != "" else f"{doc}|{item}|{cc}"
         if key in issues:                                # same key twice only when line_no is not mapped - aggregate
             issues[key][2] += qty or 0
             issues[key][3] = round(issues[key][3] + (amt or 0), 2)
@@ -85,25 +89,29 @@ def run(a):
     # backwards and makes the next daily audit report everything since as "deleted".
     prev_day = (old or {}).get("taken", "")[:10]
     if a.persist and a.window[1] >= (prev_day or a.window[1]):
-        set_state(a.con, "edit_snapshot", {"taken": now, "issues": issues, "prod": prod, "ver": 2})
-    if not old or old.get("ver") != 2:
-        return                                           # first run, or an older per-item snapshot: re-seed, report nothing
+        set_state(a.con, "edit_snapshot", {"taken": now, "issues": issues, "prod": prod, "ver": 3})
+    if not old or old.get("ver") != 3:
+        return                                           # first run, or an older-keyed snapshot: re-seed, report nothing
     since = old.get("taken", now)
     baseline_day = since[:10]
     system_rerate, human_rate_edit = _rerate_signals(a, since, now)   # read once for the whole window
     old_issues = old.get("issues", {})
     old_from = min((v[0] for v in old_issues.values()), default=None)
-    # item AB: a LINE added to a slip that is OLDER than the last snapshot - a possible backdated insert (a brand-new
-    # slip dated today is normal and not flagged). This is why the gripper "590 -> 1,770" was a false edit: two more
-    # lines were added, not an existing line's value changed.
+    old_docs = {v[6] for v in old_issues.values() if len(v) > 6}   # item AB-2: the slips a prior run had already seen
+    # item AB (0.22.2): a LINE added to a slip is a possible BACKDATED insert only when BOTH hold: the slip is dated
+    # before the last snapshot (we are noticing the line after its date) AND a prior run had already seen the slip
+    # itself (another of its lines was in that snapshot) - i.e. the slip existed without this line and the line was
+    # slipped in later under the old date. A line on a brand-new slip we had never seen is just same-day data entry
+    # caught by the next morning's run - NOT backdated - so it is left silent (INFO at most), which killed the
+    # needles/nail false alarms on slip 1132.
     for key, v in issues.items():
         if key in old_issues:
             continue
         d, name, qty, amt, cc, item, doc = v
-        if d < baseline_day:
+        if d < baseline_day and doc in old_docs:
             a.add("WATCH", "Edits", f"isadd-{key}",
                   f"Issue slip {doc} ({d}): a line was ADDED after the slip was saved - {name} x{qty:g} to {cc or '?'}, {cur} {amt:,.0f}",
-                  f"the slip is dated {d} but the line first appeared on {baseline_day} - check it is not backdated")
+                  f"the slip was already in the ERP on {baseline_day} without this line - check it is not backdated")
     for key, v in old_issues.items():
         d, name, qty, amt = v[0], v[1], v[2], v[3]
         item, doc = (v[5], v[6]) if len(v) > 6 else (key.split("|")[1], key.split("|")[0])
