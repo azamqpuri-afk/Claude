@@ -1557,6 +1557,39 @@ function drawYarn(){
 }
 
 /* ---------- weaving ---------- */
+// item AS-3: tap-to-sort state for the "Loom by loom" and "Beams on looms" cards (default loom ascending / days-left
+// ascending). WV_CTX holds the last weaving context so a header tap can re-render the loom table without a full pass.
+var LOOM_SORT={key:"loom_no",dir:1}, BEAM_SORT={key:"days",dir:1}, WV_CTX=null;
+function sortToggle(s,key){ if(s.key===key){ s.dir=-s.dir; } else { s.key=key; s.dir=1; } }
+function sortArrow(s,key){ return s.key===key ? (s.dir>0?" ▲":" ▼") : ""; }
+function _beamNo(b){ var m=String(b.beam||"").match(/\d+/); return m?parseInt(m[0],10):1e9; }
+function _loomNoText(x){ var m=String(x||"").match(/\d+/); return m?parseInt(m[0],10):1e9; }
+function renderLoomTable(){
+  if(!WV_CTX) return;
+  var w=WV_CTX.w, s=WV_CTX.s, hasScb=WV_CTX.hasScb;
+  var e=v=>v!=null?Math.round(v):"–";
+  var defs = hasScb
+    ? [["Loom","loom_no",0],["ERP% 30d","erp_eff",1],["Scb% 30d","scb_eff",1],["ERP m 30d","meters_30d",1],["Scb m 30d","scb_meters_30d",1],["ERP% mth","erp_eff_month",1],["Scb% mth","scb_eff_month",1],["ERP m mth","meters_month",1],["Scb m mth","scb_meters_month",1]]
+    : [["Loom","loom_no",0],["ERP% 30d","erp_eff",1],["ERP m 30d","meters_30d",1],["ERP% mth","erp_eff_month",1],["ERP m mth","meters_month",1]];
+  var looms=(w.looms||[]).slice();
+  var k=LOOM_SORT.key;
+  looms.sort(function(a,b){
+    var x=(a[k]==null?(k==="loom_no"?_loomNoText(a.loom):-Infinity):a[k]), y=(b[k]==null?(k==="loom_no"?_loomNoText(b.loom):-Infinity):b[k]);
+    if(x<y) return -LOOM_SORT.dir; if(x>y) return LOOM_SORT.dir;
+    return (a.loom_no||_loomNoText(a.loom))-(b.loom_no||_loomNoText(b.loom));
+  });
+  var cellsFor = hasScb
+    ? l=>[`<b>${esc(l.loom)}</b>`, e(l.erp_eff), e(l.scb_eff), num(l.meters_30d), num(l.scb_meters_30d), e(l.erp_eff_month), e(l.scb_eff_month), num(l.meters_month), num(l.scb_meters_month)]
+    : l=>[`<b>${esc(l.loom)}</b>`, e(l.erp_eff), num(l.meters_30d), e(l.erp_eff_month), num(l.meters_month)];
+  var head="<thead><tr>"+defs.map(d=>`<th data-sort="${d[1]}"${d[2]?' class="num"':''} style="cursor:pointer">${d[0]}${sortArrow(LOOM_SORT,d[1])}</th>`).join("")+"</tr></thead>";
+  var body=looms.map(l=>"<tr>"+cellsFor(l).map((c,i)=>`<td${defs[i][2]?' class="num"':''}>${c}</td>`).join("")+"</tr>").join("");
+  var total = hasScb
+    ? [`<b>TOTAL</b>`, e(s.erp_eff), e(s.scb_eff), num(s.erp_meters_total), num(s.scb_meters_total), e(s.erp_eff_month), e(s.scb_eff_month), num(s.erp_meters_month), num(s.scb_meters_month)]
+    : [`<b>TOTAL</b>`, e(s.erp_eff), num(s.erp_meters_total), e(s.erp_eff_month), num(s.erp_meters_month)];
+  body += "<tr>"+total.map((c,i)=>`<td${defs[i][2]?' class="num"':''}>${c}</td>`).join("")+"</tr>";
+  $("#wv-loomcount").textContent = (w.looms||[]).length + " looms · 30-day & this month · tap a header to sort";
+  $("#wv-looms").outerHTML = `<table id="wv-looms" class="stickyloom">${head}<tbody>${body}</tbody></table>`;
+}
 function renderWeaving(){
   var w=D.weaving||{}, s=w.shed||{};
   var hasScb = !!w.scoreboard_available, useScb = hasScb && wvSrc==="scb";
@@ -1599,24 +1632,10 @@ function renderWeaving(){
     $("#wv-cmp").innerHTML = pair("Efficiency (30-day avg)","%",s.scb_eff,s.erp_eff,true)+
                              pair("Meters (30 days)","m",s.scb_meters_total,s.erp_meters_total,false);
   }
-  // loom by loom - numeric loom order; ERP & scoreboard, efficiency and meters, for the last 30 days AND this month;
-  // a shed TOTAL row; always shown when the scoreboard is connected (not just on the toggle).
-  var looms = (w.looms||[]).slice().sort(function(a,b){ return (a.loom_no||0)-(b.loom_no||0) || String(a.loom).localeCompare(String(b.loom)); });
-  var e=v=>v!=null?Math.round(v):"–";
-  var cols, rows;
-  if(hasScb){
-    cols = ["Loom","ERP% 30d","Scb% 30d","ERP m 30d","Scb m 30d","ERP% mth","Scb% mth","ERP m mth","Scb m mth"];
-    rows = looms.map(l=>[`<b>${esc(l.loom)}</b>`, e(l.erp_eff), e(l.scb_eff), num(l.meters_30d), num(l.scb_meters_30d),
-                         e(l.erp_eff_month), e(l.scb_eff_month), num(l.meters_month), num(l.scb_meters_month)]);
-    rows.push([`<b>TOTAL</b>`, e(s.erp_eff), e(s.scb_eff), num(s.erp_meters_total), num(s.scb_meters_total),
-               e(s.erp_eff_month), e(s.scb_eff_month), num(s.erp_meters_month), num(s.scb_meters_month)]);
-  } else {
-    cols = ["Loom","ERP% 30d","ERP m 30d","ERP% mth","ERP m mth"];
-    rows = looms.map(l=>[`<b>${esc(l.loom)}</b>`, e(l.erp_eff), num(l.meters_30d), e(l.erp_eff_month), num(l.meters_month)]);
-    rows.push([`<b>TOTAL</b>`, e(s.erp_eff), num(s.erp_meters_total), e(s.erp_eff_month), num(s.erp_meters_month)]);
-  }
-  $("#wv-loomcount").textContent = looms.length + " looms · 30-day & this month";
-  $("#wv-looms").outerHTML = table(cols, rows, cols.map((_,i)=>i).slice(1)).replace("<table", '<table id="wv-looms" class="stickyloom"');
+  // loom by loom - numeric loom order by default, tappable headers (item AS-3); ERP & scoreboard efficiency and
+  // meters for the last 30 days AND this month, with a shed TOTAL row. Always shown when the scoreboard is connected.
+  WV_CTX = {w:w, s:s, hasScb:hasScb};
+  renderLoomTable();
   renderBeams();
 }
 function renderBeams(){
@@ -1631,17 +1650,32 @@ function renderBeams(){
   if(sz){ sz.onclick=drawSizedBeams; sz.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); drawSizedBeams(); } }; }
   var wc=$("#wv-weftcheck");
   if(wc) wc.innerHTML = STATIC_DATA ? "" : `<button class="btn ghost" onclick="drawWeftCheck()">⚖ Weft: scoreboard vs ERP ›</button>`;
-  var bm=(D.beams||[]);
+  // item AS-3: sortable by loom no / beam no / fabric to come / days left; default days-left ascending (soonest first)
+  var bkey={ loom:b=>(b.loom_no!=null?b.loom_no:_loomNoText(b.loom)), beam:b=>_beamNo(b),
+             to_come:b=>(b.to_come!=null?b.to_come:-Infinity), days:b=>(b.days!=null?b.days:1e9) };
+  var bm=(D.beams||[]).slice();
+  var bf=bkey[BEAM_SORT.key]||bkey.days;
+  bm.sort(function(a,b){ var x=bf(a), y=bf(b); if(x<y) return -BEAM_SORT.dir; if(x>y) return BEAM_SORT.dir; return _beamNo(a)-_beamNo(b); });
   var rows=bm.map(function(b){
     var warn = b.alert ? ' class="lowrow"' : "";
     var backup = b.backup ? ("✓ "+esc(b.backup)) : (b.over? "running over" : '<span class="tag out">none</span>');
     return `<tr${warn}><td><b>${esc(b.loom||"")}</b></td><td>${esc(b.beam||"")}</td><td>${esc(b.quality||b.contract||"")}</td>`+
            `<td class="num">${b.to_come!=null?num(b.to_come):"–"}</td><td class="num">${b.days!=null?b.days:"–"}</td><td>${backup}</td></tr>`;
   }).join("");
-  $("#wv-beams").outerHTML = (`<table id="wv-beams"><thead><tr><th>Loom</th><th>Beam</th><th>Quality / contract</th>`+
-    `<th class="num">Fabric to come (m)</th><th class="num">Days left</th><th>Backup</th></tr></thead><tbody>`+
+  var bh=(lbl,key,n)=>`<th data-sort="${key}"${n?' class="num"':''} style="cursor:pointer">${lbl}${sortArrow(BEAM_SORT,key)}</th>`;
+  $("#wv-beams").outerHTML = (`<table id="wv-beams"><thead><tr>`+bh("Loom","loom")+bh("Beam","beam")+`<th>Quality / contract</th>`+
+    bh("Fabric to come (m)","to_come",1)+bh("Days left","days",1)+`<th>Backup</th></tr></thead><tbody>`+
     (rows||`<tr><td colspan="6" class="muted">No beams on looms.</td></tr>`)+`</tbody></table>`);
 }
+// item AS-3: one delegated handler re-sorts either card on a header tap (the tables are replaced via outerHTML)
+document.addEventListener("click", function(ev){
+  var th = ev.target && ev.target.closest && ev.target.closest("th[data-sort]");
+  if(!th) return;
+  var tbl = th.closest("table"); if(!tbl) return;
+  var key = th.getAttribute("data-sort");
+  if(tbl.id==="wv-looms"){ sortToggle(LOOM_SORT, key); renderLoomTable(); }
+  else if(tbl.id==="wv-beams"){ sortToggle(BEAM_SORT, key); renderBeams(); }
+});
 async function drawSizedBeams(){
   openDrawer("📥 Sized beams waiting for a loom",'<p class="muted">Loading…</p>');
   if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see sized beams.</p>'; return; }
