@@ -234,6 +234,17 @@ class App:
         finally:
             con.close()
 
+    def real_cost(self, day=None):
+        """Item AQ: real cash cost/metre - headline (last closed month) + the per-month real-cash table (ex-GST
+        heads + GST on purchases + the FBR challan actually paid), with each month's challan status and real margin."""
+        from ..reports import finance as _rf
+        con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
+        try:
+            return {"headline": _rf.real_cash_headline(con, self.cfg, day),
+                    "months": _rf.real_cash_months(con, self.cfg, day)}
+        finally:
+            con.close()
+
     def manual_list(self, scope, field=None):
         from .. import manual
         con = store.open_store(self.cfg.path(self.cfg["store"]["path"]))
@@ -937,7 +948,7 @@ def get_response(app, path, query, check_licence=True):
                 "/api/closing/count-review", "/api/closing/counts-saved",
                 "/api/gully", "/api/gully/sets", "/api/gully/lines", "/api/gully/quality",
                 "/api/contracts-all", "/api/contract-report",
-                "/api/feed", "/api/feed/production", "/api/fabric/history", "/api/fabric/dispatches", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost",
+                "/api/feed", "/api/feed/production", "/api/fabric/history", "/api/fabric/dispatches", "/api/finance/sales", "/api/finance/banks", "/api/finance/cost", "/api/finance/realcost",
                 "/api/edits", "/api/edits/detail",
                 "/api/looms/efficiency", "/api/looms/days",
                 "/api/scoreboard", "/api/scoreboard/trend", "/api/scoreboard/live", "/api/sensor/episode",
@@ -971,6 +982,12 @@ def get_response(app, path, query, check_licence=True):
             except ValueError:
                 return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
             return 200, app.cost_metre(cday), "application/json", {}
+        if path == "/api/finance/realcost":              # item AQ: real cash cost/metre + FBR challan tracking
+            try:
+                cday = date.fromisoformat(params["date"]) if params.get("date") else None
+            except ValueError:
+                return 400, {"error": "date must be YYYY-MM-DD"}, "application/json", {}
+            return 200, app.real_cost(cday), "application/json", {}
         if path == "/api/store/issues":                  # last issues of one item (store drill-down)
             return 200, app.issue_history(params.get("item", ""), params.get("limit", 20)), "application/json", {}
         if path in ("/api/store/rates", "/api/store/loom"):   # rates audit / loom consumption drill (optional from/to)

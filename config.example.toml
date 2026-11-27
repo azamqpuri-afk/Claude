@@ -202,7 +202,7 @@ heads = {}
 # Sales tax is a pass-through, so by default it is a COST only to the extent input tax paid on purchases exceeds the
 # output tax collected on sales (the un-recovered excess); when output >= input the net is payable to FBR but was
 # collected from customers, so it is shown as information only, not a cost. Set "net" for the old signed output-input.
-# sales_tax_cost = "excess_input"   # "excess_input" (default) | "net"
+# sales_tax_cost = "net"   # "net" (default: signed output - input) | "excess_input" (only un-recovered input is a cost)
 # output_tax_accounts = []     # sales / output tax; usually credits posted by sales invoices
 # output_tax_side = "cr"
 # output_tax_vtypes = []       # e.g. ["GPOUT"] to count only sales-invoice vouchers
@@ -213,6 +213,42 @@ heads = {}
 # withholding_tax_accounts = []   # income tax withheld by customers at payment (an expense borne by the mill)
 # withholding_tax_side = "dr"
 # withholding_tax_vtypes = []     # e.g. ["BR"] for bank-receipt vouchers; empty = all
+#
+# -- item AQ: FBR sales-tax challan tracking (second "real cash" cost/metre tile + a needs-attention reminder) --
+# The Overview can show a SECOND cost tile, "Cost/m (real cash)" - the cash that actually left the mill: ex-GST heads +
+# GST paid on purchases + the monthly FBR sales-tax challan ACTUALLY paid. The challan is counted only once its payment
+# appears on the accounts below, and a needs-attention reminder is raised if it is not paid. This whole feature (the
+# tile, its drill and the reminders) is OFF by default: it appears only when BOTH cash_view is true AND
+# fbr_payment_accounts is set, so mills that do not want it see nothing.
+# cash_view = false            # true turns on the "Cost/m (real cash)" tile, its drill and the FBR challan reminders
+# fbr_payment_accounts = []    # the account(s) hit when the monthly sales-tax challan is paid (usually the bank/cash cr,
+#                              #   or the sales-tax-payable account dr) - whichever uniquely marks a challan payment
+# fbr_payment_side = "dr"      # "dr" if the payable account is debited when paid, "cr" if the bank is credited
+# fbr_payment_vtypes = []      # e.g. ["CP","BP"] to count only cash/bank-payment vouchers; empty = all
+# challan_month_pattern = "M/O\\s*([A-Z]{3,9})[-\\s]*(\\d{2,4})"   # reads the TAX MONTH from the payment narration
+#                              #   (e.g. "Sales tax M/O OCT-26"); when it does not match, the month before the payment
+# challan_due_day = "end"      # the challan is due this day of the NEXT month ("end" = last day; or a number like 18)
+# challan_remind_day = 20      # start reminding from this day of the next month if still unpaid (WATCH, then ACTION
+#                              #   once past the due day)
+#
+# Example of a complete [cost] taxes + real-cash block as one mill (Dost) runs it - all opt-in, nothing here is a
+# default; copy and adapt the account codes to your own chart of accounts:
+#   sales_tax_cost        = "excess_input"
+#   output_tax_accounts   = ["200201001"]   # output/sales tax collected (credit on sales invoices)
+#   output_tax_side       = "cr"
+#   output_tax_vtypes     = ["GPOUT"]
+#   input_tax_accounts    = ["300501007"]   # input/purchase tax paid (debit)
+#   input_tax_side        = "dr"
+#   further_tax_accounts  = ["450216005"]   # further tax on sales (expense JV, debit)
+#   further_tax_side      = "dr"
+#   withholding_tax_accounts = ["300501001"]
+#   withholding_tax_side  = "dr"
+#   cash_view             = true
+#   fbr_payment_accounts  = ["200201001"]   # sales-tax-payable account, debited when the challan is paid
+#   fbr_payment_side      = "dr"
+#   fbr_payment_vtypes    = ["CP", "BP"]
+#   challan_due_day       = "end"
+#   challan_remind_day    = 20
 
 [monitor]
 # Loom-monitor (scoreboard) efficiency. Looms listed here are left OUT of the shed / mill scoreboard average

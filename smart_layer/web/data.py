@@ -134,7 +134,7 @@ def _weaving(con, cfg, as_of):
     # overlaid only where it matches a real loom, so phantom scoreboard-only machines never appear on the floor.
     real = {r[0] for r in con.execute("SELECT DISTINCT loom_code FROM loom_production")}
     looms = []
-    for code in sorted(real, key=str):
+    for code in sorted(real, key=_loom_sort_key):          # item AS: loom number ascending, numerically (1,2,...,10)
         e, s = erp.get(code), scb.get(code)
         # the floor shows 30-day average efficiency only (no running/idle/stopped - the ERP posts production in
         # ~3-day batches, so "running today" is not a reliable signal; the 30-day average is).
@@ -291,6 +291,7 @@ def build(con, cfg, as_of=None):
                SUM(COALESCE(p.rejected_m, 0)), GROUP_CONCAT(DISTINCT p.quality)
         FROM loom_production p LEFT JOIN looms l ON l.loom_code = p.loom_code
         WHERE p.prod_date = ? GROUP BY p.loom_code ORDER BY 1""", (d,))]
+    looms.sort(key=lambda r: _loom_sort_key(r["loom"]))    # item AS: loom number ascending, numerically
     today = prod.get(d)
 
     # money
@@ -468,6 +469,7 @@ def build(con, cfg, as_of=None):
         "charts": {**_chart_series(con, as_of), "sales": sales_series},
         "fin": fin_mod.overview(con),
         "cost": _cost_head(con, cfg, as_of),
+        "real_cost": _real_cost_head(con, cfg, as_of),
         "weaving": _weaving(con, cfg, as_of),
         "yarn_fabric": _yarn_fabric(con, cfg, as_of),
         "gully": _gully_summary(con, cfg, as_of),
@@ -789,6 +791,16 @@ def _cost_head(con, cfg, as_of):
         return {}
 
 
+def _real_cost_head(con, cfg, as_of):
+    """Item AQ: the real-cash cost/metre headline (last closed month) for the second Overview cost tile. Includes
+    GST paid on purchases and the FBR sales-tax challan actually paid, plus the month's challan status."""
+    try:
+        from ..reports import finance as _rf
+        return _rf.real_cash_headline(con, cfg, as_of)
+    except Exception:
+        return {"closed": False}
+
+
 def _loom_num(code):
     """The loom number inside a loom code: '10.0' -> 10 (the monitor returns floats), 'L07' -> 7, '6' -> 6,
     'LOOM-12' -> 12. None if none."""
@@ -799,6 +811,13 @@ def _loom_num(code):
         import re
         m = re.findall(r"\d+", s)                         # 'L07', 'LOOM-12' - a number inside a code
         return int(m[-1]) if m else None
+
+
+def _loom_sort_key(code):
+    """Item AS: a numeric sort key so looms list 1, 2, ... 10 (not text '10' before '2'). Looms with no number in
+    their code sort last, then alphabetically, so nothing is ever dropped from a listing."""
+    n = _loom_num(code)
+    return (0, n, "") if n is not None else (1, 0, str(code))
 
 
 def _excluded_looms(cfg):

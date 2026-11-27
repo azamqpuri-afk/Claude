@@ -1879,6 +1879,7 @@ def test_vAM_sales_tax_is_cost_only_when_input_exceeds_output(env):
     c = cfg.data.setdefault("cost", {})
     c["output_tax_accounts"] = [accs[0]]; c["output_tax_side"] = "cr"               # output = credits (collected)
     c["input_tax_accounts"] = [accs[1] if len(accs) > 1 else accs[0]]; c["input_tax_side"] = "dr"   # input = debits (paid)
+    c["sales_tax_cost"] = "excess_input"                                            # opt in to the pass-through treatment
     try:
         t = _repfin._tax_totals(con, cfg, "2026-09-01", "2026-09-30")
         assert t["sales_tax_mode"] == "excess_input"
@@ -1890,6 +1891,75 @@ def test_vAM_sales_tax_is_cost_only_when_input_exceeds_output(env):
     finally:
         for k in ("output_tax_accounts", "output_tax_side", "input_tax_accounts", "input_tax_side", "sales_tax_cost"):
             c.pop(k, None)
+
+
+def test_vAQ_real_cash_cost_and_challan_tracking(env):
+    # AQ: a second "real cash" cost/metre (ex-GST heads + GST paid on purchases + the FBR challan actually paid) with
+    # challan status, plus a WATCH/ACTION reminder - all opt-in behind [cost] cash_view + fbr_payment_accounts.
+    import sqlite3
+    cfg, con = env
+    c = cfg.data.setdefault("cost", {})
+
+    # (1) OFF by default: no cash_view / no fbr accounts -> the headline reports "not enabled" and no tile data
+    assert _repfin.real_cash_enabled(cfg) is False
+    assert _repfin.real_cash_headline(con, cfg, END) == {"enabled": False, "closed": False}
+
+    # (2) challan due/status is a pure function of the tax month and as-of date (default: due end of M+1, remind day 20)
+    due, remind = _repfin._challan_due("2026-09", cfg)
+    assert due.isoformat() == "2026-10-31" and remind.isoformat() == "2026-10-20"
+    assert _repfin.challan_status("2026-09", cfg, date(2026, 10, 2), False) == "due"       # before the reminder day
+    assert _repfin.challan_status("2026-09", cfg, date(2026, 10, 25), False) == "pending"  # reminder..due -> WATCH
+    assert _repfin.challan_status("2026-09", cfg, date(2026, 11, 5), False) == "overdue"   # past due -> ACTION
+    assert _repfin.challan_status("2026-09", cfg, date(2026, 11, 5), True) == "paid"       # payment found -> cleared
+
+    # (3) _fbr_challans reads the tax month from the narration ("M/O SEP-26"), else the month before the payment
+    db = sqlite3.connect(":memory:")
+    db.execute("CREATE TABLE ledger_entries(account_code TEXT, voucher_date TEXT, narration TEXT, amount REAL, voucher_kind TEXT, voucher_type TEXT)")
+    db.executemany("INSERT INTO ledger_entries VALUES (?,?,?,?,?,?)", [
+        ("9001", "2026-10-18", "Sales tax challan M/O SEP-26", 50000, "payment", "CP"),
+        ("9001", "2026-11-03", "Sales tax paid to FBR", 40000, "payment", "BP"),   # no month in text -> October
+    ])
+    saved = {k: c.get(k) for k in ("cash_view", "fbr_payment_accounts", "fbr_payment_side", "fbr_payment_vtypes")}
+    c.update({"cash_view": True, "fbr_payment_accounts": ["9001"], "fbr_payment_side": "dr", "fbr_payment_vtypes": ["CP", "BP"]})
+    try:
+        assert _repfin.real_cash_enabled(cfg) is True                              # both switches on -> enabled
+        ch = _repfin._fbr_challans(db, cfg, "2026-01-01", "2026-12-31")
+        assert round(ch["2026-09"]["paid"]) == 50000 and round(ch["2026-10"]["paid"]) == 40000
+        # (4) with the feature on, the real-cash headline computes on the demo; with no GST booked it equals the
+        # accounting cost WITH sizing (ex-GST heads + 0 input GST + 0 challan paid for that month)
+        rc = _repfin.real_cash_headline(con, cfg, END)
+        cm = _repfin.cost_headline(con, cfg, END)
+        assert rc["enabled"] and rc["closed"] and rc["month"] == cm["month"]
+        assert abs(rc["real_per"] - cm["with_sizing"]) <= 0.05
+        assert rc["challan"]["status"] in ("due", "pending", "overdue")            # demo has no FBR payment -> unpaid
+        months = _repfin.real_cash_months(con, cfg, END)
+        assert months and all(("real_per" in m and "margin_per" in m and "challan" in m) for m in months)
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                c.pop(k, None)
+            else:
+                c[k] = v
+        db.close()
+
+
+def test_vAS_looms_sort_numerically(env):
+    # AS: every loom listing is ordered by loom number ASCENDING, numerically (1,2,...,10 - not "10" before "2").
+    from smart_layer.reports import production as _prod
+    from smart_layer.web import looms as _looms
+    cfg, con = env
+    assert _prod.loom_num("LOOM # 4") == 4 and _prod.loom_num("L07") == 7 and _prod.loom_num("10.0") == 10
+    # the key sorts numerically, and numberless looms sort last (never dropped)
+    s = sorted(["LOOM # 10", "LOOM # 2", "SPARE", "LOOM # 1"], key=_prod.loom_sort_key)
+    assert s == ["LOOM # 1", "LOOM # 2", "LOOM # 10", "SPARE"]
+    # the loom-efficiency report comes out in ascending numeric loom order
+    eff = _looms.efficiency(con, cfg, d0=date(2026, 9, 1), d1=date(2026, 9, 30))
+    nums = [_prod.loom_num(r["loom"]) for r in eff["rows"] if _prod.loom_num(r["loom"]) is not None]
+    assert nums == sorted(nums)
+    # and so does the daily weaving report
+    dp = _prod.daily_production(con, cfg, date(2026, 9, 15))
+    dnums = [_prod.loom_num(r[0]) for r in dp.rows if _prod.loom_num(r[0]) is not None]
+    assert dnums == sorted(dnums)
 
 
 from smart_layer import erp_edits as _edits   # noqa: E402

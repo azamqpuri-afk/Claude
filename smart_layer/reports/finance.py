@@ -9,10 +9,14 @@ Heads come from accounts.head_name (the ERP's grouping); without it each account
 Opening-balance vouchers are left out of the P&L.
 """
 
+import re
 from collections import defaultdict
 from datetime import date, timedelta
 
 from . import Report
+
+_MONTHS = {m: i + 1 for i, m in enumerate(
+    ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"])}
 
 
 def _months(as_of, n):
@@ -221,9 +225,10 @@ def _tax_totals(con, cfg, lo, hi):
     wht = _tax_amount(con, c.get("withholding_tax_accounts"), c.get("withholding_tax_side", "dr"), c.get("withholding_tax_vtypes"), lo, hi)
     # Sales tax is a pass-through: it is a COST only to the extent the input tax paid on purchases EXCEEDS the output
     # tax collected on sales (the un-recovered excess). When output >= input the difference is payable to FBR but was
-    # collected from customers, so it is NOT a cost - shown as an information figure only. [cost] sales_tax_cost = "net"
-    # restores the old signed output - input behaviour for a mill that wants it.
-    mode = (c.get("sales_tax_cost") or "excess_input")
+    # collected from customers, so it is NOT a cost - shown as an information figure only. This pass-through treatment
+    # is opt-in: the default is the plain signed output - input ("net"); a mill sets [cost] sales_tax_cost =
+    # "excess_input" to treat only the un-recovered excess as a cost (Dost does).
+    mode = (c.get("sales_tax_cost") or "net")
     if out is None and inp is None:
         net, payable = None, None
     else:
@@ -334,6 +339,138 @@ def cost_per_metre(con, cfg, as_of=None, months=12):
     return Report(f"Cost per metre - {first} to {last}",
                   ["Month", "Woven m", "Store/m", "Payroll/m", "Power/m", "Other/m", "Cost/m (no sizing)",
                    "Sizing/m", "Cost/m (with sizing)", "Taxes/m", "Cost/m incl. taxes", "Closed?"], rows, summary)
+
+
+# ---- item AQ: real cash cost per metre + FBR sales-tax challan tracking -----------------------------------------
+def _challan_month(narration, pay_date, cfg):
+    """The tax month an FBR payment settles: from the narration (e.g. 'M/O OCT-26'), else the month before payment."""
+    pat = cfg["cost"].get("challan_month_pattern") or r"M/O\s*([A-Z]{3,9})[-\s]*(\d{2,4})"
+    try:
+        m = re.search(pat, (narration or "").upper())
+    except re.error:
+        m = None
+    if m:
+        mon = _MONTHS.get(m.group(1)[:3])
+        if mon:
+            yr = int(m.group(2))
+            return f"{yr + 2000 if yr < 100 else yr:04d}-{mon:02d}"
+    d = date.fromisoformat(str(pay_date)[:10])
+    return (d.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+
+
+def _fbr_challans(con, cfg, lo, hi):
+    """FBR sales-tax challans actually paid: movements on the [cost] fbr_payment_accounts in the payment voucher
+    types, each matched to the tax MONTH it settles. Returns {month: {paid, date, payments[]}}."""
+    accts = [str(a) for a in (cfg["cost"].get("fbr_payment_accounts") or []) if str(a).strip()]
+    if not accts:
+        return {}
+    side = cfg["cost"].get("fbr_payment_side", "dr")
+    amtcond, amtexpr = ("amount < 0", "-amount") if side == "cr" else ("amount > 0", "amount")
+    where = "account_code IN (%s) AND voucher_date BETWEEN ? AND ? AND voucher_kind <> 'opening' AND %s" % (",".join("?" * len(accts)), amtcond)
+    params = list(accts) + [lo, hi]
+    vtypes = [str(v) for v in (cfg["cost"].get("fbr_payment_vtypes") or []) if str(v).strip()]
+    if vtypes:
+        where += " AND voucher_type IN (%s)" % ",".join("?" * len(vtypes))
+        params += vtypes
+    chal = {}
+    for d, narr, amt in con.execute("SELECT voucher_date, narration, %s FROM ledger_entries WHERE %s" % (amtexpr, where), params):
+        m = _challan_month(narr, d, cfg)
+        e = chal.setdefault(m, {"paid": 0.0, "date": None, "payments": []})
+        e["paid"] += amt or 0
+        e["payments"].append({"date": str(d)[:10], "amount": round(amt or 0), "narration": str(narr or "")[:60]})
+        if e["date"] is None or str(d)[:10] > e["date"]:
+            e["date"] = str(d)[:10]
+    for e in chal.values():
+        e["paid"] = round(e["paid"], 2)
+    return chal
+
+
+def _challan_due(month, cfg):
+    """(due_date, remind_date) for a tax month's challan: due the challan_due_day of M+1 ('end' = last day),
+    reminder from challan_remind_day of M+1."""
+    import calendar
+    y, mo = int(month[:4]), int(month[5:7])
+    ny, nmo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+    last = calendar.monthrange(ny, nmo)[1]
+    dd = cfg["cost"].get("challan_due_day", "end")
+    day = last if str(dd).lower() == "end" else min(int(dd), last) if str(dd).isdigit() else last
+    rd = cfg["cost"].get("challan_remind_day", 20)
+    remind = min(int(rd), last) if str(rd).isdigit() else last
+    return date(ny, nmo, day), date(ny, nmo, remind)
+
+
+def challan_status(month, cfg, as_of, found):
+    """paid / due (neutral, before the reminder day) / pending (WATCH) / overdue (ACTION)."""
+    if found:
+        return "paid"
+    due, remind = _challan_due(month, cfg)
+    if as_of < remind:
+        return "due"
+    return "pending" if as_of <= due else "overdue"
+
+
+def _sales_exgst(con, lo, hi):
+    """Sales booked in a month, ex-GST (revenue ledger credits)."""
+    r = con.execute("""SELECT -COALESCE(SUM(l.amount), 0) FROM ledger_entries l JOIN accounts a USING (account_code)
+            WHERE a.account_group = 'revenue' AND l.voucher_kind <> 'opening' AND l.voucher_date BETWEEN ? AND ?""",
+                    (lo, hi)).fetchone()
+    return round(r[0] or 0, 2)
+
+
+def real_cash_months(con, cfg, as_of=None, months=12):
+    """Item AQ: real cash cost per metre woven - ex-GST cost heads (with sizing) + GST paid on purchases + the FBR
+    sales-tax challan actually paid for the month (excluded until it is paid). Plus real cash sales and margin."""
+    as_of = as_of or date.today()
+    data = _cost_months(con, cfg, as_of, months)
+    if not data:
+        return []
+    chal = _fbr_challans(con, cfg, data[0]["month"] + "-01", as_of.isoformat())
+    c = cfg["cost"]
+    out = []
+    for d in data:
+        m, w = d["month"], (d["woven"] or 0)
+        lo, hi = m + "-01", _month_end(m, as_of)
+        b = d["buckets"]
+        exgst = b["store"] + b["payroll"] + b["power"] + b["other"] + b["sizing"]
+        input_gst = _tax_amount(con, c.get("input_tax_accounts"), c.get("input_tax_side", "dr"), c.get("input_tax_vtypes"), lo, hi) or 0
+        ch = chal.get(m)
+        found = ch is not None
+        challan_paid = ch["paid"] if found else 0
+        real = exgst + input_gst + (challan_paid if found else 0)
+        out_gst = _tax_amount(con, c.get("output_tax_accounts"), c.get("output_tax_side", "cr"), c.get("output_tax_vtypes"), lo, hi) or 0
+        wht = _tax_amount(con, c.get("withholding_tax_accounts"), c.get("withholding_tax_side", "dr"), c.get("withholding_tax_vtypes"), lo, hi) or 0
+        cash_sales = _sales_exgst(con, lo, hi) + out_gst - wht
+        per = (lambda v: round(v / w, 2) if (w and v is not None) else None)
+        due, _rem = _challan_due(m, cfg)
+        rp, sp = per(real), per(cash_sales)
+        out.append({"month": m, "woven": round(w), "exgst": round(exgst, 2), "input_gst": round(input_gst, 2),
+                    "challan": {"paid": round(challan_paid, 2), "date": (ch["date"] if found else None),
+                                "status": challan_status(m, cfg, as_of, found), "due": due.isoformat(),
+                                "payments": (ch["payments"] if found else [])},
+                    "real_cost": round(real, 2), "real_per": rp,
+                    "cash_sales": round(cash_sales, 2), "sales_per": sp,
+                    "margin_per": (None if (rp is None or sp is None) else round(sp - rp, 2)),
+                    "closed": d["closed"]})
+    return out
+
+
+def real_cash_enabled(cfg):
+    """The real-cash cost/metre tile, its drill and the challan alerts are Dost-specific and OFF by default. A mill
+    turns them on with [cost] cash_view = true AND a configured [cost] fbr_payment_accounts list."""
+    c = cfg["cost"]
+    return bool(c.get("cash_view")) and bool(c.get("fbr_payment_accounts"))
+
+
+def real_cash_headline(con, cfg, as_of=None, months=12):
+    """The real-cash cost/metre for the Overview tile: the last CLOSED month, with its challan status. Returns
+    {"enabled": False} unless the mill has opted in (see real_cash_enabled)."""
+    if not real_cash_enabled(cfg):
+        return {"enabled": False, "closed": False}
+    data = real_cash_months(con, cfg, as_of, months)
+    closed = [d for d in data if d["closed"]]
+    if not closed:
+        return {"enabled": True, "closed": False}
+    return {"enabled": True, "closed": True, "currency": cfg["company"]["currency"], **closed[-1]}
 
 
 def _tolerance(cfg):

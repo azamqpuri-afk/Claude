@@ -1120,7 +1120,7 @@ function render(){
     tile("📥 Receivable", M("Rs "+rs(fk.receivable_gross!=null?fk.receivable_gross:k.receivable)), recMeta, "", "", "receivable") +
     tile("📤 Payable", M("Rs "+rs(fk.owe_store_suppliers!=null?fk.owe_store_suppliers:k.payable)), payMeta, "", "", "payable") +
     tile("📈 Avg sales / month", M("Rs "+rs(k.sales_avg_12m)), avgMeta, "accent") +
-    costTile();
+    costTile() + realCostTile();
   // mill (fabric & yarn tiles drill into detail)
   var yf=D.yarn_fabric||{};
   // live scoreboard efficiency tile (#8): shown only when the scoreboard is connected (kpis carry scb_*_today)
@@ -1317,16 +1317,41 @@ function wireDrills(){
 // #25 cost-per-metre tile: the last CLOSED month's cost/m (without sizing), with-sizing + month in the meta
 function costTile(){
   var c=(D&&D.cost)||{};
-  if(!c.closed) return tile("🧮 Cost / metre", "—", (c.latest_open? (c.latest_open+" · month-end pending"):"needs [cost] heads")+" · tap", "", "", "cost");
+  if(!c.closed) return tile("🧮 Cost/m (accounting)", "—", (c.latest_open? (c.latest_open+" · month-end pending"):"needs [cost] heads")+" · tap", "", "", "cost");
   var cur=c.currency||"Rs";
   var inclTax = (c.grand_per_m!=null && c.taxes && c.taxes.total) ? (" · "+cur+" "+c.grand_per_m+" incl. sizing &amp; taxes") : "";
-  return tile("🧮 Cost / metre ("+esc(c.month)+")", cur+" "+c.no_sizing,
+  return tile("🧮 Cost/m (accounting) ("+esc(c.month)+")", cur+" "+c.no_sizing,
     cur+" "+c.with_sizing+" with sizing"+inclTax+" · tap for history", "", "", "cost");
+}
+// item AQ: the "real cash" cost/metre - what actually leaves the mill's pocket (ex-GST heads + GST paid on
+// purchases + the FBR sales-tax challan actually paid). The challan badge shows whether this month's challan is paid.
+function CHALLAN_BADGE(st){
+  if(st==="paid") return '<span class="tag ok">challan paid</span>';
+  if(st==="overdue") return '<span class="tag bad">challan overdue</span>';
+  if(st==="pending") return '<span class="tag mid">challan due soon</span>';
+  return '<span class="tag">challan upcoming</span>';           // "due": neutral, before the reminder day
+}
+function challanMeta(ch, cur){
+  if(!ch) return "";
+  if(ch.status==="paid") return "challan "+(cur||"Rs")+" "+num(ch.paid)+(ch.date?(" paid "+esc(ch.date)):" paid");
+  if(ch.status==="overdue") return "FBR challan overdue (was due "+esc(ch.due)+")";
+  if(ch.status==="pending") return "FBR challan pending (due "+esc(ch.due)+")";
+  return "FBR challan due by "+esc(ch.due);
+}
+function realCostTile(){
+  var c=(D&&D.real_cost)||{};
+  if(!c.enabled) return "";                      // item AQ: Dost-specific, OFF unless [cost] cash_view + fbr_payment_accounts
+  if(!c.closed) return tile("💵 Cost/m (real cash)", "—", "no closed month yet · tap", "", "", "realcost");
+  var cur=c.currency||"Rs";
+  var ch=c.challan||{};
+  return tile("💵 Cost/m (real cash) ("+esc(c.month)+")", cur+" "+c.real_per,
+    challanMeta(ch, cur)+" · tap for cash view", "", "", "realcost");
 }
 function drill(which){
   if(tileHidden(which)){ toast("Amounts hidden — tap 👁 to show"); return; }   // item AN: block the drill only for a hidden tile
   if(which==='cash') return drawCash();
   if(which==='cost') return drawCost();
+  if(which==='realcost') return drawRealCost();
   if(which==='banks') return drawBanks();
   if(which==='sales') return drawSales();
   if(which==='receivable') return drawParties('customer','📥 Receivable — who owes us');
@@ -1400,6 +1425,48 @@ async function drawCost(){
     var rows=(j.rows||[]).slice().reverse().map(r=>r.map((c,i)=>i===9 && c==="not closed" ? '<span class="tag mid">not closed</span>' : esc(c)));
     $("#drawer-body").innerHTML=head+(rows.length?table(j.columns,rows,nums):'<p class="muted">No cost data.</p>');
   }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load the cost history.</p>'; }
+}
+// item AQ: the real-cash cost/metre drill - per month, the cash that actually left (ex-GST heads + GST paid on
+// purchases + the FBR sales-tax challan actually paid), with real cash sales and real margin per metre.
+async function drawRealCost(){
+  openDrawer("💵 Cost per metre — real cash",'<p class="muted">Loading…</p>');
+  if(STATIC_DATA){ $("#drawer-body").innerHTML='<p class="muted">Open the dashboard from the mill server to see the real-cash view.</p>'; return; }
+  try{
+    var j=await (await fetch("api/finance/realcost"+(($("#day")&&$("#day").value)?("?date="+$("#day").value):""))).json();
+    var h=j.headline||{};
+    var head="";
+    if(h.closed){
+      var cur=h.currency||"Rs";
+      var ch=h.challan||{};
+      var pm =(v)=> v==null?"—":(cur+" "+v+"/m");
+      var rsm=(v)=> v==null?"—":(cur+" "+num(v));
+      head=`<div class="lkpi" style="margin-bottom:8px"><div><div class="t">${esc(h.month)} · real cash</div><div class="v">${pm(h.real_per)}</div></div>`+
+        `<div><div class="t">real sales</div><div class="v">${pm(h.sales_per)}</div></div>`+
+        `<div><div class="t">real margin</div><div class="v">${pm(h.margin_per)}</div></div></div>`;
+      head+=`<p style="margin:0 0 8px">${CHALLAN_BADGE(ch.status)} <span class="muted" style="font-size:12px">${esc(challanMeta(ch,cur))}</span></p>`;
+      // the month's cash make-up
+      var row=(lbl,tot,cls)=>`<tr${cls?` class="${cls}"`:""}><td>${lbl}</td><td class="r">${tot}</td></tr>`;
+      var brk=`<table class="brk"><thead><tr><td>${esc(h.month)} real cash out</td><td class="r">Total</td></tr></thead><tbody>`;
+      brk+=row("Costs ex-GST (with sizing)", rsm(h.exgst));
+      brk+=row("GST paid on purchases", rsm(h.input_gst));
+      brk+=row("FBR sales-tax challan paid", ch.status==="paid"?rsm(ch.paid):(ch.status==="overdue"?'<span class="tag bad">not paid — overdue</span>':'<span class="tag mid">not paid yet</span>'));
+      brk+=row("Real cash cost", rsm(h.real_cost), "grand");
+      brk+=`</tbody></table>`;
+      head+=`<p class="muted" style="margin:6px 0;font-size:12px">The challan is counted only once actually paid. Headline is the last CLOSED month.</p>`+brk;
+    } else {
+      head=`<p class="muted" style="margin:0 0 8px">No closed month yet, or FBR challan tracking is not configured ([cost] fbr_payment_accounts).</p>`;
+    }
+    var mrows=(j.months||[]).slice().reverse().map(function(m){
+      var cur=h.currency||"Rs", ch=m.challan||{};
+      var chcell = ch.status==="paid" ? (num(ch.paid)+" ✓") : (ch.status==="overdue"?"overdue":(ch.status==="pending"?"pending":"—"));
+      return [esc(m.month), num(m.woven), num(m.exgst), num(m.input_gst), chcell, num(m.real_cost),
+              m.real_per==null?"—":(cur+" "+m.real_per), m.sales_per==null?"—":(cur+" "+m.sales_per),
+              m.margin_per==null?"—":(cur+" "+m.margin_per),
+              m.closed?'<span class="tag ok">closed</span>':'<span class="tag mid">not closed</span>'];
+    });
+    var cols=["Month","Woven m","Cost ex-GST","GST on buys","Challan","Real cost","Real/m","Sales/m","Margin/m","Closed?"];
+    $("#drawer-body").innerHTML=head+(mrows.length?table(cols,mrows,[1,2,3,5]):'<p class="muted">No real-cash data.</p>');
+  }catch(e){ $("#drawer-body").innerHTML='<p class="muted">Could not load the real-cash view.</p>'; }
 }
 async function drawSales(month){
   openDrawer("🧾 Sales — by month",'<p class="muted">Loading…</p>');

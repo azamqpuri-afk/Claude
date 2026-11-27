@@ -7,9 +7,26 @@ meters / meters_at_100; combined over looms and shifts as total meters / total
 meters at 100%.
 """
 
+import re
 from datetime import date, timedelta
 
 from . import Report
+
+
+def loom_num(label):
+    """Item AS: the loom number inside a loom name/code ('LOOM # 4' -> 4, 'L07' -> 7, '10.0' -> 10). None if none."""
+    s = str(label or "").strip()
+    try:
+        return int(float(s))                             # '10.0', '10', '6' - a bare number (the monitor returns floats)
+    except ValueError:
+        m = re.findall(r"\d+", s)                         # 'L07', 'LOOM # 4' - a number inside a code/name
+        return int(m[-1]) if m else None
+
+
+def loom_sort_key(label):
+    """A numeric sort key so looms list 1, 2, ... 10 ascending; nameless/numberless looms sort last, never dropped."""
+    n = loom_num(label)
+    return (0, n, "") if n is not None else (1, 0, str(label))
 
 EFF_SQL = "COALESCE(efficiency_pct, CASE WHEN meters_at_100 > 0 THEN 100.0 * meters / meters_at_100 END)"
 # Combined efficiency = total meters / total meters at 100% (as ERP loom-efficiency reports do): each row's
@@ -57,6 +74,7 @@ def daily_production(con, cfg, day=None):
     bgrade = con.execute("SELECT SUM(COALESCE(second_quality_m, 0)) FROM loom_production WHERE prod_date = ?", (d,)).fetchone()[0] or 0
     out = [[n, m, round(e, 1) if e is not None else None, round(100.0 * rj / m, 1) if m else None, q]
            for n, m, e, rj, q in rows]
+    out.sort(key=lambda r: loom_sort_key(r[0]))          # item AS: loom number ascending, numerically
     summary = [f"{len(rows)} looms wove {total_m:,.0f} m"
                + (f", efficiency {eff:.1f}%" if eff is not None else "")
                + (f", B-grade {100.0 * bgrade / total_m:.1f}%" if total_m and bgrade else "")
@@ -86,6 +104,7 @@ def production_value(con, cfg, day=None, days=1):
         total += value or 0
         rows.append([loom, cno, round(meters or 0), rate, round(value) if value is not None else None,
                      "" if rate else "no rate on the contract"])
+    rows.sort(key=lambda r: (loom_sort_key(r[0]), str(r[1])))    # item AS: loom number ascending, then contract
     cur = cfg["company"]["currency"]
     period = f"{day:%d-%b-%Y}" if days == 1 else f"{d0} to {day.isoformat()}"
     return Report(f"Production value - {period}",

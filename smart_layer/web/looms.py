@@ -14,7 +14,7 @@ left blank rather than guessed.
 
 from datetime import date, timedelta
 
-from ..reports.production import EFF_AGG
+from ..reports.production import EFF_AGG, loom_sort_key
 
 # scoreboard efficiency = run-time / shift-time across the rows, weighted by shift_sec (falling back to meters)
 SCB_EFF = ("SUM(efficiency_pct * COALESCE(shift_sec, meters)) / "
@@ -52,9 +52,9 @@ def efficiency(con, cfg, d0=None, d1=None, dates=None):
         f"FROM loom_monitor WHERE {mc} GROUP BY loom_code", mp)}
     std = _standard_rpm(con)                                # loom_code -> standard RPM (latest period), item 30c
     real = set(erp)                                        # real looms = those with ERP production in the window
-    monitor_only = sorted(set(scb) - real, key=str)        # monitor channels with no ERP production (shown, flagged)
+    monitor_only = sorted(set(scb) - real, key=loom_sort_key)   # monitor channels with no ERP production (shown, flagged)
     rows = []
-    for code in sorted(real | set(scb), key=str):
+    for code in sorted(real | set(scb), key=loom_sort_key):      # item AS: loom number ascending, numerically
         e, s = erp.get(code), scb.get(code)
         rows.append({
             "loom": names.get(code, code), "code": code,
@@ -162,7 +162,7 @@ def scoreboard_date(con, cfg, day):
         f"SELECT loom_code, COALESCE(shift,'-'), {EFF_AGG}, SUM(meters) FROM loom_production WHERE prod_date = ? GROUP BY loom_code, shift", (ds,))}
     scb = {(c, sh): (eff, m, rpm, st) for c, sh, eff, m, rpm, st in con.execute(
         f"SELECT loom_code, COALESCE(shift,'-'), {SCB_EFF}, SUM(meters), AVG(rpm), SUM(stops) FROM loom_monitor WHERE read_date = ? GROUP BY loom_code, shift", (ds,))}
-    codes = sorted({c for (c, _s) in erp} | {c for (c, _s) in scb}, key=str)
+    codes = sorted({c for (c, _s) in erp} | {c for (c, _s) in scb}, key=loom_sort_key)   # item AS: numeric loom order
     for c in codes:
         row = {"loom": names.get(c, c), "code": c, "erp": {}, "scb": {}}
         for sh in erp_shifts:

@@ -72,6 +72,22 @@ def run(a):
               AND l.amount >= ? AND l.voucher_date BETWEEN ? AND ?""", float(t["large_payment"]), d0, d1):
         a.add("WATCH", "Finance", f"big-{vid}-{name}", f"Large payment {vt} {vno}: {name} {cur} {amt:,.0f}", vd)
 
+    # item AQ: FBR sales-tax challan not paid. From the reminder day of M+1 (default the 20th) it is a WATCH; once
+    # past the due date (default the last day of M+1) an ACTION. It auto-clears the moment the challan payment appears
+    # on the [cost] fbr_payment_accounts. Only runs when challan tracking is configured, so other mills see nothing.
+    from ..reports import finance as _rf
+    if _rf.real_cash_enabled(a.cfg):
+        for m in _rf.real_cash_months(a.con, a.cfg, a.d1, 6):
+            ch, mon = m["challan"], m["month"]
+            if ch["status"] == "pending":
+                a.add("WATCH", "Finance", f"challan-{mon}",
+                      f"FBR sales-tax challan for {mon} not paid yet (due by {ch['due']})",
+                      "file and pay the monthly sales-tax challan before it falls due")
+            elif ch["status"] == "overdue":
+                a.add("ACTION", "Finance", f"challan-{mon}",
+                      f"FBR sales-tax challan for {mon} is overdue (was due {ch['due']})",
+                      "the monthly sales-tax challan has not been paid - file and pay it now")
+
     n, total = a.q("""SELECT COUNT(DISTINCT voucher_id), SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END)
                       FROM ledger_entries WHERE voucher_date BETWEEN ? AND ?""", d0, d1)[0]
     a.summary.append(f"Finance: {n} vouchers, {cur} {total or 0:,.0f} debits"
