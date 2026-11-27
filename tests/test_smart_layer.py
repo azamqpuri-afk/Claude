@@ -1870,6 +1870,28 @@ def test_vAM_cost_taxes_flow_into_totals_and_pnl(env):
         cfg.data["cost"].pop("withholding_tax_side", None)
 
 
+def test_vAM_sales_tax_is_cost_only_when_input_exceeds_output(env):
+    # AM (owner correction): sales tax is a pass-through. In the default "excess_input" mode it is a COST only to the
+    # extent input tax PAID exceeds output tax COLLECTED; when output >= input it is payable to FBR (not a cost) and
+    # shown as info. The "net" mode restores the old signed output - input.
+    cfg, con = env
+    accs = [r[0] for r in con.execute("SELECT account_code FROM accounts WHERE account_group='revenue' LIMIT 2")]
+    c = cfg.data.setdefault("cost", {})
+    c["output_tax_accounts"] = [accs[0]]; c["output_tax_side"] = "cr"               # output = credits (collected)
+    c["input_tax_accounts"] = [accs[1] if len(accs) > 1 else accs[0]]; c["input_tax_side"] = "dr"   # input = debits (paid)
+    try:
+        t = _repfin._tax_totals(con, cfg, "2026-09-01", "2026-09-30")
+        assert t["sales_tax_mode"] == "excess_input"
+        assert (t["net"] or 0) >= 0                                                  # the COST is never negative
+        assert (t["net"] or 0) == 0 or (t["sales_payable"] or 0) == 0               # cost and payable are mutually exclusive
+        c["sales_tax_cost"] = "net"                                                  # old behaviour: signed, may be negative
+        t2 = _repfin._tax_totals(con, cfg, "2026-09-01", "2026-09-30")
+        assert t2["net"] == round((t["output"] or 0) - (t["input"] or 0), 2) and t2["sales_payable"] is None
+    finally:
+        for k in ("output_tax_accounts", "output_tax_side", "input_tax_accounts", "input_tax_side", "sales_tax_cost"):
+            c.pop(k, None)
+
+
 from smart_layer import erp_edits as _edits   # noqa: E402
 
 

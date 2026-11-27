@@ -41,11 +41,11 @@ def pnl(con, cfg, as_of=None, months=12):
         data[(group, head)][month] += sign * (amt or 0)
     # item AM: the three tax costs (net sales tax, further tax, withholding) per month, from the same [cost] accounts,
     # so the P&L and the cost per metre agree on what tax the mill bears.
-    taxrows = {"Net sales tax (output - input)": {}, "Further tax on sales": {}, "Withholding tax": {}}
+    taxrows = {"Sales tax (unrecovered input)": {}, "Further tax on sales": {}, "Withholding tax": {}}
     taxmonth = {}
     for m in ms:
         t = _tax_totals(con, cfg, m + "-01", _month_end(m, as_of))
-        taxrows["Net sales tax (output - input)"][m] = t["net"] or 0
+        taxrows["Sales tax (unrecovered input)"][m] = t["net"] or 0
         taxrows["Further tax on sales"][m] = t["further"] or 0
         taxrows["Withholding tax"][m] = t["withholding"] or 0
         taxmonth[m] = t["total"] or 0
@@ -219,10 +219,24 @@ def _tax_totals(con, cfg, lo, hi):
     inp = _tax_amount(con, c.get("input_tax_accounts"), c.get("input_tax_side", "dr"), c.get("input_tax_vtypes"), lo, hi)
     fur = _tax_amount(con, c.get("further_tax_accounts"), c.get("further_tax_side", "dr"), c.get("further_tax_vtypes"), lo, hi)
     wht = _tax_amount(con, c.get("withholding_tax_accounts"), c.get("withholding_tax_side", "dr"), c.get("withholding_tax_vtypes"), lo, hi)
-    net = (out - inp) if (out is not None and inp is not None) else (out if inp is None else (-inp if out is None else None))
+    # Sales tax is a pass-through: it is a COST only to the extent the input tax paid on purchases EXCEEDS the output
+    # tax collected on sales (the un-recovered excess). When output >= input the difference is payable to FBR but was
+    # collected from customers, so it is NOT a cost - shown as an information figure only. [cost] sales_tax_cost = "net"
+    # restores the old signed output - input behaviour for a mill that wants it.
+    mode = (c.get("sales_tax_cost") or "excess_input")
+    if out is None and inp is None:
+        net, payable = None, None
+    else:
+        o, i = (out or 0), (inp or 0)
+        if mode == "net":
+            net, payable = round(o - i, 2), None
+        else:
+            net = round(max(0.0, i - o), 2)                # cost = un-recovered input tax (input > output)
+            payable = round(max(0.0, o - i), 2)            # info = net sales tax payable to FBR (output > input), not a cost
     parts = [v for v in (net, fur, wht) if v is not None]
     total = round(sum(parts), 2) if parts else None
-    return {"output": out, "input": inp, "further": fur, "withholding": wht, "net": net, "total": total,
+    return {"output": out, "input": inp, "further": fur, "withholding": wht, "net": net, "sales_payable": payable,
+            "total": total, "sales_tax_mode": mode,
             "configured": any(v is not None for v in (out, inp, fur, wht)),
             "further_booked": (fur is not None and fur > 0),
             "withholding_booked": (wht is not None and wht > 0)}
@@ -278,6 +292,7 @@ def cost_headline(con, cfg, as_of=None, months=12):
                        "other": round(b["other"], 2), "no_sizing": ns_total, "sizing": sizing_total,
                        "taxes": taxes["total"], "grand": grand_total},
             "taxes": {**taxes, "further_per": per(taxes["further"]), "net_per": per(taxes["net"]),
+                      "sales_payable_per": per(taxes["sales_payable"]),
                       "withholding_per": per(taxes["withholding"]), "total_per": per(taxes["total"])},
             "grand_per_m": per(grand_total), "with_taxes_per_m": per(grand_total),
             "closed_months": len(closed),

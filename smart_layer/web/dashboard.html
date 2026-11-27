@@ -1380,8 +1380,10 @@ async function drawCost(){
       brk+=row("Total (excl. sizing)", rsm(t.no_sizing), pm(h.no_sizing), "sub");
       brk+=row("Sizing", rsm(t.sizing), pm(hd.sizing));
       if(tx.configured){
-        brk+=row("Net sales tax (output − input)", rsm(tx.net), tx.net_per==null?"—":pm(tx.net_per));
-        brk+=`<tr class="sub2"><td colspan="3">output ${rsm(tx.output)} · input ${rsm(tx.input)}</td></tr>`;
+        // sales tax is a pass-through: a COST only when input tax paid exceeds output tax collected (the un-recovered
+        // excess); when output >= input the net is payable to FBR but was collected from customers, so it is not a cost
+        if(tx.net){ brk+=row("Sales tax not recovered", rsm(tx.net), tx.net_per==null?"—":pm(tx.net_per)); }
+        brk+=`<tr class="sub2"><td colspan="3">output ${rsm(tx.output)} · input ${rsm(tx.input)}${tx.net?"":(tx.sales_payable!=null?" · payable to FBR "+rsm(tx.sales_payable)+" (from customers — not a cost)":"")}</td></tr>`;
         brk+=row("Further tax on sales", tx.further==null?"not set":(tx.further_booked?rsm(tx.further):"not booked yet"), tx.further_per==null?"—":pm(tx.further_per));
         brk+=row("Withholding tax", tx.withholding==null?"not set":(tx.withholding_booked?rsm(tx.withholding):"not booked yet"), tx.withholding_per==null?"—":pm(tx.withholding_per));
         brk+=row("Total taxes", rsm(tx.total), tx.total_per==null?"—":pm(tx.total_per), "sub");

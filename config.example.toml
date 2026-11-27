@@ -199,6 +199,10 @@ heads = {}
 # says "set the accounts". Each list has a side (dr = debits, cr = credits) and an optional voucher-type filter
 # (empty = all types). Net sales-tax cost = output tax on sales − input tax on purchases; further tax is shown
 # separately; both add into the grand total (incl. sizing and taxes). Put the real codes in the mill's own config.
+# Sales tax is a pass-through, so by default it is a COST only to the extent input tax paid on purchases exceeds the
+# output tax collected on sales (the un-recovered excess); when output >= input the net is payable to FBR but was
+# collected from customers, so it is shown as information only, not a cost. Set "net" for the old signed output-input.
+# sales_tax_cost = "excess_input"   # "excess_input" (default) | "net"
 # output_tax_accounts = []     # sales / output tax; usually credits posted by sales invoices
 # output_tax_side = "cr"
 # output_tax_vtypes = []       # e.g. ["GPOUT"] to count only sales-invoice vouchers
