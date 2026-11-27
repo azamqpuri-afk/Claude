@@ -206,6 +206,9 @@ heads = {}
 # input_tax_side = "dr"
 # further_tax_accounts = []    # further / extra tax on sales (expense); usually a monthly debit JV
 # further_tax_side = "dr"
+# withholding_tax_accounts = []   # income tax withheld by customers at payment (an expense borne by the mill)
+# withholding_tax_side = "dr"
+# withholding_tax_vtypes = []     # e.g. ["BR"] for bank-receipt vouchers; empty = all
 
 [monitor]
 # Loom-monitor (scoreboard) efficiency. Looms listed here are left OUT of the shed / mill scoreboard average

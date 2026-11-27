@@ -26,17 +26,31 @@ def _months(as_of, n):
 def pnl(con, cfg, as_of=None, months=12):
     as_of = as_of or date.today()
     ms = _months(as_of, months)
+    taxset = _tax_account_set(cfg)                        # tax heads are shown as their own Taxes group (item AM), not here
     data = defaultdict(lambda: defaultdict(float))       # (section, head) -> month -> amount
-    for month, group, head, amt in con.execute("""
-            SELECT strftime('%Y-%m', l.voucher_date), a.account_group, COALESCE(a.head_name, a.account_name, l.account_code),
-                   SUM(l.amount)
+    for month, acode, group, head, amt in con.execute("""
+            SELECT strftime('%Y-%m', l.voucher_date), a.account_code, a.account_group,
+                   COALESCE(a.head_name, a.account_name, l.account_code), SUM(l.amount)
             FROM ledger_entries l JOIN accounts a USING (account_code)
             WHERE a.account_group IN ('revenue', 'expense') AND l.voucher_kind <> 'opening'
               AND l.voucher_date >= ? AND l.voucher_date <= ?
-            GROUP BY 1, 2, 3""", (ms[0] + "-01", as_of.isoformat())):
+            GROUP BY 1, 2""", (ms[0] + "-01", as_of.isoformat())):
+        if acode in taxset:
+            continue
         sign = -1 if group == "revenue" else 1
         data[(group, head)][month] += sign * (amt or 0)
-    while len(ms) > 1 and not any(v.get(ms[0]) for v in data.values()):
+    # item AM: the three tax costs (net sales tax, further tax, withholding) per month, from the same [cost] accounts,
+    # so the P&L and the cost per metre agree on what tax the mill bears.
+    taxrows = {"Net sales tax (output - input)": {}, "Further tax on sales": {}, "Withholding tax": {}}
+    taxmonth = {}
+    for m in ms:
+        t = _tax_totals(con, cfg, m + "-01", _month_end(m, as_of))
+        taxrows["Net sales tax (output - input)"][m] = t["net"] or 0
+        taxrows["Further tax on sales"][m] = t["further"] or 0
+        taxrows["Withholding tax"][m] = t["withholding"] or 0
+        taxmonth[m] = t["total"] or 0
+    taxed = any(abs(taxmonth[m]) > 0 for m in ms)
+    while len(ms) > 1 and not any(v.get(ms[0]) for v in data.values()) and abs(taxmonth.get(ms[0], 0)) < 1:
         ms.pop(0)                                          # months before the ledger starts
     rows = []
     totals = {"revenue": defaultdict(float), "expense": defaultdict(float)}
@@ -49,12 +63,20 @@ def pnl(con, cfg, as_of=None, months=12):
             rows.append([label, h] + [round(v) for v in vals] + [round(sum(vals))])
         rows.append([label, f"TOTAL {label.upper()}"] + [round(totals[section][m]) for m in ms]
                     + [round(sum(totals[section].values()))])
-    profit = [totals["revenue"][m] - totals["expense"][m] for m in ms]
+    if taxed:                                              # the Taxes group (counted as an expense towards the profit)
+        for head, by in taxrows.items():
+            vals = [by.get(m, 0.0) for m in ms]
+            rows.append(["Taxes", head] + [round(v) for v in vals] + [round(sum(vals))])
+        rows.append(["Taxes", "TOTAL TAXES"] + [round(taxmonth[m]) for m in ms] + [round(sum(taxmonth[m] for m in ms))])
+    profit = [totals["revenue"][m] - totals["expense"][m] - taxmonth.get(m, 0) for m in ms]
     rows.append(["Result", "PROFIT / (LOSS)"] + [round(v) for v in profit] + [round(sum(profit))])
     cur = cfg["company"]["currency"]
+    note = "From the ledger; opening balances excluded. Expenses include a Taxes group (net sales tax + further tax + " \
+           "withholding), the same figures the cost per metre uses." if taxed else \
+           "From the ledger; opening balances excluded. Year-end adjustments the accountant has not posted are not included."
     return Report(f"Profit and loss - {ms[0]} to {ms[-1]}", ["", "Head"] + ms + ["Total"], rows,
                   [f"Profit for the period: {cur} {sum(profit):,.0f} on revenue of {cur} {sum(totals['revenue'].values()):,.0f}.",
-                   "From the ledger; opening balances excluded. Year-end adjustments the accountant has not posted are not included."])
+                   note])
 
 
 GROUPS = [("cash", "Cash in hand", 1), ("bank", "Bank", 1), ("customer", "Receivable from customers", 1),
@@ -135,13 +157,14 @@ def _cost_months(con, cfg, as_of, months):
     ms = _months(as_of, months)
     woven = dict(con.execute("SELECT strftime('%Y-%m', prod_date), SUM(meters) FROM loom_production WHERE prod_date >= ? AND prod_date <= ? GROUP BY 1",
                              (ms[0] + "-01", as_of.isoformat())))
+    taxset = _tax_account_set(cfg)                        # tax accounts are added as an explicit Taxes line, not a bucket
     bybucket = {m: {b: 0.0 for b in COST_BUCKETS} for m in ms}
-    for month, head, name, amt in con.execute("""
-            SELECT strftime('%Y-%m', l.voucher_date), a.head_name, a.account_name, SUM(l.amount)
+    for month, acode, head, name, amt in con.execute("""
+            SELECT strftime('%Y-%m', l.voucher_date), a.account_code, a.head_name, a.account_name, SUM(l.amount)
             FROM ledger_entries l JOIN accounts a USING (account_code)
             WHERE a.account_group = 'expense' AND l.voucher_kind <> 'opening' AND l.voucher_date >= ? AND l.voucher_date <= ?
             GROUP BY 1, a.account_code""", (ms[0] + "-01", as_of.isoformat())):
-        if month in bybucket:
+        if month in bybucket and acode not in taxset:
             bybucket[month][_bucket_of(head, name, cfg)] += (amt or 0)
     while len(ms) > 1 and not (woven.get(ms[0]) or any(bybucket[ms[0]].values())):
         ms.pop(0)
@@ -155,12 +178,16 @@ def _cost_months(con, cfg, as_of, months):
         w = woven.get(m, 0) or 0
         b = bybucket[m]
         ns = b["store"] + b["payroll"] + b["power"] + b["other"]
-        per = (lambda v: round(v / w, 2) if w else None)
+        per = (lambda v: round(v / w, 2) if (w and v is not None) else None)
         full_month = w >= 0.2 * median_w if median_w else (w > 0)
-        out.append({"month": m, "woven": round(w), "buckets": b,
+        tx = _tax_totals(con, cfg, m + "-01", _month_end(m, as_of))   # item AM: this month's own tax figures
+        tax_total = tx["total"]
+        out.append({"month": m, "woven": round(w), "buckets": b, "tax": tx,
                     "store": per(b["store"]), "payroll": per(b["payroll"]), "power": per(b["power"]),
                     "other": per(b["other"]), "no_sizing": per(ns), "sizing": per(b["sizing"]),
                     "with_sizing": per(ns + b["sizing"]),
+                    "taxes_total": tax_total, "taxes_per": per(tax_total),
+                    "with_taxes": per(ns + b["sizing"] + (tax_total or 0)),
                     "closed": (w > 0 and m < running and full_month and _month_closed(b, cfg))})
     return out
 
@@ -184,16 +211,41 @@ def _tax_amount(con, accounts, side, vtypes, lo, hi):
 
 
 def _tax_totals(con, cfg, lo, hi):
-    """Item AM: a month's tax amounts from the GL accounts named in [cost] (all read-only). Further tax on sales and
-    the net sales-tax cost (output tax on sales minus input tax on purchases)."""
+    """Item AM: a month's tax cost from the GL accounts named in [cost] (all read-only): the net sales-tax cost
+    (output tax on sales minus input tax on purchases), further tax on sales, and withholding tax (income tax
+    deducted by customers). `total` is the sum of the three and is what the cost per metre and the P&L both add."""
     c = cfg["cost"]
     out = _tax_amount(con, c.get("output_tax_accounts"), c.get("output_tax_side", "cr"), c.get("output_tax_vtypes"), lo, hi)
     inp = _tax_amount(con, c.get("input_tax_accounts"), c.get("input_tax_side", "dr"), c.get("input_tax_vtypes"), lo, hi)
     fur = _tax_amount(con, c.get("further_tax_accounts"), c.get("further_tax_side", "dr"), c.get("further_tax_vtypes"), lo, hi)
+    wht = _tax_amount(con, c.get("withholding_tax_accounts"), c.get("withholding_tax_side", "dr"), c.get("withholding_tax_vtypes"), lo, hi)
     net = (out - inp) if (out is not None and inp is not None) else (out if inp is None else (-inp if out is None else None))
-    return {"output": out, "input": inp, "further": fur, "net": net,
-            "configured": any(v is not None for v in (out, inp, fur)),
-            "further_booked": (fur is not None and fur > 0)}
+    parts = [v for v in (net, fur, wht) if v is not None]
+    total = round(sum(parts), 2) if parts else None
+    return {"output": out, "input": inp, "further": fur, "withholding": wht, "net": net, "total": total,
+            "configured": any(v is not None for v in (out, inp, fur, wht)),
+            "further_booked": (fur is not None and fur > 0),
+            "withholding_booked": (wht is not None and wht > 0)}
+
+
+def _tax_account_set(cfg):
+    """Every GL account code named in [cost] as a tax account. These are EXCLUDED from the generic expense buckets
+    (cost per metre) and the generic P&L grouping, then added back as an explicit Taxes line, so nothing is double
+    counted (further tax, for example, is an expense-group account that would otherwise fall in 'other')."""
+    c = cfg["cost"]
+    out = set()
+    for k in ("output_tax_accounts", "input_tax_accounts", "further_tax_accounts", "withholding_tax_accounts"):
+        for a in (c.get(k) or []):
+            if str(a).strip():
+                out.add(str(a).strip())
+    return out
+
+
+def _month_end(month, as_of):
+    """Last day of a 'YYYY-MM' string, capped at as_of (the current month ends today, not in the future)."""
+    import calendar
+    y, m = int(month[:4]), int(month[5:7])
+    return min(date(y, m, calendar.monthrange(y, m)[1]), as_of).isoformat()
 
 
 def cost_headline(con, cfg, as_of=None, months=12):
@@ -210,16 +262,13 @@ def cost_headline(con, cfg, as_of=None, months=12):
     lo = min(closed, key=lambda d: d["no_sizing"] if d["no_sizing"] is not None else 9e9)
     hi = max(closed, key=lambda d: d["no_sizing"] if d["no_sizing"] is not None else -9e9)
     # item AM: TOTAL Rs beside the per-metre figures, plus a taxes block and a grand total incl sizing and taxes.
-    import calendar as _cal
     w = last["woven"] or 0                                 # metres woven in the headline (last closed) month
     b = last["buckets"]
     ns_total = round(b["store"] + b["payroll"] + b["power"] + b["other"], 2)
     sizing_total = round(b["sizing"], 2)
-    y, mo = (int(x) for x in last["month"].split("-"))
-    mlo, mhi = f"{last['month']}-01", date(y, mo, _cal.monthrange(y, mo)[1]).isoformat()
-    taxes = _tax_totals(con, cfg, mlo, mhi)
-    extra = (taxes["further"] or 0) + (taxes["net"] or 0)   # only the configured tax amounts add to the grand total
-    grand_total = round(ns_total + sizing_total + extra, 2)
+    taxes = last["tax"]                                     # this month's own tax figures (net + further + withholding)
+    tax_total = taxes["total"] or 0
+    grand_total = round(ns_total + sizing_total + tax_total, 2)
     per = (lambda v: round(v / w, 2) if (w and v is not None) else None)
     return {"closed": True, "month": last["month"], "no_sizing": last["no_sizing"], "with_sizing": last["with_sizing"],
             "heads": {"store": last["store"], "payroll": last["payroll"], "power": last["power"],
@@ -227,9 +276,10 @@ def cost_headline(con, cfg, as_of=None, months=12):
             "woven_m": round(w),
             "totals": {"store": round(b["store"], 2), "payroll": round(b["payroll"], 2), "power": round(b["power"], 2),
                        "other": round(b["other"], 2), "no_sizing": ns_total, "sizing": sizing_total,
-                       "grand": grand_total},
-            "taxes": {**taxes, "further_per": per(taxes["further"]), "net_per": per(taxes["net"])},
-            "grand_per_m": per(grand_total),
+                       "taxes": taxes["total"], "grand": grand_total},
+            "taxes": {**taxes, "further_per": per(taxes["further"]), "net_per": per(taxes["net"]),
+                      "withholding_per": per(taxes["withholding"]), "total_per": per(taxes["total"])},
+            "grand_per_m": per(grand_total), "with_taxes_per_m": per(grand_total),
             "closed_months": len(closed),
             "avg_no_sizing": round(sum(ns) / len(ns), 2) if ns else None,
             "avg_with_sizing": round(sum(ws) / len(ws), 2) if ws else None,
@@ -247,7 +297,8 @@ def cost_per_metre(con, cfg, as_of=None, months=12):
     cur = cfg["company"]["currency"]
     data = _cost_months(con, cfg, as_of, months)
     rows = [[d["month"], d["woven"], d["store"], d["payroll"], d["power"], d["other"],
-             d["no_sizing"], d["sizing"], d["with_sizing"], ("yes" if d["closed"] else "not closed")]
+             d["no_sizing"], d["sizing"], d["with_sizing"], d["taxes_per"], d["with_taxes"],
+             ("yes" if d["closed"] else "not closed")]
             for d in data]
     h = cost_headline(con, cfg, as_of, months)
     summary = []
@@ -260,13 +311,14 @@ def cost_per_metre(con, cfg, as_of=None, months=12):
                            f"highest {h['high']['no_sizing']:.2f} ({h['high']['month']}).")
     elif h.get("latest_open"):
         summary.append(f"No closed month yet (latest {h['latest_open']} has month-end entries pending).")
-    summary.append(f"In {cur}/m. 'No sizing' = store + payroll + power + other; 'with sizing' adds sizing. A month "
-                   "is 'closed' once its month-end journals (store, salaries, power) are posted; not-closed months "
-                   "are excluded from the headline and averages. Group the ledger heads in [cost].heads for accuracy.")
+    summary.append(f"In {cur}/m. 'No sizing' = store + payroll + power + other; 'with sizing' adds sizing; 'incl. "
+                   "taxes' adds the net sales tax, further tax and withholding tax for that month. A month is "
+                   "'closed' once its month-end journals (store, salaries, power) are posted; not-closed months are "
+                   "excluded from the headline and averages. Group the ledger heads in [cost].heads for accuracy.")
     first, last = (data[0]["month"] if data else ""), (data[-1]["month"] if data else "")
     return Report(f"Cost per metre - {first} to {last}",
                   ["Month", "Woven m", "Store/m", "Payroll/m", "Power/m", "Other/m", "Cost/m (no sizing)",
-                   "Sizing/m", "Cost/m (with sizing)", "Closed?"], rows, summary)
+                   "Sizing/m", "Cost/m (with sizing)", "Taxes/m", "Cost/m incl. taxes", "Closed?"], rows, summary)
 
 
 def _tolerance(cfg):

@@ -1847,6 +1847,29 @@ def test_v015_cost_headline_closed_months(env):
     assert h2.get("closed") in (False, None)
 
 
+def test_vAM_cost_taxes_flow_into_totals_and_pnl(env):
+    # AM: with no tax accounts configured the cost per metre with and without taxes are identical; once a tax account
+    # is set, the tax total flows into the grand (tile + headline), the history columns, and the P&L Taxes group.
+    cfg, con = env
+    h0 = _repfin.cost_headline(con, cfg, END)
+    assert h0["closed"] and h0["taxes"]["total"] is None and h0["grand_per_m"] == h0["with_sizing"]
+    cm0 = _repfin.cost_per_metre(con, cfg, END)
+    assert "Taxes/m" in cm0.columns and "Cost/m incl. taxes" in cm0.columns     # columns present for every month
+    rev = [r[0] for r in con.execute("SELECT account_code FROM accounts WHERE account_group = 'revenue' LIMIT 1")]
+    cfg.data.setdefault("cost", {})["withholding_tax_accounts"] = rev           # exercise the tax path (revenue acct, cr side)
+    cfg.data["cost"]["withholding_tax_side"] = "cr"
+    try:
+        h1 = _repfin.cost_headline(con, cfg, END)
+        assert h1["closed"] and h1["taxes"]["total"] and h1["taxes"]["withholding"]
+        assert h1["grand_per_m"] != h1["with_sizing"]                            # taxes now move the grand total
+        pl = _repfin.pnl(con, cfg, END)
+        taxheads = [r[1] for r in pl.rows if r[0] == "Taxes"]
+        assert "Withholding tax" in taxheads and "TOTAL TAXES" in taxheads       # P&L carries the Taxes group
+    finally:
+        cfg.data["cost"].pop("withholding_tax_accounts", None)
+        cfg.data["cost"].pop("withholding_tax_side", None)
+
+
 from smart_layer import erp_edits as _edits   # noqa: E402
 
 
